@@ -1,0 +1,41 @@
+#pragma once
+
+#include <entt/entt.hpp>
+
+#include "core/Area.hpp"
+#include "core/components/TimeComponent.hpp"
+
+namespace goblins {
+
+// Мир на первом этапе — это единственная Область (04_WorldModel.md, п.1),
+// поэтому World сразу владеет и ECS-хранилищем (entt::registry), и картой
+// (Area). Дополнительная обёртка "Мир из нескольких Областей" вводится на
+// будущих этапах и не должна ломать этот класс — она добавится поверх.
+//
+// На World Entity живут глобальные данные симуляции (например,
+// TimeComponent), поскольку "Всё является Entity" без исключений
+// (02_CorePrinciples.md, п.2) — счётчик тиков не может быть просто
+// переменной кода.
+class World {
+public:
+    explicit World(int width = 100, int height = 100)
+        : area_(width, height) {
+        worldEntity_ = registry_.create();
+        registry_.emplace<TimeComponent>(worldEntity_);
+    }
+
+    entt::registry& registry() { return registry_; }
+    const entt::registry& registry() const { return registry_; }
+
+    entt::entity worldEntity() const { return worldEntity_; }
+
+    Area& area() { return area_; }
+    const Area& area() const { return area_; }
+
+private:
+    entt::registry registry_;
+    entt::entity worldEntity_;
+    Area area_;
+};
+
+} // namespace goblins

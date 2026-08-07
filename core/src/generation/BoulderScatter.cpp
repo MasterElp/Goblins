@@ -1,0 +1,43 @@
+#include "core/generation/BoulderScatter.hpp"
+
+#include <random>
+
+#include "core/components/ImpassableComponent.hpp"
+#include "core/components/PositionComponent.hpp"
+
+namespace goblins {
+
+void scatterBoulders(World& world, int count, unsigned seed) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> xDist(0, world.area().width() - 1);
+    std::uniform_int_distribution<int> yDist(0, world.area().height() - 1);
+
+    int placed = 0;
+    int attempts = 0;
+    // Ограничение попыток: если карта почти заполнена непроходимыми
+    // объектами, случайный поиск свободного тайла не должен уйти в
+    // бесконечный цикл.
+    const int maxAttempts = count * 100;
+
+    while (placed < count && attempts < maxAttempts) {
+        ++attempts;
+
+        const int x = xDist(rng);
+        const int y = yDist(rng);
+
+        // Непроходимый Entity занимает тайл полностью — если тайл уже
+        // занят, пробуем другой (04_WorldModel.md, п.4).
+        if (world.area().isBlocked(x, y)) {
+            continue;
+        }
+
+        const auto boulder = world.registry().create();
+        world.registry().emplace<PositionComponent>(boulder, PositionComponent{x, y});
+        world.registry().emplace<ImpassableComponent>(boulder);
+        world.area().place(boulder, x, y, /*impassable=*/true);
+
+        ++placed;
+    }
+}
+
+} // namespace goblins
