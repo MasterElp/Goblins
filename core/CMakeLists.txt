@@ -4,5 +4,5 @@ add_library(core STATIC
 )
 
 target_include_directories(core PUBLIC include)
-target_link_libraries(core PUBLIC EnTT::EnTT)
+target_link_libraries(core PUBLIC EnTT)
 target_compile_features(core PUBLIC cxx_std_20)
