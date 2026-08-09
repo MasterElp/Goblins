@@ -10,8 +10,8 @@
 
 namespace goblins {
 
-NetworkServer::NetworkServer(const World& world, int port)
-    : world_(world), server_(port, "127.0.0.1") {
+NetworkServer::NetworkServer(const World& world, const std::string& host, int port)
+    : world_(world), server_(port, host) {
     server_.setOnClientMessageCallback(
         [this](std::shared_ptr<ix::ConnectionState> /*state*/,
                ix::WebSocket& webSocket,

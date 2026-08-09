@@ -22,7 +22,7 @@ namespace goblins {
 //     {"type": "tick", "tick": N}
 class NetworkServer {
 public:
-    NetworkServer(const World& world, int port);
+    NetworkServer(const World& world, const std::string& host, int port);
 
     // Возвращает false, если порт не удалось занять — например, он уже
     // используется другим процессом.

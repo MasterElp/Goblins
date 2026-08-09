@@ -10,10 +10,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # подключаем один и тот же third_party/ из корня репозитория — здесь
 # только путь другой, сама библиотека описана один раз.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../third_party ${CMAKE_CURRENT_BINARY_DIR}/third_party)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../shared ${CMAKE_CURRENT_BINARY_DIR}/shared)
 
 add_executable(client
     src/main.cpp
     src/Console.cpp
 )
 
-target_link_libraries(client PRIVATE nlohmann_json ixwebsocket)
+target_link_libraries(client PRIVATE nlohmann_json ixwebsocket shared_config)

@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -14,10 +13,12 @@
 #include <nlohmann/json.hpp>
 
 #include "Console.hpp"
+#include "config/Config.hpp"
 
 // Клиент — чистый C++: терминальный ASCII-рендер вместо GUI-библиотеки.
 // Подключается только по WebSocket-протоколу сервера (07_TechStack.md,
-// п.6) — никакого доступа к core.
+// п.6) — никакого доступа к core. Адрес/порт сервера и размер окна
+// просмотра — из того же config.json, что читает сервер.
 
 namespace {
 
@@ -91,23 +92,13 @@ void render(int viewX, int viewY, int viewW, int viewH) {
 } // namespace
 
 int main(int argc, char** argv) {
-    std::string host = "localhost";
-    int port = 9002;
-    if (argc > 1) {
-        const std::string arg = argv[1];
-        const auto colon = arg.find(':');
-        if (colon != std::string::npos) {
-            host = arg.substr(0, colon);
-            port = std::atoi(arg.substr(colon + 1).c_str());
-        } else {
-            host = arg;
-        }
-    }
+    const std::string configPath = argc > 1 ? argv[1] : "config.json";
+    const auto config = goblins::loadConfig(configPath);
 
     ix::initNetSystem();
 
     ix::WebSocket webSocket;
-    webSocket.setUrl("ws://" + host + ":" + std::to_string(port));
+    webSocket.setUrl("ws://" + config.host + ":" + std::to_string(config.port));
     webSocket.setOnMessageCallback([](const ix::WebSocketMessagePtr& msg) {
         if (msg->type == ix::WebSocketMessageType::Message) {
             handleMessage(msg->str);
@@ -117,9 +108,9 @@ int main(int argc, char** argv) {
 
     goblins::consoleInit();
 
-    constexpr int viewW = 60;
-    constexpr int viewH = 25;
-    constexpr int step = 5;
+    const int viewW = config.viewWidth;
+    const int viewH = config.viewHeight;
+    const int step = config.scrollStep;
     int viewX = 0;
     int viewY = 0;
 

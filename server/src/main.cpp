@@ -1,9 +1,9 @@
 #include <chrono>
-#include <cstdlib>
 #include <iostream>
 #include <set>
 #include <utility>
 
+#include "config/Config.hpp"
 #include "core/GameLoop.hpp"
 #include "core/World.hpp"
 #include "core/components/ImpassableComponent.hpp"
@@ -14,21 +14,14 @@
 #include "server/NetworkServer.hpp"
 
 int main(int argc, char** argv) {
-    int tickCount = 10;
-    if (argc > 1) {
-        tickCount = std::atoi(argv[1]);
-    }
+    const std::string configPath = argc > 1 ? argv[1] : "config.json";
+    const auto config = goblins::loadConfig(configPath);
 
-    int port = 9002;
-    if (argc > 2) {
-        port = std::atoi(argv[2]);
-    }
+    // Мир на первом этапе — одна Область (04_WorldModel.md, п.2), размер —
+    // из конфигурации.
+    goblins::World world(config.areaWidth, config.areaHeight);
 
-    // Мир на первом этапе — одна Область 100x100 (04_WorldModel.md, п.2).
-    goblins::World world;
-
-    constexpr int boulderCount = 40;
-    scatterBoulders(world, boulderCount, /*seed=*/12345);
+    scatterBoulders(world, config.boulderCount, config.boulderSeed);
 
     std::cout << "Area: " << world.area().width() << "x" << world.area().height() << "\n";
 
@@ -44,23 +37,23 @@ int main(int argc, char** argv) {
             occupiedTiles.emplace(pos.x, pos.y);
         });
 
-    std::cout << "Boulders placed: " << placedBoulders << " of " << boulderCount << "\n";
+    std::cout << "Boulders placed: " << placedBoulders << " of " << config.boulderCount << "\n";
     std::cout << "Unique tiles: " << occupiedTiles.size()
                << (occupiedTiles.size() == placedBoulders ? " -- impassability rule holds\n\n"
                                                             : " -- ERROR: duplicate tiles found!\n\n");
 
     // Сетевой слой (07_TechStack.md, п.4): core ничего о нём не знает,
     // NetworkServer — часть server, читает состояние world через
-    // публичный интерфейс World.
-    goblins::NetworkServer network(world, port);
+    // публичный интерфейс World. Адрес и порт — из конфигурации.
+    goblins::NetworkServer network(world, config.host, config.port);
     if (!network.start()) {
         return 1;
     }
-    std::cout << "WebSocket server listening on ws://localhost:" << port << "\n\n";
+    std::cout << "WebSocket server listening on ws://" << config.host << ":" << config.port << "\n\n";
 
     // Игровой цикл: один тик = TimeSystem, затем разрешение очереди команд
-    // (06_GameLoop.md, п.2).
-    goblins::GameLoop loop(world, std::chrono::milliseconds(200));
+    // (06_GameLoop.md, п.2). Интервал тика — из конфигурации.
+    goblins::GameLoop loop(world, std::chrono::milliseconds(config.tickIntervalMs));
     loop.addSystem(goblins::TimeSystem);
     loop.onTickComplete = [&](const goblins::World& w) {
         const auto& time = w.registry().get<const goblins::TimeComponent>(w.worldEntity());
@@ -68,10 +61,12 @@ int main(int argc, char** argv) {
         network.broadcastTick(time.tick);
     };
 
+    // Отрицательный tick_count в конфигурации — тикать бесконечно (мир
+    // существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int ticksRun = 0;
-    loop.run([&]() { return ticksRun++ < tickCount; });
+    loop.run([&]() { return config.tickCount < 0 || ticksRun++ < config.tickCount; });
 
-    std::cout << "Simulation stopped after " << tickCount << " ticks.\n";
+    std::cout << "Simulation stopped.\n";
     network.stop();
     return 0;
 }

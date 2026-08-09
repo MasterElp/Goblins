@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Зависимости — vendored в third_party/, сборка не обращается к сети.
 add_subdirectory(third_party)
+add_subdirectory(shared)
 
 add_subdirectory(core)
 add_subdirectory(server)
