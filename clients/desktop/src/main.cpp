@@ -68,10 +68,10 @@ void render(int viewX, int viewY, int viewW, int viewH) {
 
     goblins::consoleClear();
 
-    std::printf("Goblins world viewer  |  Tick: %llu  |  Область: %dx%d  |  Окно: (%d,%d)\n",
+    std::printf("Goblins world viewer  |  Tick: %llu  |  Area: %dx%d  |  View: (%d,%d)\n",
                 static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
                 viewX, viewY);
-    std::printf("WASD - прокрутка, Q - выход\n\n");
+    std::printf("WASD - scroll, Q - quit\n\n");
 
     std::vector<std::string> grid(static_cast<std::size_t>(viewH), std::string(static_cast<std::size_t>(viewW), '.'));
     for (const auto& boulder : snapshot.boulders) {

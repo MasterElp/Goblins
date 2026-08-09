@@ -25,10 +25,10 @@ NetworkServer::NetworkServer(const World& world, int port)
 }
 
 bool NetworkServer::start() {
-    ix::initNetSystem();
+	ix::initNetSystem();
     const auto result = server_.listen();
     if (!result.first) {
-        std::cerr << "NetworkServer: port dont work: " << result.second << "\n";
+        std::cerr << "NetworkServer: failed to bind port: " << result.second << "\n";
         return false;
     }
     server_.start();

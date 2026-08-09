@@ -44,10 +44,10 @@ int main(int argc, char** argv) {
             occupiedTiles.emplace(pos.x, pos.y);
         });
 
-    std::cout << "Boels: " << placedBoulders << " of " << boulderCount << "\n";
-    std::cout << "Unic: " << occupiedTiles.size()
-               << (occupiedTiles.size() == placedBoulders ? " — cool\n\n"
-                                                            : " — error: dublicats!\n\n");
+    std::cout << "Boulders placed: " << placedBoulders << " of " << boulderCount << "\n";
+    std::cout << "Unique tiles: " << occupiedTiles.size()
+               << (occupiedTiles.size() == placedBoulders ? " -- impassability rule holds\n\n"
+                                                            : " -- ERROR: duplicate tiles found!\n\n");
 
     // Сетевой слой (07_TechStack.md, п.4): core ничего о нём не знает,
     // NetworkServer — часть server, читает состояние world через
@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
     if (!network.start()) {
         return 1;
     }
-    std::cout << "WebSocket-server hear ws://localhost:" << port << "\n\n";
+    std::cout << "WebSocket server listening on ws://localhost:" << port << "\n\n";
 
     // Игровой цикл: один тик = TimeSystem, затем разрешение очереди команд
     // (06_GameLoop.md, п.2).
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
     int ticksRun = 0;
     loop.run([&]() { return ticksRun++ < tickCount; });
 
-    std::cout << "Simulation done after " << tickCount << " ticks.\n";
+    std::cout << "Simulation stopped after " << tickCount << " ticks.\n";
     network.stop();
     return 0;
 }
