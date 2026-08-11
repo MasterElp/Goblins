@@ -14,14 +14,15 @@
 #include "server/NetworkServer.hpp"
 
 int main(int argc, char** argv) {
-    const std::string configPath = argc > 1 ? argv[1] : "config.json";
-    const auto config = goblins::loadConfig(configPath);
+    const std::string configPath = argc > 1 ? argv[1] : goblins::defaultConfigPathNextToExecutable();
+    goblins::ensureConfigExists<goblins::ServerConfig>(configPath);
+    const auto config = goblins::loadServerConfig(configPath);
 
     // Мир на первом этапе — одна Область (04_WorldModel.md, п.2), размер —
     // из конфигурации.
-    goblins::World world(config.areaWidth, config.areaHeight);
+    goblins::World world(config.area.width, config.area.height);
 
-    scatterBoulders(world, config.boulderCount, config.boulderSeed);
+    scatterBoulders(world, config.boulder_count, config.boulder_seed);
 
     std::cout << "Area: " << world.area().width() << "x" << world.area().height() << "\n";
 
@@ -37,7 +38,7 @@ int main(int argc, char** argv) {
             occupiedTiles.emplace(pos.x, pos.y);
         });
 
-    std::cout << "Boulders placed: " << placedBoulders << " of " << config.boulderCount << "\n";
+    std::cout << "Boulders placed: " << placedBoulders << " of " << config.boulder_count << "\n";
     std::cout << "Unique tiles: " << occupiedTiles.size()
                << (occupiedTiles.size() == placedBoulders ? " -- impassability rule holds\n\n"
                                                             : " -- ERROR: duplicate tiles found!\n\n");
@@ -53,7 +54,7 @@ int main(int argc, char** argv) {
 
     // Игровой цикл: один тик = TimeSystem, затем разрешение очереди команд
     // (06_GameLoop.md, п.2). Интервал тика — из конфигурации.
-    goblins::GameLoop loop(world, std::chrono::milliseconds(config.tickIntervalMs));
+    goblins::GameLoop loop(world, std::chrono::milliseconds(config.tick_interval_ms));
     loop.addSystem(goblins::TimeSystem);
     loop.onTickComplete = [&](const goblins::World& w) {
         const auto& time = w.registry().get<const goblins::TimeComponent>(w.worldEntity());
@@ -64,7 +65,7 @@ int main(int argc, char** argv) {
     // Отрицательный tick_count в конфигурации — тикать бесконечно (мир
     // существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int ticksRun = 0;
-    loop.run([&]() { return config.tickCount < 0 || ticksRun++ < config.tickCount; });
+    loop.run([&]() { return config.tick_count < 0 || ticksRun++ < config.tick_count; });
 
     std::cout << "Simulation stopped.\n";
     network.stop();

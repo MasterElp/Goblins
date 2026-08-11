@@ -1,79 +1,125 @@
 #pragma once
 
-#include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
+#include "platform/ExecutablePath.hpp"
+
 namespace goblins {
 
-// Сервер и клиент читают один и тот же config.json, чтобы адрес и порт не
-// расходились (07_TechStack.md — все взаимодействия через интерфейсы;
-// конфигурация — часть этого интерфейса, а не догадка каждой стороны).
-// Если файла нет или в нём не хватает поля — используется значение по
-// умолчанию, а не ошибка: конфигурация должна быть удобной, а не
-// обязательной.
-struct AppConfig {
+// Конфигурации сервера и клиента разделены и живут каждая рядом со своим
+// бинарником — не в одном общем файле. Общее между ними — только сам
+// механизм чтения/автогенерации (ниже), не набор полей: серверу не нужно
+// знать про размер окна просмотра клиента, а клиенту — про seed генерации
+// булыжников.
+
+struct AreaSize {
+    int width = 100;
+    int height = 100;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AreaSize, width, height)
+
+struct ViewSize {
+    int width = 60;
+    int height = 25;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewSize, width, height)
+
+struct ServerConfig {
     std::string host = "127.0.0.1";
     int port = 9002;
 
-    int areaWidth = 100;
-    int areaHeight = 100;
+    AreaSize area{};
 
-    int boulderCount = 40;
-    unsigned boulderSeed = 12345;
+    int boulder_count = 40;
+    unsigned boulder_seed = 12345;
 
-    int tickIntervalMs = 200;
+    int tick_interval_ms = 200;
     // Отрицательное значение — тикать бесконечно (мир существует
     // независимо от наблюдателя, 02_CorePrinciples.md, п.1).
-    int tickCount = -1;
-
-    int viewWidth = 60;
-    int viewHeight = 25;
-    int scrollStep = 5;
+    int tick_count = -1;
 };
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ServerConfig, host, port, area, boulder_count, boulder_seed,
+                                    tick_interval_ms, tick_count)
 
-inline AppConfig loadConfig(const std::string& path = "config.json") {
-    AppConfig config;
+struct ClientConfig {
+    std::string host = "127.0.0.1";
+    int port = 9002;
+
+    // Сколько тайлов видно в окне просмотра и с какой скоростью (тайлов в
+    // секунду) прокручивать при зажатой клавише.
+    ViewSize view{};
+    int scroll_step = 5;
+
+    // Размер тайла в пикселях на экране.
+    int tile_size = 16;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ClientConfig, host, port, view, scroll_step, tile_size)
+
+namespace detail {
+
+template <typename Config>
+Config loadConfigFile(const std::string& path) {
+    Config config;
 
     std::ifstream file(path);
     if (!file.is_open()) {
-        std::cerr << "Config file '" << path << "' not found, using defaults.\n";
         return config;
     }
 
-    nlohmann::json json;
     try {
+        nlohmann::json json;
         file >> json;
-    } catch (const nlohmann::json::parse_error& e) {
-        std::cerr << "Config file '" << path << "' is not valid JSON (" << e.what()
-                   << "), using defaults.\n";
-        return config;
+        config = json.get<Config>();
+    } catch (const nlohmann::json::exception& e) {
+        std::cerr << "Config file '" << path << "' is not valid (" << e.what() << "), using defaults.\n";
     }
-
-    config.host = json.value("host", config.host);
-    config.port = json.value("port", config.port);
-
-    if (json.contains("area") && json["area"].is_object()) {
-        config.areaWidth = json["area"].value("width", config.areaWidth);
-        config.areaHeight = json["area"].value("height", config.areaHeight);
-    }
-
-    config.boulderCount = json.value("boulder_count", config.boulderCount);
-    config.boulderSeed = json.value("boulder_seed", config.boulderSeed);
-
-    config.tickIntervalMs = json.value("tick_interval_ms", config.tickIntervalMs);
-    config.tickCount = json.value("tick_count", config.tickCount);
-
-    if (json.contains("view") && json["view"].is_object()) {
-        config.viewWidth = json["view"].value("width", config.viewWidth);
-        config.viewHeight = json["view"].value("height", config.viewHeight);
-    }
-    config.scrollStep = json.value("scroll_step", config.scrollStep);
 
     return config;
+}
+
+template <typename Config>
+void writeConfigFile(const std::string& path, const Config& config) {
+    std::ofstream file(path);
+    if (!file.is_open()) {
+        std::cerr << "Could not write default config to '" << path << "'.\n";
+        return;
+    }
+    nlohmann::json json = config;
+    file << json.dump(4) << "\n";
+}
+
+} // namespace detail
+
+// Если файла по данному пути нет — создаёт его со значениями по умолчанию.
+// Конфигурация должна быть удобной (самодокументируемой), а не
+// обязательной: отсутствие файла — не ошибка ни на чтении, ни здесь.
+template <typename Config>
+void ensureConfigExists(const std::string& path) {
+    if (std::filesystem::exists(path)) {
+        return;
+    }
+    std::cout << "Config '" << path << "' not found, creating with defaults.\n";
+    detail::writeConfigFile(path, Config{});
+}
+
+inline ServerConfig loadServerConfig(const std::string& path) {
+    return detail::loadConfigFile<ServerConfig>(path);
+}
+
+inline ClientConfig loadClientConfig(const std::string& path) {
+    return detail::loadConfigFile<ClientConfig>(path);
+}
+
+// Путь к config.json рядом с текущим исполняемым файлом — конфигурация
+// генерируется и живёт там же, где сам бинарник, а не в рабочей
+// директории, из которой его запустили.
+inline std::string defaultConfigPathNextToExecutable() {
+    return (getExecutableDirectory() / "config.json").string();
 }
 
 } // namespace goblins

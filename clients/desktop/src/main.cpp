@@ -1,24 +1,21 @@
 #include <algorithm>
-#include <atomic>
-#include <chrono>
 #include <cstdint>
-#include <cstdio>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 #include <nlohmann/json.hpp>
+#include <raylib.h>
 
-#include "Console.hpp"
 #include "config/Config.hpp"
 
-// Клиент — чистый C++: терминальный ASCII-рендер вместо GUI-библиотеки.
-// Подключается только по WebSocket-протоколу сервера (07_TechStack.md,
-// п.6) — никакого доступа к core. Адрес/порт сервера и размер окна
-// просмотра — из того же config.json, что читает сервер.
+// Клиент — графическое приложение (raylib), не консоль. Подключается
+// только по WebSocket-протоколу сервера (07_TechStack.md, п.6) — никакого
+// доступа к core. Сеть и отрисовка идут в разных потоках: IXWebSocket сам
+// поднимает поток для обработки сообщений, здесь — только основной цикл
+// окна.
 
 namespace {
 
@@ -31,7 +28,6 @@ struct WorldState {
 
 std::mutex g_stateMutex;
 WorldState g_state;
-std::atomic<bool> g_dirty{true};
 
 void handleMessage(const std::string& payload) {
     const auto json = nlohmann::json::parse(payload, nullptr, /*allow_exceptions=*/false);
@@ -53,47 +49,20 @@ void handleMessage(const std::string& payload) {
         }
     } else if (type == "tick") {
         g_state.tick = json.value("tick", g_state.tick);
-    } else {
-        return;
     }
-
-    g_dirty = true;
 }
 
-void render(int viewX, int viewY, int viewW, int viewH) {
-    WorldState snapshot;
-    {
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        snapshot = g_state;
-    }
-
-    goblins::consoleClear();
-
-    std::printf("Goblins world viewer  |  Tick: %llu  |  Area: %dx%d  |  View: (%d,%d)\n",
-                static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
-                viewX, viewY);
-    std::printf("WASD - scroll, Q - quit\n\n");
-
-    std::vector<std::string> grid(static_cast<std::size_t>(viewH), std::string(static_cast<std::size_t>(viewW), '.'));
-    for (const auto& boulder : snapshot.boulders) {
-        const int localX = boulder.first - viewX;
-        const int localY = boulder.second - viewY;
-        if (localX >= 0 && localX < viewW && localY >= 0 && localY < viewH) {
-            grid[static_cast<std::size_t>(localY)][static_cast<std::size_t>(localX)] = '#';
-        }
-    }
-
-    for (const auto& row : grid) {
-        std::puts(row.c_str());
-    }
-    std::fflush(stdout);
+WorldState snapshotState() {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    return g_state;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    const std::string configPath = argc > 1 ? argv[1] : "config.json";
-    const auto config = goblins::loadConfig(configPath);
+    const std::string configPath = argc > 1 ? argv[1] : goblins::defaultConfigPathNextToExecutable();
+    goblins::ensureConfigExists<goblins::ClientConfig>(configPath);
+    const auto config = goblins::loadClientConfig(configPath);
 
     ix::initNetSystem();
 
@@ -106,70 +75,76 @@ int main(int argc, char** argv) {
     });
     webSocket.start();
 
-    goblins::consoleInit();
+    const int tileSize = config.tile_size;
+    const int viewportW = config.view.width * tileSize;
+    const int viewportH = config.view.height * tileSize;
+    const int hudHeight = 32;
 
-    const int viewW = config.viewWidth;
-    const int viewH = config.viewHeight;
-    const int step = config.scrollStep;
-    int viewX = 0;
-    int viewY = 0;
+    InitWindow(viewportW, viewportH + hudHeight, "Goblins - World Viewer");
+    SetTargetFPS(60);
 
-    render(viewX, viewY, viewW, viewH);
+    const float scrollSpeedPx = static_cast<float>(config.scroll_step * tileSize);
 
-    bool running = true;
-    while (running) {
-        if (goblins::consoleKeyPressed()) {
-            const char key = goblins::consoleReadKey();
-            bool moved = true;
+    float viewX = 0.0f;
+    float viewY = 0.0f;
 
-            switch (key) {
-                case 'w':
-                case 'W':
-                    viewY -= step;
-                    break;
-                case 's':
-                case 'S':
-                    viewY += step;
-                    break;
-                case 'a':
-                case 'A':
-                    viewX -= step;
-                    break;
-                case 'd':
-                case 'D':
-                    viewX += step;
-                    break;
-                case 'q':
-                case 'Q':
-                    running = false;
-                    moved = false;
-                    break;
-                default:
-                    moved = false;
-                    break;
-            }
+    const Color backgroundColor{28, 28, 32, 255};
+    const Color boulderColor{140, 128, 116, 255};
+    const Color hudColor{18, 18, 20, 255};
+    const Color textColor{230, 230, 230, 255};
 
-            if (moved) {
-                std::lock_guard<std::mutex> lock(g_stateMutex);
-                if (g_state.areaWidth > 0) {
-                    viewX = std::max(0, std::min(viewX, std::max(0, g_state.areaWidth - viewW)));
-                    viewY = std::max(0, std::min(viewY, std::max(0, g_state.areaHeight - viewH)));
-                } else {
-                    viewX = std::max(0, viewX);
-                    viewY = std::max(0, viewY);
+    while (!WindowShouldClose()) {
+        const float dt = GetFrameTime();
+
+        if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
+        if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
+        if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) viewX -= scrollSpeedPx * dt;
+        if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) viewX += scrollSpeedPx * dt;
+
+        const WorldState snapshot = snapshotState();
+
+        if (snapshot.areaWidth > 0) {
+            const float maxX = std::max(0.0f, static_cast<float>(snapshot.areaWidth * tileSize - viewportW));
+            const float maxY = std::max(0.0f, static_cast<float>(snapshot.areaHeight * tileSize - viewportH));
+            viewX = std::clamp(viewX, 0.0f, maxX);
+            viewY = std::clamp(viewY, 0.0f, maxY);
+        } else {
+            viewX = std::max(0.0f, viewX);
+            viewY = std::max(0.0f, viewY);
+        }
+
+        BeginDrawing();
+        ClearBackground(backgroundColor);
+
+        if (snapshot.areaWidth == 0) {
+            const std::string waiting = "Connecting to " + config.host + ":" + std::to_string(config.port) + "...";
+            DrawText(waiting.c_str(), 10, hudHeight + 10, 20, textColor);
+        } else {
+            for (const auto& boulder : snapshot.boulders) {
+                const float screenX = static_cast<float>(boulder.first * tileSize) - viewX;
+                const float screenY = static_cast<float>(boulder.second * tileSize) - viewY + hudHeight;
+                if (screenX + tileSize < 0 || screenX > viewportW || screenY + tileSize < hudHeight ||
+                    screenY > viewportH + hudHeight) {
+                    continue;
                 }
-                g_dirty = true;
+                // -1px зазор между тайлами заодно рисует сетку, без
+                // отдельных линий.
+                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize - 1, tileSize - 1,
+                              boulderColor);
             }
         }
 
-        if (g_dirty.exchange(false)) {
-            render(viewX, viewY, viewW, viewH);
-        }
+        DrawRectangle(0, 0, viewportW, hudHeight, hudColor);
+        DrawText(TextFormat("Tick: %llu   Area: %dx%d   View: (%d,%d)   WASD - scroll",
+                             static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
+                             static_cast<int>(viewX / tileSize), static_cast<int>(viewY / tileSize)),
+                 10, 8, 18, textColor);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        EndDrawing();
     }
 
-    goblins::consoleRestore();
+    CloseWindow();
+
     webSocket.stop();
     ix::uninitNetSystem();
 

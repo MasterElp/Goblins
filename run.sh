@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Linux/macOS. На Windows используй run.ps1 (см. build.sh про причину).
+# Linux/macOS. На Windows используй run.bat.
 set -e
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_PATH="${1:-$ROOT_DIR/config.json}"
 
 find_binary() {
     local search_dir="$1"
@@ -24,8 +23,9 @@ if [ -z "$CLIENT_BIN" ]; then
     exit 1
 fi
 
-echo "Starting server: $SERVER_BIN $CONFIG_PATH"
-"$SERVER_BIN" "$CONFIG_PATH" &
+# Сервер — со своим config.json из корня репозитория.
+echo "Starting server: $SERVER_BIN $ROOT_DIR/config.json"
+"$SERVER_BIN" "$ROOT_DIR/config.json" &
 SERVER_PID=$!
 
 cleanup() {
@@ -40,5 +40,7 @@ trap cleanup EXIT
 # Даём серверу время поднять WebSocket-порт перед подключением клиента.
 sleep 1
 
-echo "Starting client: $CLIENT_BIN $CONFIG_PATH"
-"$CLIENT_BIN" "$CONFIG_PATH"
+# Клиент — без аргумента: сам найдёт (или создаст) свой config.json рядом
+# со своим исполняемым файлом.
+echo "Starting client: $CLIENT_BIN"
+"$CLIENT_BIN"

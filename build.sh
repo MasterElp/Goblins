@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Linux/macOS. На Windows используй build.ps1 — интерактивный клиент
-# (conio.h/ANSI) рассчитан на настоящую консоль Windows, а не на mintty
-# из Git Bash, поэтому сборка отдельно от запуска тут не проблема, а вот
-# для run.sh на Windows это важно (см. run.ps1).
+# Linux/macOS. На Windows используй build.bat — та же сборка, но без
+# зависимости от bash (Git Bash/WSL) и без вопросов политики выполнения
+# скриптов, характерных для PowerShell.
 set -e
 
 CONFIG="${1:-Release}"

@@ -67,11 +67,35 @@ if (WIN32)
     # определяет макросы min/max, которые ломают std::min/std::max в коде,
     # который его транзитивно подключает. NOMINMAX это отключает. PUBLIC —
     # чтобы define применился и к тем, кто линкуется на ixwebsocket.
-    target_compile_definitions(ixwebsocket PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    #
+    # NOGDI/NOUSER — отдельная проблема: клиент линкует ещё и raylib, а
+    # winuser.h/wingdi.h (та же цепочка транзитивных инклудов) определяют
+    # Rectangle, CloseWindow, ShowCursor, DrawTextA, LoadImageA — те же
+    # имена, что использует raylib.h. Без NOGDI/NOUSER это лобовой
+    # конфликт имён при компиляции main.cpp клиента.
+    target_compile_definitions(ixwebsocket PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN NOGDI NOUSER)
 endif()
 
 if (UNIX AND NOT APPLE)
     set(THREADS_PREFER_PTHREAD_FLAG TRUE)
     find_package(Threads REQUIRED)
     target_link_libraries(ixwebsocket PRIVATE Threads::Threads)
+endif()
+
+# --- raylib: графика/окно/ввод для десктопного клиента ---
+# Нужен только клиенту — сервер headless и не должен тянуть за собой
+# графику/X11/OpenGL. Клиент включает GOBLINS_WITH_RAYLIB перед
+# add_subdirectory(third_party); по умолчанию (для core/server) — выключено.
+option(GOBLINS_WITH_RAYLIB "Build vendored raylib (needed by clients/desktop only)" OFF)
+if (GOBLINS_WITH_RAYLIB)
+    # Аудио не нужно (никаких звуков в проекте) — отключаем, чтобы не
+    # тащить аудио-бэкенды. Собирается через собственный CMakeLists.txt
+    # raylib — в отличие от IXWebSocket, вручную выбирать файлы тут не
+    # пытаемся: сборка raylib завязана на платформенные ветвления (GLFW,
+    # OpenGL), которые надёжнее доверить их же протестированному CMake.
+    set(CUSTOMIZE_BUILD ON CACHE BOOL "" FORCE)
+    set(USE_AUDIO OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(PLATFORM "Desktop" CACHE STRING "" FORCE)
+    add_subdirectory(raylib)
 endif()

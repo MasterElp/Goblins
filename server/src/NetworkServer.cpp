@@ -2,6 +2,7 @@
 
 #include <iostream>
 
+#include <ixwebsocket/IXNetSystem.h>
 #include <nlohmann/json.hpp>
 
 #include "core/components/ImpassableComponent.hpp"
@@ -25,7 +26,8 @@ NetworkServer::NetworkServer(const World& world, const std::string& host, int po
 }
 
 bool NetworkServer::start() {
-	ix::initNetSystem();
+    ix::initNetSystem();
+
     const auto result = server_.listen();
     if (!result.first) {
         std::cerr << "NetworkServer: failed to bind port: " << result.second << "\n";
