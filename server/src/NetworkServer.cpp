@@ -11,8 +11,8 @@
 
 namespace goblins {
 
-NetworkServer::NetworkServer(const World& world, const std::string& host, int port)
-    : world_(world), server_(port, host) {
+NetworkServer::NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused)
+    : world_(world), server_(port, host), paused_(paused) {
     server_.setOnClientMessageCallback(
         [this](std::shared_ptr<ix::ConnectionState> /*state*/,
                ix::WebSocket& webSocket,
@@ -21,6 +21,8 @@ NetworkServer::NetworkServer(const World& world, const std::string& host, int po
                 // Новый клиент сразу получает полный снапшот мира —
                 // ему ещё не известны накопленные изменения.
                 webSocket.send(buildSnapshotMessage());
+            } else if (msg->type == ix::WebSocketMessageType::Message) {
+                handleClientMessage(msg->str);
             }
         });
 }
@@ -45,8 +47,36 @@ void NetworkServer::broadcastTick(std::uint64_t tick) {
     nlohmann::json message;
     message["type"] = "tick";
     message["tick"] = tick;
-    const std::string payload = message.dump();
+    broadcastToAll(message.dump());
+}
 
+void NetworkServer::handleClientMessage(const std::string& payload) {
+    // Этот колбэк вызывается на внутреннем потоке IXWebSocket, не на
+    // потоке GameLoop::run() — запись в paused_ через std::atomic
+    // безопасна именно поэтому (GameLoop.hpp читает тот же атомик из
+    // своего потока).
+    const auto json = nlohmann::json::parse(payload, nullptr, /*allow_exceptions=*/false);
+    if (json.is_discarded()) {
+        return;
+    }
+
+    const std::string type = json.value("type", "");
+    if (type == "toggle_pause") {
+        const bool newState = !paused_.load();
+        paused_.store(newState);
+        std::cout << "World " << (newState ? "paused" : "resumed") << " by client request.\n";
+        broadcastPauseState();
+    }
+}
+
+void NetworkServer::broadcastPauseState() {
+    nlohmann::json message;
+    message["type"] = "pause_state";
+    message["paused"] = paused_.load();
+    broadcastToAll(message.dump());
+}
+
+void NetworkServer::broadcastToAll(const std::string& payload) {
     for (const auto& client : server_.getClients()) {
         client->send(payload);
     }
@@ -57,6 +87,7 @@ std::string NetworkServer::buildSnapshotMessage() const {
     message["type"] = "world_snapshot";
     message["area"]["width"] = world_.area().width();
     message["area"]["height"] = world_.area().height();
+    message["paused"] = paused_.load();
 
     const auto& time = world_.registry().get<const TimeComponent>(world_.worldEntity());
     message["tick"] = time.tick;

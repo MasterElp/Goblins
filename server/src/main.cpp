@@ -43,18 +43,21 @@ int main(int argc, char** argv) {
                << (occupiedTiles.size() == placedBoulders ? " -- impassability rule holds\n\n"
                                                             : " -- ERROR: duplicate tiles found!\n\n");
 
+    // Игровой цикл: один тик = TimeSystem, затем разрешение очереди команд
+    // (06_GameLoop.md, п.2). Интервал тика — из конфигурации. Создаётся до
+    // NetworkServer, потому что тот получает ссылку на loop.paused и
+    // управляет им напрямую по команде клиента.
+    goblins::GameLoop loop(world, std::chrono::milliseconds(config.tick_interval_ms));
+
     // Сетевой слой (07_TechStack.md, п.4): core ничего о нём не знает,
     // NetworkServer — часть server, читает состояние world через
     // публичный интерфейс World. Адрес и порт — из конфигурации.
-    goblins::NetworkServer network(world, config.host, config.port);
+    goblins::NetworkServer network(world, config.host, config.port, loop.paused);
     if (!network.start()) {
         return 1;
     }
     std::cout << "WebSocket server listening on ws://" << config.host << ":" << config.port << "\n\n";
 
-    // Игровой цикл: один тик = TimeSystem, затем разрешение очереди команд
-    // (06_GameLoop.md, п.2). Интервал тика — из конфигурации.
-    goblins::GameLoop loop(world, std::chrono::milliseconds(config.tick_interval_ms));
     loop.addSystem(goblins::TimeSystem);
     loop.onTickComplete = [&](const goblins::World& w) {
         const auto& time = w.registry().get<const goblins::TimeComponent>(w.worldEntity());

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <thread>
@@ -28,6 +29,15 @@ public:
     }
 
     void tick() {
+        // На паузе тик не выполняется вообще: ни системы, ни очередь
+        // команд, ни колбэк — состояние мира не меняется и наблюдателям
+        // нечего рассылать. GameLoop не знает, почему поставлена пауза
+        // (например, по команде из сети) — это решает вызывающая сторона,
+        // здесь только сам факт "выполнять тик или нет".
+        if (paused) {
+            return;
+        }
+
         for (auto& system : systems_) {
             system(world_, commandQueue_);
         }
@@ -56,6 +66,11 @@ public:
     // соответствует принципу "Все взаимодействия происходят через
     // интерфейсы" (02_CorePrinciples.md).
     std::function<void(const World&)> onTickComplete;
+
+    // Атомарный флаг: может выставляться из другого потока (например, из
+    // сетевого колбэка сервера) независимо от потока, в котором крутится
+    // run().
+    std::atomic<bool> paused{false};
 
 private:
     World& world_;
