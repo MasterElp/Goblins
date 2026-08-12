@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     // Сетевой слой (07_TechStack.md, п.4): core ничего о нём не знает,
     // NetworkServer — часть server, читает состояние world через
     // публичный интерфейс World. Адрес и порт — из конфигурации.
-    goblins::NetworkServer network(world, config.host, config.port, loop.paused);
+    goblins::NetworkServer network(world, config.host, config.port, loop.paused, config, configPath);
 
     goblins::RegenerationRequest generationConfig;
     generationConfig.terrain_seed = config.terrain_seed;

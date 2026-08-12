@@ -4,7 +4,7 @@
         "width": 100
     },
     "boulder_count": 40,
-    "boulder_seed": 12345,
+    "boulder_seed": 243030,
     "host": "127.0.0.1",
     "port": 9002,
     "terrain": {
@@ -29,7 +29,7 @@
         "rock_noise_frequency": 0.05000000074505806,
         "water_moisture_boost": 0.699999988079071
     },
-    "terrain_seed": 54321,
+    "terrain_seed": 122802,
     "tick_count": -1,
     "tick_interval_ms": 200
 }

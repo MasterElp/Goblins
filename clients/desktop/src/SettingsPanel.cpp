@@ -19,16 +19,17 @@ void SettingsPanel::loadFrom(const goblins::RegenerationRequest& current, bool f
     loaded_ = true;
 }
 
-bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequest) {
+bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequest, bool& outSaveRequested) {
     // Immediate-mode: сначала считаем, сколько всего строк контента, чтобы
     // задать GuiScrollPanel настоящую высоту — иначе скролл не появится.
     // 2 (seed) + 1 (boulder count) + 4 (freq) + 3 (fractal) + 2 (bumps) +
     // 4 (river) + 4 (pond) + 3 (moisture) = 23 строки с параметрами,
-    // плюс 7 заголовков секций и 2 кнопки внизу.
+    // плюс 7 заголовков секций и 3 кнопки внизу (Regenerate, Save values,
+    // Reset).
     constexpr int kParamRows = 23;
     constexpr int kSectionHeaders = 7;
     const float contentHeight =
-        kParamRows * kRowHeight + kSectionHeaders * (kRowHeight + kSectionGap) + 3 * (kRowHeight + kSectionGap);
+        kParamRows * kRowHeight + kSectionHeaders * (kRowHeight + kSectionGap) + 4 * (kRowHeight + kSectionGap);
 
     static Rectangle view{};
     const Rectangle content{0, 0, bounds.width - 18, contentHeight};
@@ -120,6 +121,8 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
         regenerate = true;
     }
     y += 30 + 6;
+    outSaveRequested = GuiButton(Rectangle{x, y, rowWidth, 28}, "Save values");
+    y += 28 + 6;
     if (GuiButton(Rectangle{x, y, rowWidth, 26}, "Reset to current server state")) {
         loaded_ = false; // следующий loadFrom(..., force=false) перезапишет edited_
     }

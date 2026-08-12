@@ -188,6 +188,13 @@ inline void saveClientConfig(const std::string& path, const ClientConfig& config
     detail::writeConfigFile(path, config);
 }
 
+// Явное сохранение — сервер вызывает это по запросу клиента ("Save
+// values" на панели генерации), чтобы текущие параметры генерации стали
+// значениями по умолчанию при следующем запуске сервера.
+inline void saveServerConfig(const std::string& path, const ServerConfig& config) {
+    detail::writeConfigFile(path, config);
+}
+
 // Путь к config.json рядом с текущим исполняемым файлом — конфигурация
 // генерируется и живёт там же, где сам бинарник, а не в рабочей
 // директории, из которой его запустили.

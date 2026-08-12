@@ -26,8 +26,10 @@ float round3(float value) {
 
 } // namespace
 
-NetworkServer::NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused)
-    : world_(world), server_(port, host), paused_(paused) {
+NetworkServer::NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused,
+                              ServerConfig baseConfig, std::string configPath)
+    : world_(world), server_(port, host), paused_(paused), baseConfig_(std::move(baseConfig)),
+      configPath_(std::move(configPath)) {
     server_.setOnClientMessageCallback(
         [this](std::shared_ptr<ix::ConnectionState> /*state*/,
                ix::WebSocket& webSocket,
@@ -125,6 +127,19 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
     } else if (type == "start_simulation") {
         std::lock_guard<std::mutex> lock(pendingStartMutex_);
         pendingStart_ = true;
+    } else if (type == "save_generation_config") {
+        // Только файловый ввод-вывод, ECS registry не трогаем — можно
+        // прямо здесь, на сетевом потоке, как и toggle_pause.
+        ServerConfig toSave = baseConfig_;
+        {
+            std::lock_guard<std::mutex> lock(generationConfigMutex_);
+            toSave.terrain_seed = currentGenerationConfig_.terrain_seed;
+            toSave.terrain = currentGenerationConfig_.terrain;
+            toSave.boulder_count = currentGenerationConfig_.boulder_count;
+            toSave.boulder_seed = currentGenerationConfig_.boulder_seed;
+        }
+        saveServerConfig(configPath_, toSave);
+        std::cout << "Generation config saved to '" << configPath_ << "'.\n";
     } else if (type == "stop_simulation") {
         // В отличие от toggle_pause, это не переключение, а безусловная
         // остановка — клиент нажал "Back", повторный запрос не должен

@@ -53,6 +53,12 @@ void NetworkClient::sendStopSimulation() {
     webSocket_.send(request.dump());
 }
 
+void NetworkClient::sendSaveGenerationConfig() {
+    nlohmann::json request;
+    request["type"] = "save_generation_config";
+    webSocket_.send(request.dump());
+}
+
 void NetworkClient::handleMessage(const std::string& payload) {
     const auto json = nlohmann::json::parse(payload, nullptr, /*allow_exceptions=*/false);
     if (json.is_discarded()) {

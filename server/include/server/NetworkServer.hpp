@@ -36,6 +36,10 @@ namespace goblins {
 //   Клиент -> сервер, запрос остановить симуляцию (кнопка "Back" на
 //   экране симуляции) — не toggle, а гарантированная пауза:
 //     {"type": "stop_simulation"}
+//   Клиент -> сервер, запрос сохранить текущие параметры генерации
+//   (currentGenerationConfig_) в config.json сервера, чтобы они стали
+//   значениями по умолчанию при следующем запуске:
+//     {"type": "save_generation_config"}
 //   Клиент -> сервер, запрос перегенерировать мир (почву/воду/булыжники):
 //     {"type": "regenerate", "params": RegenerationRequest}
 //     Сервер выполняет это на потоке GameLoop (не сразу в сетевом
@@ -54,7 +58,12 @@ public:
     // состояния паузы остаётся один источник истины, а не две
     // независимые копии (в GameLoop и в NetworkServer), которые могли бы
     // разойтись.
-    NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused);
+    // baseConfig/configPath — нужны только для save_generation_config:
+    // сохраняем на диск полный ServerConfig (host/port/area/tick_* как
+    // были при запуске), подменив в нём только поля генерации текущим
+    // currentGenerationConfig_.
+    NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused,
+                  ServerConfig baseConfig, std::string configPath);
 
     // Возвращает false, если порт не удалось занять — например, он уже
     // используется другим процессом.
@@ -108,6 +117,9 @@ private:
 
     mutable std::mutex generationConfigMutex_;
     RegenerationRequest currentGenerationConfig_;
+
+    ServerConfig baseConfig_;
+    std::string configPath_;
 
     std::mutex pendingRegenerationMutex_;
     std::optional<RegenerationRequest> pendingRegeneration_;

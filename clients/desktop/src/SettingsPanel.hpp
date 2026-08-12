@@ -19,8 +19,10 @@ public:
     void loadFrom(const goblins::RegenerationRequest& current, bool force = false);
 
     // Рисует панель. Возвращает true и заполняет outRequest, если
-    // пользователь нажал "Regenerate".
-    bool draw(Rectangle bounds, goblins::RegenerationRequest& outRequest);
+    // пользователь нажал "Regenerate". Выставляет outSaveRequested в true,
+    // если пользователь нажал "Save values" (вызывающая сторона сама
+    // решает, что с этим делать — отправить save_generation_config).
+    bool draw(Rectangle bounds, goblins::RegenerationRequest& outRequest, bool& outSaveRequested);
 
 private:
     goblins::RegenerationRequest edited_{};

@@ -26,7 +26,7 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
     const Color cursorColor{255, 220, 90, 255};
 
     DrawText("World Generation - Stage 1: Soil & Water", 12, 10, 20, textColor);
-    if (GuiButton(Rectangle{static_cast<float>(screenW) - 110, 6, 100, 28, }, "Back (Esc)")) {
+    if (GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 110, 6, 100, 28}, "Back (Esc)")) {
         return AppScreen::MainMenu;
     }
 
@@ -118,10 +118,14 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
     }
 
     goblins::RegenerationRequest regenerateRequest;
+    bool saveRequested = false;
     const Rectangle panelBounds{static_cast<float>(screenW) - kPanelWidth, 0, kPanelWidth,
                                  static_cast<float>(screenH)};
-    if (panel.draw(panelBounds, regenerateRequest)) {
+    if (panel.draw(panelBounds, regenerateRequest, saveRequested)) {
         network.sendRegenerate(regenerateRequest);
+    }
+    if (saveRequested) {
+        network.sendSaveGenerationConfig();
     }
 
     if (IsKeyPressed(KEY_ESCAPE)) {

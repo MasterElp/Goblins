@@ -33,6 +33,10 @@ int main(int argc, char** argv) {
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(config.window_width, config.window_height, "Goblins - World Simulator");
+    // Esc — по умолчанию "exit key" в raylib (сам взводит WindowShouldClose,
+    // в обход экранов). Экраны сами решают, что делать по Esc (вернуться в
+    // меню, снять паузу и т.п.), поэтому дефолтное поведение отключаем.
+    SetExitKey(KEY_NULL);
     SetTargetFPS(60);
     if (config.fullscreen) {
         ToggleFullscreen();
