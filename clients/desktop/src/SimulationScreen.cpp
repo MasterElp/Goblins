@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include <nlohmann/json.hpp>
+#include <raygui.h>
 #include <raylib.h>
 
 #include "TileColors.hpp"
@@ -127,6 +128,8 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
                          static_cast<int>(viewX / tileSize), static_cast<int>(viewY / tileSize)),
              10, 8, 16, textColor);
 
+    bool backPressed = GuiButton(Rectangle{static_cast<float>(screenW) - 110, 2, 100, kHudHeight - 4}, "Back (Esc)");
+
     if (hasHoverTile) {
         const std::size_t hi = static_cast<std::size_t>(hoverY) * snapshot.areaWidth + hoverX;
         const std::string tileLabel =
@@ -134,7 +137,7 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
                        snapshot.rockiness[hi], snapshot.compaction[hi],
                        snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "");
         const int labelWidth = MeasureText(tileLabel.c_str(), 16);
-        DrawText(tileLabel.c_str(), viewportW - labelWidth - 10, 8, 16, cursorColor);
+        DrawText(tileLabel.c_str(), viewportW - labelWidth - 120, 8, 16, cursorColor);
     }
 
     if (snapshot.paused) {
@@ -144,7 +147,8 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         DrawText(pausedLabel, viewportW / 2 - labelWidth / 2, kHudHeight + 12, 24, pausedColor);
     }
 
-    if (IsKeyPressed(KEY_ESCAPE)) {
+    if (backPressed || IsKeyPressed(KEY_ESCAPE)) {
+        network.sendStopSimulation();
         return AppScreen::MainMenu;
     }
     return AppScreen::Simulation;

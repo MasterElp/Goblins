@@ -47,6 +47,12 @@ void NetworkClient::sendStartSimulation() {
     webSocket_.send(request.dump());
 }
 
+void NetworkClient::sendStopSimulation() {
+    nlohmann::json request;
+    request["type"] = "stop_simulation";
+    webSocket_.send(request.dump());
+}
+
 void NetworkClient::handleMessage(const std::string& payload) {
     const auto json = nlohmann::json::parse(payload, nullptr, /*allow_exceptions=*/false);
     if (json.is_discarded()) {

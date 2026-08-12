@@ -125,6 +125,14 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
     } else if (type == "start_simulation") {
         std::lock_guard<std::mutex> lock(pendingStartMutex_);
         pendingStart_ = true;
+    } else if (type == "stop_simulation") {
+        // В отличие от toggle_pause, это не переключение, а безусловная
+        // остановка — клиент нажал "Back", повторный запрос не должен
+        // случайно снова запустить луп. paused_ атомарный, трогать его
+        // отсюда (сетевой поток) безопасно, как и в toggle_pause.
+        paused_.store(true);
+        std::cout << "Simulation stopped by client request.\n";
+        broadcastPauseState();
     }
 }
 
