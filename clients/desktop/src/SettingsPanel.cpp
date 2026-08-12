@@ -20,28 +20,33 @@ void SettingsPanel::loadFrom(const goblins::RegenerationRequest& current, bool f
 }
 
 bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequest, bool& outSaveRequested) {
+    // Кнопки (Regenerate/Save values/Reset) — вне прокрутки, в
+    // отдельной полосе внизу панели, всегда видимы: раньше их приходилось
+    // домётывать до конца длинного списка параметров, чтобы нажать.
+    constexpr float kFooterHeight = 110.0f;
+    const Rectangle scrollBounds{bounds.x, bounds.y, bounds.width, bounds.height - kFooterHeight};
+    const Rectangle footerBounds{bounds.x, bounds.y + bounds.height - kFooterHeight, bounds.width, kFooterHeight};
+
     // Immediate-mode: сначала считаем, сколько всего строк контента, чтобы
     // задать GuiScrollPanel настоящую высоту — иначе скролл не появится.
     // 2 (seed) + 1 (boulder count) + 4 (freq) + 3 (fractal) + 2 (bumps) +
     // 5 (river) + 4 (pond) + 3 (moisture) = 24 строки с параметрами,
-    // плюс 7 заголовков секций и 3 кнопки внизу (Regenerate, Save values,
-    // Reset).
+    // плюс 7 заголовков секций.
     constexpr int kParamRows = 24;
     constexpr int kSectionHeaders = 7;
-    const float contentHeight =
-        kParamRows * kRowHeight + kSectionHeaders * (kRowHeight + kSectionGap) + 4 * (kRowHeight + kSectionGap);
+    const float contentHeight = kParamRows * kRowHeight + kSectionHeaders * (kRowHeight + kSectionGap) + kSectionGap;
 
     static Rectangle view{};
-    const Rectangle content{0, 0, bounds.width - 18, contentHeight};
+    const Rectangle content{0, 0, scrollBounds.width - 18, contentHeight};
 
-    GuiScrollPanel(bounds, "Generation settings", content, &scroll_, &view);
+    GuiScrollPanel(scrollBounds, "Generation settings", content, &scroll_, &view);
 
     BeginScissorMode(static_cast<int>(view.x), static_cast<int>(view.y), static_cast<int>(view.width),
                       static_cast<int>(view.height));
 
-    float y = bounds.y + scroll_.y;
-    const float x = bounds.x + scroll_.x + 8;
-    const float rowWidth = bounds.width - 34;
+    float y = scrollBounds.y + scroll_.y;
+    const float x = scrollBounds.x + scroll_.x + 8;
+    const float rowWidth = scrollBounds.width - 34;
 
     auto section = [&](const char* title) {
         GuiLabel(Rectangle{x, y, rowWidth, kRowHeight}, title);
@@ -116,19 +121,22 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     floatRow("Water boost", edited_.terrain.water_moisture_boost, 0.0f, 1.0f);
     floatRow("Rock reduction", edited_.terrain.rock_moisture_reduction, 0.0f, 1.0f);
 
-    y += kSectionGap;
+    EndScissorMode();
+
+    const float footerX = footerBounds.x + 8;
+    const float footerRowWidth = footerBounds.width - 16;
+    float footerY = footerBounds.y + 8;
+
     bool regenerate = false;
-    if (GuiButton(Rectangle{x, y, rowWidth, 30}, "Regenerate")) {
+    if (GuiButton(Rectangle{footerX, footerY, footerRowWidth, 30}, "Regenerate")) {
         regenerate = true;
     }
-    y += 30 + 6;
-    outSaveRequested = GuiButton(Rectangle{x, y, rowWidth, 28}, "Save values");
-    y += 28 + 6;
-    if (GuiButton(Rectangle{x, y, rowWidth, 26}, "Reset to current server state")) {
+    footerY += 30 + 6;
+    outSaveRequested = GuiButton(Rectangle{footerX, footerY, footerRowWidth, 28}, "Save values");
+    footerY += 28 + 6;
+    if (GuiButton(Rectangle{footerX, footerY, footerRowWidth, 26}, "Reset to current server state")) {
         loaded_ = false; // следующий loadFrom(..., force=false) перезапишет edited_
     }
-
-    EndScissorMode();
 
     if (regenerate) {
         outRequest = edited_;
