@@ -5,6 +5,35 @@
 
 namespace goblins {
 
+// Диагностика одного вызова generateTerrain — не влияет на сам мир,
+// только на то, что сервер печатает в консоль. Позволяет отличить
+// "генерация просто медленная" от "зависла" (по последней напечатанной
+// стадии) и "рек мало, потому что карта тесная" от "рек мало из-за бага"
+// (по riverAttemptsUsed/riverAttemptsMax и riverTimedOut).
+struct GenerationStats {
+    int riversRequested = 0;
+    int riversPlaced = 0;
+    int riverAttemptsUsed = 0;
+    int riverAttemptsMax = 0;
+    // true, если стадия рек прервана по таймауту (kRiverStageDeadlineMs в
+    // TerrainGenerator.cpp), не исчерпав лимит попыток — верный признак,
+    // что путь/штамповка русла где-то ушли в патологически дорогой случай
+    // (см. kMaxLateralPerStep, kMaxRiverPathSamples).
+    bool riverTimedOut = false;
+    // Сколько раз потолок kMaxRiverPathSamples реально обрубал путь —
+    // при штатных параметрах должно быть 0 (см. kMaxLateralPerStep).
+    int riverPathsCapped = 0;
+    int pondComponentsPlaced = 0;
+
+    double heightmapMs = 0.0;
+    double riverMs = 0.0;
+    double floodFillMs = 0.0;
+    double pondMs = 0.0;
+    double moistureMs = 0.0;
+    double entityMs = 0.0;
+    double totalMs = 0.0;
+};
+
 // Шаг процедурной генерации мира — формирование почвы и водоёмов
 // (02_CorePrinciples.md, п.5: "Формирование природных ресурсов").
 // Выполняется один раз при инициализации, до начала тиков — как и
@@ -40,6 +69,11 @@ namespace goblins {
 //
 // Создаёт один терраформирующий Entity на тайл: PositionComponent +
 // SoilComponent, и WaterComponent — там, где есть река или пруд.
-void generateTerrain(World& world, unsigned seed, const TerrainParams& params = TerrainParams{});
+//
+// Возвращает статистику вызова (GenerationStats) — вызывающая сторона
+// (server) печатает её в консоль как единственный источник диагностики:
+// core сам не делает I/O (07_TechStack.md, п.6: core не знает о
+// консоли/JSON, только сервер).
+GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams& params = TerrainParams{});
 
 } // namespace goblins

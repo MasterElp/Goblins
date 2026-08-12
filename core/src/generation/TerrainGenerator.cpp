@@ -1,6 +1,7 @@
 #include "core/generation/TerrainGenerator.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -81,6 +82,13 @@ constexpr float kRiverCarveMultiplier = 2.0f; // запас карвинга н�
 constexpr int kRiverAttemptMultiplier = 100;  // maxAttempts = riverCount * 100, как в BoulderScatter
 constexpr float kMergeProbability = 0.5f;     // при столкновении с уже принятой рекой — шанс слиться, а не отклонить путь
 constexpr float kMergeMarginFraction = 0.15f; // не сливаемся у самого истока целевой реки (первые 15% её длины)
+
+// Подстраховки диагностики (GenerationStats), а не поведения "по умолчанию":
+// при нормальных параметрах ни одна не должна срабатывать. Если сработала —
+// riverTimedOut/предупреждение в консоли сразу укажут, где искать баг,
+// вместо тихого зависания GameLoop.
+constexpr double kRiverStageDeadlineMs = 2000.0;   // жёсткий потолок на всю стадию размещения рек
+constexpr std::size_t kMaxRiverPathSamples = 4000; // потолок на длину одного пути (после kMaxLateralPerStep практически недостижим)
 
 enum RiverEdge : int { kEdgeNorth = 0, kEdgeSouth = 1, kEdgeWest = 2, kEdgeEast = 3 };
 
@@ -216,8 +224,10 @@ std::vector<PathPoint> buildMeanderPath(PathPoint p0, PathPoint p1, float sinuos
 // глубины по пройденной длине — русло "дышит" по толщине и глубине
 // вместо постоянного сечения.
 std::vector<RiverPathSample> buildPathSamples(const std::vector<PathPoint>& points, int width, int height,
-                                               float baseHalfWidth, int widthNoiseSeed, int depthNoiseSeed) {
+                                               float baseHalfWidth, int widthNoiseSeed, int depthNoiseSeed,
+                                               bool& capped) {
     std::vector<RiverPathSample> samples;
+    capped = false;
 
     FastNoiseLite widthNoise(widthNoiseSeed);
     widthNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
@@ -233,6 +243,10 @@ std::vector<RiverPathSample> buildPathSamples(const std::vector<PathPoint>& poin
         if (!samples.empty() && samples.back().x == x && samples.back().y == y) {
             return;
         }
+        if (samples.size() >= kMaxRiverPathSamples) {
+            capped = true;
+            return;
+        }
         const float wN = widthNoise.GetNoise(arcLen, 0.0f);
         const float dN = depthNoise.GetNoise(arcLen, 0.0f);
         const float halfWidth =
@@ -242,7 +256,7 @@ std::vector<RiverPathSample> buildPathSamples(const std::vector<PathPoint>& poin
     };
 
     float arcLen = 0.0f;
-    for (std::size_t i = 0; i + 1 < points.size(); ++i) {
+    for (std::size_t i = 0; i + 1 < points.size() && !capped; ++i) {
         const PathPoint& a = points[i];
         const PathPoint& b = points[i + 1];
         const float segLen = std::hypot(b.x - a.x, b.y - a.y);
@@ -252,6 +266,9 @@ std::vector<RiverPathSample> buildPathSamples(const std::vector<PathPoint>& poin
             pushSample(static_cast<int>(std::lround(a.x + (b.x - a.x) * t)),
                        static_cast<int>(std::lround(a.y + (b.y - a.y) * t)), arcLen);
             arcLen += segLen / static_cast<float>(subSteps);
+            if (capped) {
+                break;
+            }
         }
     }
     if (samples.empty() && !points.empty()) {
@@ -319,7 +336,14 @@ void widenDownstream(River& target, std::size_t mergePos, float addedHalfWidth, 
 
 } // namespace
 
-void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
+GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
+    using Clock = std::chrono::steady_clock;
+    auto elapsedMs = [](Clock::time_point from) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - from).count();
+    };
+    const auto totalStart = Clock::now();
+    GenerationStats stats;
+
     const int width = world.area().width();
     const int height = world.area().height();
     const std::size_t cellCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
@@ -327,6 +351,7 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
     auto index = [width](int x, int y) { return static_cast<std::size_t>(y) * width + x; };
 
     // --- 1. Heightmap + почвенные параметры (fBm, разные seed/частоты) ---
+    const auto heightmapStart = Clock::now();
     auto heightNoise = makeFbmNoise(static_cast<int>(seed), params.heightNoiseFrequency, params);
     auto rockNoise = makeFbmNoise(static_cast<int>(seed) + 1, params.rockNoiseFrequency, params);
     auto compactionNoise = makeFbmNoise(static_cast<int>(seed) + 2, params.compactionNoiseFrequency, params);
@@ -352,6 +377,7 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
             elevation[i] = baseHeight + rockiness[i] * params.rockHeightBump + compaction[i] * params.compactionHeightBump;
         }
     }
+    stats.heightmapMs = elapsedMs(heightmapStart);
 
     // --- 1b. Реки: пути + вырезание русла в elevation, ДО Priority-Flood ---
     // Карвинг делается раньше заливки впадин, чтобы пруды и реки
@@ -369,10 +395,12 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
     // дополняющей вероятностью) путь целиком отклоняется и пробуется
     // заново — так русла разных рек не наезжают друг на друга нигде,
     // кроме явных точек слияния.
+    const auto riverStageStart = Clock::now();
     std::mt19937 riverRng(seed + 10);
     const float riverBaseHalfWidth = std::max(0.5f, params.riverWidth * 0.5f);
     std::vector<River> acceptedRivers;
     std::vector<int> riverOwner(cellCount, -1);
+    stats.riversRequested = std::max(0, params.riverCount);
     {
         std::uniform_int_distribution<int> edgeDist(0, 3);
         std::uniform_int_distribution<int> destOffsetDist(1, 3);
@@ -383,6 +411,15 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
         int placed = 0;
         int attempts = 0;
         while (placed < params.riverCount && attempts < maxAttempts) {
+            // Защитный потолок по времени — см. GenerationStats::riverTimedOut.
+            // При нормальных параметрах никогда не должен сработать (сама
+            // стадия по построению ограничена maxAttempts дешёвых
+            // итераций); это подстраховка от ещё не найденного крайнего
+            // случая, чтобы поток GameLoop не мог зависнуть насмерть.
+            if (elapsedMs(riverStageStart) > kRiverStageDeadlineMs) {
+                stats.riverTimedOut = true;
+                break;
+            }
             ++attempts;
 
             const int sourceEdge = edgeDist(riverRng);
@@ -400,7 +437,12 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
 
             const auto waypoints =
                 buildMeanderPath(p0, p1, params.riverSinuosity, wander, pathSeed, elevation, width, height);
-            auto samples = buildPathSamples(waypoints, width, height, riverBaseHalfWidth, widthSeed, depthSeed);
+            bool pathCapped = false;
+            auto samples =
+                buildPathSamples(waypoints, width, height, riverBaseHalfWidth, widthSeed, depthSeed, pathCapped);
+            if (pathCapped) {
+                ++stats.riverPathsCapped;
+            }
             if (samples.size() < 2) {
                 continue;
             }
@@ -463,6 +505,9 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
             acceptedRivers.push_back(std::move(river));
             ++placed;
         }
+        stats.riversPlaced = placed;
+        stats.riverAttemptsUsed = attempts;
+        stats.riverAttemptsMax = maxAttempts;
     }
 
     const float riverCarveDepth = params.riverDepth * kRiverCarveMultiplier;
@@ -471,11 +516,13 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
             elevation[static_cast<std::size_t>(idx)] -= riverCarveDepth * cell.falloff;
         }
     }
+    stats.riverMs = elapsedMs(riverStageStart); // путь+карвинг вместе — единая "стадия рек" для диагностики
 
     // --- 2. Priority-Flood (Barnes et al., 2014): заполнение впадин ---
     // filled[i] — минимальный уровень воды, при котором клетка i стекает
     // к краю карты. Если filled[i] > elevation[i], клетка лежит во
     // впадине — это пруд.
+    const auto floodFillStart = Clock::now();
     std::vector<float> filled(cellCount, std::numeric_limits<float>::infinity());
     std::vector<bool> visited(cellCount, false);
     std::priority_queue<HeightCell, std::vector<HeightCell>, HeightCellGreater> queue;
@@ -519,7 +566,10 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
         }
     }
 
+    stats.floodFillMs = elapsedMs(floodFillStart);
+
     // --- 3. Глубина воды: пруды (ниже) и реки (после, блок 4) ---
+    const auto pondStart = Clock::now();
     std::vector<float> waterDepth(cellCount, 0.0f);
 
     // Пруды: связные (8-связность, как и весь остальной D8-расчёт)
@@ -569,12 +619,14 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
         if (tooSmall || tooBig) {
             continue;
         }
+        ++stats.pondComponentsPlaced;
         for (int idx : componentBuffer) {
             const std::size_t i = static_cast<std::size_t>(idx);
             const float pondDepth = filled[i] - elevation[i];
             waterDepth[i] = std::max(waterDepth[i], pondDepth * params.pondDepthScale);
         }
     }
+    stats.pondMs = elapsedMs(pondStart);
 
     // --- 4. Реки: глубина воды + скорость потока по вырезанным руслам ---
     // После прудов — на пересечении реки с прудом глубина берётся как
@@ -597,6 +649,7 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
     // --- 5. Влажность: фоновый шум + затухание по расстоянию до воды ---
     // Multi-source BFS от всех водных клеток — стандартный distance
     // transform, даёт плавный градиент вместо ступенчатого.
+    const auto moistureStart = Clock::now();
     std::vector<int> distanceToWater(cellCount, -1);
     std::queue<int> bfs;
     for (std::size_t i = 0; i < cellCount; ++i) {
@@ -624,7 +677,10 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
         }
     }
 
+    stats.moistureMs = elapsedMs(moistureStart);
+
     // --- Создание Entity: один терраформирующий Entity на тайл ---
+    const auto entityStart = Clock::now();
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             const std::size_t i = index(x, y);
@@ -649,6 +705,9 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
             world.area().place(entity, x, y, /*impassable=*/false);
         }
     }
+    stats.entityMs = elapsedMs(entityStart);
+    stats.totalMs = elapsedMs(totalStart);
+    return stats;
 }
 
 } // namespace goblins

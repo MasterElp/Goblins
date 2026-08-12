@@ -1,4 +1,5 @@
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <set>
 #include <utility>
@@ -89,6 +90,34 @@ void printWorldStats(const goblins::World& world, int boulderCount) {
                                                             : " -- ERROR: duplicate tiles found!\n\n");
 }
 
+// Единственное место, где стадии generateTerrain видны снаружи core
+// (07_TechStack.md, п.6: core сам не делает I/O) — печатает тайминг
+// каждой стадии и статистику по рекам/прудам. Если генерация когда-нибудь
+// зависнет, последняя напечатанная строка перед зависанием сразу покажет,
+// в каком вызове искать; если просто "рек мало", riversPlaced/Requested и
+// riverAttemptsUsed/Max сразу показывают, попытки исчерпаны или что-то
+// другое.
+void printGenerationStats(const goblins::GenerationStats& stats) {
+    std::cout << std::fixed << std::setprecision(1);
+    std::cout << "Terrain generated in " << stats.totalMs << "ms (heightmap " << stats.heightmapMs << "ms, rivers "
+               << stats.riverMs << "ms [" << stats.riversPlaced << "/" << stats.riversRequested << " placed, "
+               << stats.riverAttemptsUsed << "/" << stats.riverAttemptsMax << " attempts";
+    if (stats.riverTimedOut) {
+        std::cout << ", TIMED OUT -- hit kRiverStageDeadlineMs, investigate river/noise parameters";
+    }
+    if (stats.riverPathsCapped > 0) {
+        std::cout << ", " << stats.riverPathsCapped << " path(s) hit sample cap";
+    }
+    std::cout << "], flood-fill " << stats.floodFillMs << "ms, ponds " << stats.pondMs << "ms ["
+               << stats.pondComponentsPlaced << " components], moisture " << stats.moistureMs << "ms, entities "
+               << stats.entityMs << "ms)\n";
+    std::cout << std::defaultfloat;
+    if (stats.riverTimedOut || stats.riverPathsCapped > 0) {
+        std::cout << "WARNING: river generation hit a safety limit above -- this points at a real bug, please "
+                      "report the parameters used.\n";
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -148,13 +177,20 @@ int main(int argc, char** argv) {
         // registry не потокобезопасен между потоками).
         if (network.takePendingStartSimulation()) {
             const auto request = network.currentGenerationConfig();
-            generateTerrain(world, request.terrain_seed, toTerrainParams(request.terrain));
+            // std::flush — эта строка обязана попасть в консоль ДО
+            // generateTerrain, даже если он зависнет (см. комментарий у
+            // printGenerationStats); без явного flush "\n" не гарантирует
+            // сброс буфера, если stdout не line-buffered (например, при
+            // перенаправлении в файл).
+            std::cout << "Simulation starting (terrain_seed=" << request.terrain_seed
+                       << ", boulder_seed=" << request.boulder_seed << ")...\n"
+                       << std::flush;
+            const auto genStats = generateTerrain(world, request.terrain_seed, toTerrainParams(request.terrain));
             scatterBoulders(world, request.boulder_count, request.boulder_seed);
 
             network.broadcastSnapshot();
 
-            std::cout << "Simulation started (terrain_seed=" << request.terrain_seed
-                       << ", boulder_seed=" << request.boulder_seed << ").\n";
+            printGenerationStats(genStats);
             printWorldStats(world, request.boulder_count);
 
             loop.paused.store(false);
@@ -166,15 +202,21 @@ int main(int argc, char** argv) {
         // регенерация трогает ECS registry, а это не тот поток, откуда
         // пришёл сетевой запрос (см. NetworkServer::handleClientMessage).
         if (const auto request = network.takePendingRegeneration()) {
+            // Печатаем ДО generateTerrain (+ явный flush) — если генерация
+            // зависнет (см. GenerationStats::riverTimedOut), эта строка с
+            // параметрами запроса всё равно попадёт в консоль и укажет,
+            // что именно регенерировалось перед зависанием.
+            std::cout << "Regenerating (terrain_seed=" << request->terrain_seed
+                       << ", boulder_seed=" << request->boulder_seed << ")...\n"
+                       << std::flush;
             clearGeneratedEntities(world);
-            generateTerrain(world, request->terrain_seed, toTerrainParams(request->terrain));
+            const auto genStats = generateTerrain(world, request->terrain_seed, toTerrainParams(request->terrain));
             scatterBoulders(world, request->boulder_count, request->boulder_seed);
 
             network.setCurrentGenerationConfig(*request);
             network.broadcastSnapshot();
 
-            std::cout << "World regenerated (terrain_seed=" << request->terrain_seed
-                       << ", boulder_seed=" << request->boulder_seed << ").\n";
+            printGenerationStats(genStats);
             printWorldStats(world, request->boulder_count);
         }
 
