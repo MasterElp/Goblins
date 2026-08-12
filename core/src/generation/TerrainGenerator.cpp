@@ -61,7 +61,14 @@ constexpr float kMeanderFrequency = 1.0f / 12.0f; // один "изгиб" пр�
 constexpr float kMeanderPushScale = 1.4f;         // сила виляния от шума
 constexpr float kSoilProbeDist = 2.0f;            // на сколько тайлов пробуем рельеф по бокам от курса
 constexpr float kSoilPushScale = 10.0f;           // во что превращается разница высот в боковой толчок
-constexpr float kMinSpeedFraction = 0.3f;         // минимальная доля от riverMaxFlowSpeed у самой медленной реки
+constexpr float kSoilPushClamp = 1.5f;            // потолок бокового толчка от рельефа — не должен доминировать над шумом
+// Жёсткий предел суммарного бокового отклонения за шаг (доли stepLen).
+// Без него при резких перепадах рельефа (высокие rock/compaction bump +
+// высокая частота шума) soilPush мог быть огромным, путь "телепортировался"
+// на десятки тайлов за шаг — resulting samples.size() и стоимость
+// stampFootprint взрывались, генерация зависала на потоке GameLoop.
+constexpr float kMaxLateralPerStep = 2.5f;
+constexpr float kMinSpeedFraction = 0.3f; // минимальная доля от riverMaxFlowSpeed у самой медленной реки
 constexpr float kWidthNoiseFrequency = 1.0f / 10.0f;
 constexpr float kWidthNoiseAmplitude = 0.5f;
 constexpr float kWidthMinMul = 0.5f;
@@ -190,9 +197,10 @@ std::vector<PathPoint> buildMeanderPath(PathPoint p0, PathPoint p1, float sinuos
         const float probeY = perpY * kSoilProbeDist;
         const float eLeft = sampleNearest(elevation, width, height, pos.x + probeX, pos.y + probeY);
         const float eRight = sampleNearest(elevation, width, height, pos.x - probeX, pos.y - probeY);
-        const float soilPush = (eRight - eLeft) * kSoilPushScale;
+        const float soilPush = std::clamp((eRight - eLeft) * kSoilPushScale, -kSoilPushClamp, kSoilPushClamp);
 
-        const float lateral = (meanderPush + soilPush) * sinuosity * envelope * wander;
+        const float lateral =
+            std::clamp((meanderPush + soilPush) * sinuosity * envelope * wander, -kMaxLateralPerStep, kMaxLateralPerStep);
 
         pos.x = std::clamp(pos.x + fwdX * stepLen + perpX * lateral * stepLen, 0.0f, static_cast<float>(width - 1));
         pos.y = std::clamp(pos.y + fwdY * stepLen + perpY * lateral * stepLen, 0.0f, static_cast<float>(height - 1));
