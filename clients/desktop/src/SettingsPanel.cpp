@@ -103,7 +103,7 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     floatRow("Width (tiles)", edited_.terrain.river_width, 1.0f, 12.0f);
     floatRow("Sinuosity", edited_.terrain.river_sinuosity, 0.0f, 1.0f);
     floatRow("Depth", edited_.terrain.river_depth, 0.2f, 5.0f);
-    floatRow("Flow speed", edited_.terrain.river_flow_speed, 0.1f, 10.0f);
+    floatRow("Max flow speed", edited_.terrain.river_max_flow_speed, 0.1f, 10.0f);
 
     section("Ponds");
     floatRow("Min depth", edited_.terrain.min_pond_depth, 0.0f, 0.5f);

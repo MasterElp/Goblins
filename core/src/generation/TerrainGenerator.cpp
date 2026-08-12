@@ -5,6 +5,7 @@
 #include <limits>
 #include <queue>
 #include <random>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -53,12 +54,26 @@ struct HeightCellGreater {
 constexpr float kPi = 3.14159265358979323846f;
 
 // Не параметры генерации (params зашивать их незачем — они управляют
-// внутренней механикой построения пути, а не видимым результатом,
-// который целиком определяют riverWidth/riverSinuosity/riverDepth).
+// внутренней механикой построения пути/шума, а не видимым результатом,
+// который целиком определяют riverWidth/riverSinuosity/riverDepth/
+// riverMaxFlowSpeed).
 constexpr float kMeanderFrequency = 1.0f / 12.0f; // один "изгиб" примерно на 12 тайлов длины пути
-constexpr float kMaxMeanderFraction = 0.18f;      // амплитуда меандра как доля от прямого расстояния исток-устье
-constexpr float kRiverCarveMultiplier = 2.0f;     // запас карвинга над riverDepth (перекрывает rock/compaction bumps)
-constexpr int kRiverAttemptMultiplier = 100;      // maxAttempts = riverCount * 100, как в BoulderScatter
+constexpr float kMeanderPushScale = 1.4f;         // сила виляния от шума
+constexpr float kSoilProbeDist = 2.0f;            // на сколько тайлов пробуем рельеф по бокам от курса
+constexpr float kSoilPushScale = 10.0f;           // во что превращается разница высот в боковой толчок
+constexpr float kMinSpeedFraction = 0.3f;         // минимальная доля от riverMaxFlowSpeed у самой медленной реки
+constexpr float kWidthNoiseFrequency = 1.0f / 10.0f;
+constexpr float kWidthNoiseAmplitude = 0.5f;
+constexpr float kWidthMinMul = 0.5f;
+constexpr float kWidthMaxMul = 1.6f;
+constexpr float kDepthNoiseFrequency = 1.0f / 8.0f;
+constexpr float kDepthNoiseAmplitude = 0.35f;
+constexpr float kDepthMinMul = 0.6f;
+constexpr float kDepthMaxMul = 1.4f;
+constexpr float kRiverCarveMultiplier = 2.0f; // запас карвинга над riverDepth (перекрывает rock/compaction bumps)
+constexpr int kRiverAttemptMultiplier = 100;  // maxAttempts = riverCount * 100, как в BoulderScatter
+constexpr float kMergeProbability = 0.5f;     // при столкновении с уже принятой рекой — шанс слиться, а не отклонить путь
+constexpr float kMergeMarginFraction = 0.15f; // не сливаемся у самого истока целевой реки (первые 15% её длины)
 
 enum RiverEdge : int { kEdgeNorth = 0, kEdgeSouth = 1, kEdgeWest = 2, kEdgeEast = 3 };
 
@@ -67,13 +82,26 @@ struct PathPoint {
     float y;
 };
 
-struct RiverCell {
-    int index;
-    float falloff; // 1 в центре русла, 0 на границе ширины
+// Одна точка центральной линии русла: своя ширина/множитель глубины
+// (оба — с шумом вдоль пути, чтобы русло не выглядело трубой постоянного
+// сечения). halfWidth может быть увеличена позже, если в эту реку
+// вливается другая (слияние — шире после точки слияния).
+struct RiverPathSample {
+    int x;
+    int y;
+    float halfWidth;
+    float depthMul;
 };
 
-struct RiverCandidate {
-    std::vector<RiverCell> footprint; // max-объединение по всем руслам (strand) одной реки
+struct RiverCell {
+    float falloff;  // 1 в центре русла, 0 на границе ширины (в этой точке)
+    float depthMul; // множитель глубины ячейки, унаследованный от сэмпла с максимальным falloff
+};
+
+struct River {
+    std::vector<RiverPathSample> centerline;      // порядок: исток -> устье или точка слияния в другую реку
+    std::unordered_map<int, RiverCell> footprint; // index клетки -> данные; map, т.к. слияние дописывает существующие реки
+    float flowSpeed = 0.0f;                       // собственная случайная скорость этой реки (<= riverMaxFlowSpeed)
 };
 
 float smoothstep01(float u) {
@@ -98,28 +126,33 @@ PathPoint edgePoint(int edge, float coord, int width, int height) {
     }
 }
 
-// Раскладывает numPoints точек по стороне карты в отдельные интервалы
-// (bucket = index/count), со случайной позицией внутри интервала — так
-// два истока/устья одной реки никогда не совпадают и не липнут к углам.
-float pickEdgeCoordinate(std::mt19937& rng, float edgeLen, int bucketIndex, int bucketCount) {
+// Случайная точка на стороне карты, с отступом от углов — исток/устье
+// реки никогда не липнет к самому углу.
+float pickEdgeCoordinate(std::mt19937& rng, float edgeLen) {
     const float margin = std::max(1.0f, edgeLen * 0.05f);
     const float usable = std::max(1.0f, edgeLen - 1.0f - 2.0f * margin);
-    const float bucketSize = usable / static_cast<float>(bucketCount);
-    std::uniform_real_distribution<float> within(0.0f, bucketSize);
-    const float coord = margin + static_cast<float>(bucketIndex) * bucketSize + within(rng);
-    return std::clamp(coord, 0.0f, edgeLen - 1.0f);
+    std::uniform_real_distribution<float> within(0.0f, usable);
+    return std::clamp(margin + within(rng), 0.0f, edgeLen - 1.0f);
 }
 
-// Плавная меандрирующая линия от p0 к p1: смещение перпендикулярно
-// прямой p0->p1 задаётся 2D-шумом (переиспользуем уже подключённый
-// FastNoiseLite, без новых зависимостей), амплитуда — от sinuosity.
-// sin(pi*t)-огибающая обнуляет смещение на обоих концах, поэтому путь
-// всегда точно упирается в исток/устье на границе карты.
-std::vector<PathPoint> buildMeanderPath(PathPoint p0, PathPoint p1, float sinuosity, int noiseSeed) {
-    const float dx = p1.x - p0.x;
-    const float dy = p1.y - p0.y;
-    const float dist = std::sqrt(dx * dx + dy * dy);
-    if (dist < 1e-3f) {
+float sampleNearest(const std::vector<float>& field, int width, int height, float x, float y) {
+    const int ix = std::clamp(static_cast<int>(std::lround(x)), 0, width - 1);
+    const int iy = std::clamp(static_cast<int>(std::lround(y)), 0, height - 1);
+    return field[static_cast<std::size_t>(iy) * width + ix];
+}
+
+// Путь от p0 к p1, шаг за шагом: на каждом шаге курс держим на цель
+// (гарантированно дойдём), но подмешиваем боковое отклонение из двух
+// источников — шум (собственно "меандр") и лёгкий толчок в сторону, где
+// рельеф ниже ("немного учитывает почву и меняет направление", а не идёт
+// напролом). Оба источника глушатся (а) sin(pi*t)-огибающей — не виляем
+// у самых концов, путь точно приходит в p1 — и (б) wander = 1-speedFraction:
+// чем быстрее река, тем меньше wander, тем прямее путь (в пределе
+// wander=0 у самой быстрой реки — идеально прямая линия).
+std::vector<PathPoint> buildMeanderPath(PathPoint p0, PathPoint p1, float sinuosity, float wander, int noiseSeed,
+                                         const std::vector<float>& elevation, int width, int height) {
+    const float totalDist = std::hypot(p1.x - p0.x, p1.y - p0.y);
+    if (totalDist < 1e-3f) {
         return {p0, p1};
     }
 
@@ -127,41 +160,80 @@ std::vector<PathPoint> buildMeanderPath(PathPoint p0, PathPoint p1, float sinuos
     noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
     noise.SetFrequency(kMeanderFrequency);
 
-    const float dirX = dx / dist;
-    const float dirY = dy / dist;
-    const float perpX = -dirY;
-    const float perpY = dirX;
-    const int steps = std::max(8, static_cast<int>(std::round(dist)));
-    const float amplitude = dist * kMaxMeanderFraction * sinuosity;
+    const int steps = std::max(8, static_cast<int>(std::round(totalDist)));
+    const float stepLen = totalDist / static_cast<float>(steps);
 
     std::vector<PathPoint> points;
-    points.reserve(static_cast<std::size_t>(steps) + 1);
-    for (int s = 0; s <= steps; ++s) {
-        const float t = static_cast<float>(s) / static_cast<float>(steps);
+    points.reserve(static_cast<std::size_t>(steps) + 2);
+    points.push_back(p0);
+
+    PathPoint pos = p0;
+    float traveled = 0.0f;
+    for (int s = 1; s < steps; ++s) {
+        const float toTargetX = p1.x - pos.x;
+        const float toTargetY = p1.y - pos.y;
+        const float toTargetDist = std::hypot(toTargetX, toTargetY);
+        if (toTargetDist < stepLen) {
+            break; // остаток пути достроит финальная точка p1 ниже
+        }
+        const float fwdX = toTargetX / toTargetDist;
+        const float fwdY = toTargetY / toTargetDist;
+        const float perpX = -fwdY;
+        const float perpY = fwdX;
+
+        const float t = std::clamp(traveled / totalDist, 0.0f, 1.0f);
         const float envelope = std::sin(kPi * t);
-        const float n = noise.GetNoise(t * dist, 0.0f);
-        const float offset = amplitude * envelope * n;
-        points.push_back(PathPoint{p0.x + dirX * t * dist + perpX * offset, p0.y + dirY * t * dist + perpY * offset});
+
+        const float meanderPush = noise.GetNoise(traveled, 0.0f) * kMeanderPushScale;
+
+        const float probeX = perpX * kSoilProbeDist;
+        const float probeY = perpY * kSoilProbeDist;
+        const float eLeft = sampleNearest(elevation, width, height, pos.x + probeX, pos.y + probeY);
+        const float eRight = sampleNearest(elevation, width, height, pos.x - probeX, pos.y - probeY);
+        const float soilPush = (eRight - eLeft) * kSoilPushScale;
+
+        const float lateral = (meanderPush + soilPush) * sinuosity * envelope * wander;
+
+        pos.x = std::clamp(pos.x + fwdX * stepLen + perpX * lateral * stepLen, 0.0f, static_cast<float>(width - 1));
+        pos.y = std::clamp(pos.y + fwdY * stepLen + perpY * lateral * stepLen, 0.0f, static_cast<float>(height - 1));
+        points.push_back(pos);
+        traveled += stepLen;
     }
+    points.push_back(p1);
     return points;
 }
 
-// Соседние сэмплы пути могут отстоять больше чем на тайл (меандр может
-// сместить их сильно) — идём по каждому отрезку с шагом ~1 тайл, чтобы
-// центральная линия русла была непрерывной.
-std::vector<std::pair<int, int>> rasterizeCenterline(const std::vector<PathPoint>& points, int width, int height) {
-    std::vector<std::pair<int, int>> cells;
+// Раскладывает путь на целочисленные клетки (~1 тайл на подшаг, чтобы не
+// было разрывов) и на каждой клетке сэмплирует независимый шум ширины и
+// глубины по пройденной длине — русло "дышит" по толщине и глубине
+// вместо постоянного сечения.
+std::vector<RiverPathSample> buildPathSamples(const std::vector<PathPoint>& points, int width, int height,
+                                               float baseHalfWidth, int widthNoiseSeed, int depthNoiseSeed) {
+    std::vector<RiverPathSample> samples;
 
-    auto pushCell = [&](int x, int y) {
+    FastNoiseLite widthNoise(widthNoiseSeed);
+    widthNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    widthNoise.SetFrequency(kWidthNoiseFrequency);
+    FastNoiseLite depthNoise(depthNoiseSeed);
+    depthNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    depthNoise.SetFrequency(kDepthNoiseFrequency);
+
+    auto pushSample = [&](int x, int y, float arcLen) {
         if (x < 0 || x >= width || y < 0 || y >= height) {
             return;
         }
-        if (!cells.empty() && cells.back().first == x && cells.back().second == y) {
+        if (!samples.empty() && samples.back().x == x && samples.back().y == y) {
             return;
         }
-        cells.emplace_back(x, y);
+        const float wN = widthNoise.GetNoise(arcLen, 0.0f);
+        const float dN = depthNoise.GetNoise(arcLen, 0.0f);
+        const float halfWidth =
+            std::max(0.5f, baseHalfWidth * std::clamp(1.0f + kWidthNoiseAmplitude * wN, kWidthMinMul, kWidthMaxMul));
+        const float depthMul = std::clamp(1.0f + kDepthNoiseAmplitude * dN, kDepthMinMul, kDepthMaxMul);
+        samples.push_back(RiverPathSample{x, y, halfWidth, depthMul});
     };
 
+    float arcLen = 0.0f;
     for (std::size_t i = 0; i + 1 < points.size(); ++i) {
         const PathPoint& a = points[i];
         const PathPoint& b = points[i + 1];
@@ -169,98 +241,72 @@ std::vector<std::pair<int, int>> rasterizeCenterline(const std::vector<PathPoint
         const int subSteps = std::max(1, static_cast<int>(std::ceil(segLen)));
         for (int k = 0; k <= subSteps; ++k) {
             const float t = static_cast<float>(k) / static_cast<float>(subSteps);
-            pushCell(static_cast<int>(std::lround(a.x + (b.x - a.x) * t)),
-                     static_cast<int>(std::lround(a.y + (b.y - a.y) * t)));
+            pushSample(static_cast<int>(std::lround(a.x + (b.x - a.x) * t)),
+                       static_cast<int>(std::lround(a.y + (b.y - a.y) * t)), arcLen);
+            arcLen += segLen / static_cast<float>(subSteps);
         }
     }
-    if (cells.empty() && !points.empty()) {
-        pushCell(static_cast<int>(std::lround(points.front().x)), static_cast<int>(std::lround(points.front().y)));
+    if (samples.empty() && !points.empty()) {
+        pushSample(static_cast<int>(std::lround(points.front().x)), static_cast<int>(std::lround(points.front().y)),
+                    0.0f);
     }
-    return cells;
+    return samples;
 }
 
-// Штампует ширину русла вокруг центральной линии в falloffScratch,
-// накапливая МАКСИМУМ (не сумму) на клетку — самопересекающийся меандр
-// одного русла не должен вырезать/заливать клетку дважды. touched
-// собирает список задетых индексов, чтобы вызывающий код мог быстро
-// сбросить только их (карта scratch общая на все попытки размещения).
-void stampFootprint(const std::vector<std::pair<int, int>>& centerline, float halfWidth, int width, int height,
-                     std::vector<float>& falloffScratch, std::vector<int>& touched) {
-    const int r = std::max(1, static_cast<int>(std::ceil(halfWidth)));
-    for (const auto& [cx, cy] : centerline) {
+// Штампует ширину русла вокруг сэмплов [fromIdx, toIdxInclusive] в
+// footprint, объединяя по МАКСИМУМУ falloff на клетку (не сумме) —
+// самопересекающийся или расширенный (после слияния) путь не должен
+// задвоить вклад на одну клетку.
+void stampSegment(const std::vector<RiverPathSample>& samples, std::size_t fromIdx, std::size_t toIdxInclusive,
+                   int width, int height, std::unordered_map<int, RiverCell>& footprint) {
+    for (std::size_t si = fromIdx; si <= toIdxInclusive; ++si) {
+        const RiverPathSample& sample = samples[si];
+        const int r = std::max(1, static_cast<int>(std::ceil(sample.halfWidth)));
         for (int dy = -r; dy <= r; ++dy) {
             for (int dx = -r; dx <= r; ++dx) {
-                const int nx = cx + dx;
-                const int ny = cy + dy;
+                const int nx = sample.x + dx;
+                const int ny = sample.y + dy;
                 if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
                     continue;
                 }
                 const float d = std::sqrt(static_cast<float>(dx * dx + dy * dy));
-                if (d > halfWidth) {
+                if (d > sample.halfWidth) {
                     continue;
                 }
-                const float f = 1.0f - smoothstep01(d / halfWidth);
+                const float f = 1.0f - smoothstep01(d / sample.halfWidth);
                 if (f <= 0.0f) {
                     continue;
                 }
-                const std::size_t idx = static_cast<std::size_t>(ny) * width + nx;
-                if (falloffScratch[idx] == 0.0f) {
-                    touched.push_back(static_cast<int>(idx));
+                const int idx = ny * width + nx;
+                auto it = footprint.find(idx);
+                if (it == footprint.end()) {
+                    footprint.emplace(idx, RiverCell{f, sample.depthMul});
+                } else if (f > it->second.falloff) {
+                    it->second.falloff = f;
+                    it->second.depthMul = sample.depthMul;
                 }
-                falloffScratch[idx] = std::max(falloffScratch[idx], f);
             }
         }
     }
 }
 
-// Одна река: 1-2 истока на случайной стороне карты, 1-3 устья на другой
-// случайной стороне; независимые русла (без слияния/разветвления) от
-// каждого истока к устью (по кругу, если счётчики не совпадают).
-RiverCandidate generateRiverCandidate(std::mt19937& rng, int width, int height, float halfWidth, float sinuosity,
-                                       std::vector<float>& falloffScratch, std::vector<int>& touched) {
-    std::uniform_int_distribution<int> edgeDist(0, 3);
-    std::uniform_int_distribution<int> destOffsetDist(1, 3);
-    std::uniform_int_distribution<int> sourceCountDist(1, 2);
-    std::uniform_int_distribution<int> mouthCountDist(1, 3);
-
-    const int sourceEdge = edgeDist(rng);
-    const int destEdge = (sourceEdge + destOffsetDist(rng)) % 4;
-    const int numSources = sourceCountDist(rng);
-    const int numMouths = mouthCountDist(rng);
-
-    const float sourceEdgeLen = edgeLength(sourceEdge, width, height);
-    const float destEdgeLen = edgeLength(destEdge, width, height);
-
-    std::vector<PathPoint> sourcePoints;
-    sourcePoints.reserve(static_cast<std::size_t>(numSources));
-    for (int i = 0; i < numSources; ++i) {
-        sourcePoints.push_back(
-            edgePoint(sourceEdge, pickEdgeCoordinate(rng, sourceEdgeLen, i, numSources), width, height));
+// Река, в которую влилась другая, становится шире НИЖЕ ПО ТЕЧЕНИЮ от
+// точки слияния (mergePos — индекс в её собственной centerline).
+// addedHalfWidth — полуширина вливающейся реки в точке стыка; ширины
+// комбинируются как sqrt(a^2+b^2) — грубая, но достаточная имитация
+// "больше воды => шире русло".
+void widenDownstream(River& target, std::size_t mergePos, float addedHalfWidth, int width, int height,
+                      std::vector<int>& riverOwner, int targetIndex) {
+    for (std::size_t i = mergePos; i < target.centerline.size(); ++i) {
+        RiverPathSample& sample = target.centerline[i];
+        sample.halfWidth = std::sqrt(sample.halfWidth * sample.halfWidth + addedHalfWidth * addedHalfWidth);
     }
-    std::vector<PathPoint> mouthPoints;
-    mouthPoints.reserve(static_cast<std::size_t>(numMouths));
-    for (int i = 0; i < numMouths; ++i) {
-        mouthPoints.push_back(edgePoint(destEdge, pickEdgeCoordinate(rng, destEdgeLen, i, numMouths), width, height));
+    stampSegment(target.centerline, mergePos, target.centerline.size() - 1, width, height, target.footprint);
+    for (const auto& [idx, cell] : target.footprint) {
+        if (riverOwner[static_cast<std::size_t>(idx)] == -1) {
+            riverOwner[static_cast<std::size_t>(idx)] = targetIndex;
+        }
     }
-
-    touched.clear();
-    const int strandCount = std::max(numSources, numMouths);
-    for (int s = 0; s < strandCount; ++s) {
-        const PathPoint& p0 = sourcePoints[static_cast<std::size_t>(s % numSources)];
-        const PathPoint& p1 = mouthPoints[static_cast<std::size_t>(s % numMouths)];
-        const int strandSeed = static_cast<int>(rng());
-        const auto meander = buildMeanderPath(p0, p1, sinuosity, strandSeed);
-        const auto centerline = rasterizeCenterline(meander, width, height);
-        stampFootprint(centerline, halfWidth, width, height, falloffScratch, touched);
-    }
-
-    RiverCandidate candidate;
-    candidate.footprint.reserve(touched.size());
-    for (int idx : touched) {
-        candidate.footprint.push_back(RiverCell{idx, falloffScratch[static_cast<std::size_t>(idx)]});
-        falloffScratch[static_cast<std::size_t>(idx)] = 0.0f; // сброс для следующей попытки
-    }
-    return candidate;
 }
 
 } // namespace
@@ -304,46 +350,117 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
     // согласовывались сами по себе (пруд может естественно образоваться
     // поверх/вдоль вырезанного русла — река его "пересекает" без
     // отдельной логики совмещения).
+    //
+    // У каждой реки один случайный исток и один случайный конец (на
+    // случайных сторонах карты) — путь между ними идёт напролом к цели,
+    // но с боковым отклонением от шума и лёгкого притяжения к более
+    // низкому рельефу, оба подавляются собственной случайной скоростью
+    // реки (чем быстрее — тем прямее). Если по пути река утыкается в уже
+    // принятую реку, она либо сливается с ней (обрывается в этой точке,
+    // а целевая река становится шире ниже по течению), либо (с
+    // дополняющей вероятностью) путь целиком отклоняется и пробуется
+    // заново — так русла разных рек не наезжают друг на друга нигде,
+    // кроме явных точек слияния.
     std::mt19937 riverRng(seed + 10);
-    const float riverHalfWidth = std::max(0.5f, params.riverWidth * 0.5f);
-    std::vector<RiverCandidate> acceptedRivers;
+    const float riverBaseHalfWidth = std::max(0.5f, params.riverWidth * 0.5f);
+    std::vector<River> acceptedRivers;
+    std::vector<int> riverOwner(cellCount, -1);
     {
-        std::vector<float> falloffScratch(cellCount, 0.0f);
-        std::vector<int> touched;
-        std::vector<bool> riverOccupied(cellCount, false);
+        std::uniform_int_distribution<int> edgeDist(0, 3);
+        std::uniform_int_distribution<int> destOffsetDist(1, 3);
+        std::uniform_real_distribution<float> speedFractionDist(kMinSpeedFraction, 1.0f);
+        std::uniform_real_distribution<float> mergeRoll(0.0f, 1.0f);
+
         const int maxAttempts = std::max(0, params.riverCount) * kRiverAttemptMultiplier;
         int placed = 0;
         int attempts = 0;
         while (placed < params.riverCount && attempts < maxAttempts) {
             ++attempts;
-            RiverCandidate candidate = generateRiverCandidate(riverRng, width, height, riverHalfWidth,
-                                                                params.riverSinuosity, falloffScratch, touched);
-            bool collides = false;
-            for (const auto& cell : candidate.footprint) {
-                if (riverOccupied[static_cast<std::size_t>(cell.index)]) {
-                    collides = true;
+
+            const int sourceEdge = edgeDist(riverRng);
+            const int destEdge = (sourceEdge + destOffsetDist(riverRng)) % 4;
+            const PathPoint p0 = edgePoint(sourceEdge, pickEdgeCoordinate(riverRng, edgeLength(sourceEdge, width, height)),
+                                            width, height);
+            const PathPoint p1 = edgePoint(destEdge, pickEdgeCoordinate(riverRng, edgeLength(destEdge, width, height)),
+                                            width, height);
+
+            const float speedFraction = speedFractionDist(riverRng);
+            const float wander = 1.0f - speedFraction;
+            const int pathSeed = static_cast<int>(riverRng());
+            const int widthSeed = static_cast<int>(riverRng());
+            const int depthSeed = static_cast<int>(riverRng());
+
+            const auto waypoints =
+                buildMeanderPath(p0, p1, params.riverSinuosity, wander, pathSeed, elevation, width, height);
+            auto samples = buildPathSamples(waypoints, width, height, riverBaseHalfWidth, widthSeed, depthSeed);
+            if (samples.size() < 2) {
+                continue;
+            }
+
+            // Ищем первое столкновение с уже принятой рекой вдоль
+            // центральной линии — до этой точки путь гарантированно
+            // "свой", после — либо слияние, либо отказ от всего пути.
+            int collideAt = -1;
+            int collideOwner = -1;
+            for (std::size_t i = 0; i < samples.size(); ++i) {
+                const std::size_t idx = index(samples[i].x, samples[i].y);
+                if (riverOwner[idx] != -1) {
+                    collideAt = static_cast<int>(i);
+                    collideOwner = riverOwner[idx];
                     break;
                 }
             }
-            if (collides) {
-                // Непересекающиеся реки (требование): при коллизии просто
-                // пробуем другой случайный путь, как rejection sampling в
-                // BoulderScatter. При исчерпании попыток река молча не
-                // размещается — та же конвенция, что и у булыжников.
-                continue;
+
+            bool merged = false;
+            std::size_t mergePos = 0;
+            if (collideAt >= 0) {
+                const River& targetRiver = acceptedRivers[static_cast<std::size_t>(collideOwner)];
+                mergePos = targetRiver.centerline.size();
+                for (std::size_t i = 0; i < targetRiver.centerline.size(); ++i) {
+                    if (targetRiver.centerline[i].x == samples[static_cast<std::size_t>(collideAt)].x &&
+                        targetRiver.centerline[i].y == samples[static_cast<std::size_t>(collideAt)].y) {
+                        mergePos = i;
+                        break;
+                    }
+                }
+                const bool tooCloseToTargetSource =
+                    mergePos <
+                    static_cast<std::size_t>(kMergeMarginFraction * static_cast<float>(targetRiver.centerline.size()));
+                const bool canMerge = mergePos < targetRiver.centerline.size() && !tooCloseToTargetSource;
+                if (canMerge && mergeRoll(riverRng) < kMergeProbability) {
+                    samples.resize(static_cast<std::size_t>(collideAt) + 1);
+                    merged = true;
+                } else {
+                    continue; // отклоняем весь путь, пробуем другой в следующей попытке
+                }
             }
-            for (const auto& cell : candidate.footprint) {
-                riverOccupied[static_cast<std::size_t>(cell.index)] = true;
+            if (merged && samples.size() < 2) {
+                continue; // слияние сразу у собственного истока — вырожденный случай, пробуем другой путь
             }
-            acceptedRivers.push_back(std::move(candidate));
+
+            River river;
+            river.centerline = std::move(samples);
+            river.flowSpeed = speedFraction * params.riverMaxFlowSpeed;
+            stampSegment(river.centerline, 0, river.centerline.size() - 1, width, height, river.footprint);
+            for (const auto& [idx, cell] : river.footprint) {
+                riverOwner[static_cast<std::size_t>(idx)] = placed;
+            }
+
+            if (merged) {
+                const float addedHalfWidth = river.centerline.back().halfWidth;
+                widenDownstream(acceptedRivers[static_cast<std::size_t>(collideOwner)], mergePos, addedHalfWidth, width,
+                                 height, riverOwner, collideOwner);
+            }
+
+            acceptedRivers.push_back(std::move(river));
             ++placed;
         }
     }
 
     const float riverCarveDepth = params.riverDepth * kRiverCarveMultiplier;
     for (const auto& river : acceptedRivers) {
-        for (const auto& cell : river.footprint) {
-            elevation[static_cast<std::size_t>(cell.index)] -= riverCarveDepth * cell.falloff;
+        for (const auto& [idx, cell] : river.footprint) {
+            elevation[static_cast<std::size_t>(idx)] -= riverCarveDepth * cell.falloff;
         }
     }
 
@@ -454,14 +571,17 @@ void generateTerrain(World& world, unsigned seed, const TerrainParams& params) {
     // --- 4. Реки: глубина воды + скорость потока по вырезанным руслам ---
     // После прудов — на пересечении реки с прудом глубина берётся как
     // max (как и для двух прудов выше), а скорость потока всё равно > 0
-    // (вода течёт даже через разлив). У пруда flowSpeed остаётся 0.
+    // (вода течёт даже через разлив). У пруда flowSpeed остаётся 0. depthMul
+    // — шум глубины вдоль русла (buildPathSamples); flowSpeed — своя
+    // случайная скорость этой реки (<= riverMaxFlowSpeed), а не общий
+    // параметр на все реки.
     std::vector<float> flowSpeed(cellCount, 0.0f);
     for (const auto& river : acceptedRivers) {
-        for (const auto& cell : river.footprint) {
-            const std::size_t i = static_cast<std::size_t>(cell.index);
-            waterDepth[i] = std::max(waterDepth[i], params.riverDepth * cell.falloff);
+        for (const auto& [idx, cell] : river.footprint) {
+            const std::size_t i = static_cast<std::size_t>(idx);
+            waterDepth[i] = std::max(waterDepth[i], params.riverDepth * cell.falloff * cell.depthMul);
             if (cell.falloff > 0.0f) {
-                flowSpeed[i] = std::max(flowSpeed[i], params.riverFlowSpeed);
+                flowSpeed[i] = std::max(flowSpeed[i], river.flowSpeed);
             }
         }
     }

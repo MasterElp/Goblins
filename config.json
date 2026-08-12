@@ -20,17 +20,17 @@
         "noise_lacunarity": 2.0,
         "noise_octaves": 4,
         "pond_depth_scale": 4.0,
-        "river_count": 3,
-        "river_depth": 1.5,
-        "river_flow_speed": 1.0,
-        "river_sinuosity": 0.5,
-        "river_width": 3.0,
+        "river_count": 1,
+        "river_depth": 0.908196747303009,
+        "river_max_flow_speed": 0.9926229119300842,
+        "river_sinuosity": 0.6557376980781555,
+        "river_width": 3.0136611461639404,
         "rock_height_bump": 0.3499999940395355,
         "rock_moisture_reduction": 0.30000001192092896,
         "rock_noise_frequency": 0.05000000074505806,
         "water_moisture_boost": 0.699999988079071
     },
-    "terrain_seed": 122802,
+    "terrain_seed": 214923,
     "tick_count": -1,
     "tick_interval_ms": 200
 }
