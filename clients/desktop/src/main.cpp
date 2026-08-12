@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
 
         switch (screen) {
             case AppScreen::MainMenu:
-                screen = MainMenuScreen::draw();
+                screen = MainMenuScreen::draw(network);
                 break;
             case AppScreen::Settings:
                 screen = SettingsScreen::draw(config, configPath);

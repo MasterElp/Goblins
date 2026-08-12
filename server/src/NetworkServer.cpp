@@ -74,10 +74,22 @@ void NetworkServer::setCurrentGenerationConfig(const RegenerationRequest& config
     currentGenerationConfig_ = config;
 }
 
+RegenerationRequest NetworkServer::currentGenerationConfig() const {
+    std::lock_guard<std::mutex> lock(generationConfigMutex_);
+    return currentGenerationConfig_;
+}
+
 std::optional<RegenerationRequest> NetworkServer::takePendingRegeneration() {
     std::lock_guard<std::mutex> lock(pendingRegenerationMutex_);
     auto result = pendingRegeneration_;
     pendingRegeneration_.reset();
+    return result;
+}
+
+bool NetworkServer::takePendingStartSimulation() {
+    std::lock_guard<std::mutex> lock(pendingStartMutex_);
+    const bool result = pendingStart_;
+    pendingStart_ = false;
     return result;
 }
 
@@ -110,6 +122,9 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
         } catch (const nlohmann::json::exception& e) {
             std::cerr << "NetworkServer: invalid regenerate request (" << e.what() << ")\n";
         }
+    } else if (type == "start_simulation") {
+        std::lock_guard<std::mutex> lock(pendingStartMutex_);
+        pendingStart_ = true;
     }
 }
 

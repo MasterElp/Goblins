@@ -18,7 +18,7 @@ namespace goblins {
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 3):
+// Протокол (версия 4):
 //   Сервер -> клиент, сразу при подключении и после регенерации:
 //     {"type": "world_snapshot", "area": {"width", "height"}, "tick": N,
 //      "paused": bool, "terrain_seed": N, "terrain": {...},
@@ -38,6 +38,12 @@ namespace goblins {
 //     Сервер выполняет это на потоке GameLoop (не сразу в сетевом
 //     колбэке — ECS registry не потокобезопасен), затем рассылает
 //     свежий world_snapshot всем подключённым клиентам.
+//   Клиент -> сервер, запрос запустить симуляцию (без payload):
+//     {"type": "start_simulation"}
+//     До этой команды сервер только слушает WebSocket — мир не
+//     сгенерирован и GameLoop не тикает (paused == true). Сервер
+//     генерирует мир текущим currentGenerationConfig_ (тем же потоком,
+//     что и regenerate) и снимает паузу.
 class NetworkServer {
 public:
     // paused — ссылка на флаг паузы игрового цикла (GameLoop::paused).
@@ -67,16 +73,30 @@ public:
     // успешной регенерации.
     void setCurrentGenerationConfig(const RegenerationRequest& config);
 
+    // Текущий конфиг генерации (копия) — используется при обработке
+    // start_simulation, чтобы сгенерировать мир тем же конфигом, что уже
+    // виден клиенту в панели настроек.
+    RegenerationRequest currentGenerationConfig() const;
+
     // Если клиент прислал запрос на регенерацию — возвращает его и
     // очищает очередь (иначе nullopt). Вызывать только с потока, где
     // крутится GameLoop, не из сетевого колбэка: сама регенерация трогает
     // ECS registry, который не потокобезопасен между потоками.
     std::optional<RegenerationRequest> takePendingRegeneration();
 
+    // Аналогично takePendingRegeneration, но для запроса на запуск
+    // симуляции (start_simulation) — просто флаг без параметров.
+    bool takePendingStartSimulation();
+
+    // Рассылает всем клиентам текущее состояние паузы. Обычно вызывается
+    // изнутри handleClientMessage (toggle_pause), но также нужна снаружи —
+    // после того, как main.cpp снимает паузу по завершении обработки
+    // start_simulation на потоке GameLoop.
+    void broadcastPauseState();
+
 private:
     std::string buildSnapshotMessage() const;
     void handleClientMessage(const std::string& payload);
-    void broadcastPauseState();
     void broadcastToAll(const std::string& payload);
 
     const World& world_;
@@ -88,6 +108,9 @@ private:
 
     std::mutex pendingRegenerationMutex_;
     std::optional<RegenerationRequest> pendingRegeneration_;
+
+    std::mutex pendingStartMutex_;
+    bool pendingStart_ = false;
 };
 
 } // namespace goblins

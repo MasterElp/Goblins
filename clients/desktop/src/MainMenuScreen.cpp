@@ -5,7 +5,7 @@
 
 namespace MainMenuScreen {
 
-AppScreen draw() {
+AppScreen draw(NetworkClient& network) {
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
 
@@ -31,6 +31,7 @@ AppScreen draw() {
         next = AppScreen::WorldGeneration;
     }
     if (GuiButton(Rectangle{x, startY + 2 * (buttonHeight + gap), buttonWidth, buttonHeight}, "Simulation")) {
+        network.sendStartSimulation();
         next = AppScreen::Simulation;
     }
 

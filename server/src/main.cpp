@@ -98,22 +98,20 @@ int main(int argc, char** argv) {
     // Мир на первом этапе — одна Область (04_WorldModel.md, п.2), размер —
     // из конфигурации. Размер Области не меняется живой регенерацией
     // (см. RegenerationRequest) — для этого нужен перезапуск.
+    // Почва/водоёмы/булыжники пока не генерируются — сервер только
+    // поднимает WebSocket и ждёт команду "start_simulation" от клиента
+    // (кнопка Simulation в главном меню). До этого мир пуст: экран World
+    // Generation можно открыть и покрутить панель настроек (Regenerate
+    // работает независимо от старта симуляции).
     goblins::World world(config.area.width, config.area.height);
-
-    // Почва и водоёмы генерируются первыми — булыжники ниже уже
-    // учитывают, где вода, и туда не попадают. Все числовые параметры —
-    // из конфигурации, ни одного зашитого значения.
-    generateTerrain(world, config.terrain_seed, toTerrainParams(config.terrain));
-    scatterBoulders(world, config.boulder_count, config.boulder_seed);
-
-    std::cout << "Area: " << world.area().width() << "x" << world.area().height() << "\n";
-    printWorldStats(world, config.boulder_count);
 
     // Игровой цикл: один тик = TimeSystem, затем разрешение очереди команд
     // (06_GameLoop.md, п.2). Интервал тика — из конфигурации. Создаётся до
     // NetworkServer, потому что тот получает ссылку на loop.paused и
-    // управляет им напрямую по команде клиента.
+    // управляет им напрямую по команде клиента. Стартует на паузе — до
+    // start_simulation мир не сгенерирован, тикать нечего.
     goblins::GameLoop loop(world, std::chrono::milliseconds(config.tick_interval_ms));
+    loop.paused.store(true);
 
     // Сетевой слой (07_TechStack.md, п.4): core ничего о нём не знает,
     // NetworkServer — часть server, читает состояние world через
@@ -143,6 +141,25 @@ int main(int argc, char** argv) {
     // существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int ticksRun = 0;
     loop.run([&]() {
+        // Запуск симуляции по запросу клиента (кнопка Simulation) —
+        // первая генерация мира текущим конфигом и снятие паузы. Как и
+        // регенерация ниже, выполняется здесь, на потоке GameLoop (ECS
+        // registry не потокобезопасен между потоками).
+        if (network.takePendingStartSimulation()) {
+            const auto request = network.currentGenerationConfig();
+            generateTerrain(world, request.terrain_seed, toTerrainParams(request.terrain));
+            scatterBoulders(world, request.boulder_count, request.boulder_seed);
+
+            network.broadcastSnapshot();
+
+            std::cout << "Simulation started (terrain_seed=" << request.terrain_seed
+                       << ", boulder_seed=" << request.boulder_seed << ").\n";
+            printWorldStats(world, request.boulder_count);
+
+            loop.paused.store(false);
+            network.broadcastPauseState();
+        }
+
         // Регенерация по запросу клиента (панель настроек) — проверяем
         // и выполняем здесь, на потоке GameLoop, до вызова tick(): сама
         // регенерация трогает ECS registry, а это не тот поток, откуда

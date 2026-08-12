@@ -41,6 +41,12 @@ void NetworkClient::sendRegenerate(const goblins::RegenerationRequest& request) 
     webSocket_.send(message.dump());
 }
 
+void NetworkClient::sendStartSimulation() {
+    nlohmann::json request;
+    request["type"] = "start_simulation";
+    webSocket_.send(request.dump());
+}
+
 void NetworkClient::handleMessage(const std::string& payload) {
     const auto json = nlohmann::json::parse(payload, nullptr, /*allow_exceptions=*/false);
     if (json.is_discarded()) {

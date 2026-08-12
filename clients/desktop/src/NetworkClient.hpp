@@ -50,6 +50,7 @@ public:
 
     void sendTogglePause();
     void sendRegenerate(const goblins::RegenerationRequest& request);
+    void sendStartSimulation();
 
 private:
     void handleMessage(const std::string& payload);
