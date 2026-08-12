@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -9,6 +10,7 @@
 #include <ixwebsocket/IXWebSocket.h>
 
 #include "config/Config.hpp"
+#include "world/WorldSaveInfo.hpp"
 
 // Снимок состояния мира на стороне клиента — обновляется из сетевого
 // потока (IXWebSocket), читается из потока рендера. Общий для экранов
@@ -35,7 +37,35 @@ struct WorldState {
     goblins::RegenerationRequest generation{};
     bool hasGeneration = false;
     bool connected = false;
+
+    // Имя мира, который сейчас в памяти сервера; пустая строка — мир ещё
+    // не сохранён (например, только что перегенерирован на экране World
+    // Generation).
+    std::string currentWorld;
+
+    // Сохранённые миры на сервере (сообщение world_list). worldsReceived
+    // отличает "миров нет" от "список ещё не пришёл" — экран выбора мира
+    // на этом различии и построен: автоматически создавать новый мир
+    // можно только по первому, а не по второму.
+    std::vector<goblins::WorldSaveInfo> worlds;
+    bool worldsReceived = false;
+
+    // Последнее сообщение сервера о результате операции (notice):
+    // сохранение/загрузка мира происходят на сервере, и об ошибке клиент
+    // иначе не узнал бы вовсе. noticeAt — момент получения, экраны сами
+    // решают, сколько его показывать.
+    std::string notice;
+    bool noticeIsError = false;
+    std::chrono::steady_clock::time_point noticeAt{};
 };
+
+// Показывать ли последнее сообщение сервера (notice): оно живёт
+// несколько секунд и гаснет. Общая функция, а не логика внутри каждого
+// экрана — иначе на разных экранах сообщение жило бы по-разному.
+inline bool hasFreshNotice(const WorldState& state,
+                           std::chrono::seconds lifetime = std::chrono::seconds(8)) {
+    return !state.notice.empty() && (std::chrono::steady_clock::now() - state.noticeAt) < lifetime;
+}
 
 // Единственное WebSocket-соединение на весь клиент — устанавливается
 // один раз в main() и используется всеми экранами, которым нужны данные
@@ -50,9 +80,20 @@ public:
 
     void sendTogglePause();
     void sendRegenerate(const goblins::RegenerationRequest& request);
-    void sendStartSimulation();
+
+    // Пустое worldName — запустить новый мир (сервер сгенерирует его
+    // текущими параметрами и сразу сохранит); непустое — загрузить
+    // сохранённый мир с этим именем.
+    void sendStartSimulation(const std::string& worldName = std::string{});
     void sendStopSimulation();
     void sendSaveGenerationConfig();
+
+    // Запросить список сохранённых миров (ответ — world_list).
+    void sendListWorlds();
+
+    // Сохранить текущее состояние мира. Пустое name — под именем
+    // текущего мира (или под новым, если мир ещё не сохранялся).
+    void sendSaveWorld(const std::string& name = std::string{});
 
 private:
     void handleMessage(const std::string& payload);

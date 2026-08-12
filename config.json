@@ -7,6 +7,7 @@
     "boulder_seed": 243030,
     "host": "127.0.0.1",
     "port": 9002,
+    "saves_dir": "saves",
     "terrain": {
         "compaction_height_bump": 0.25,
         "compaction_noise_frequency": 0.03999999910593033,

@@ -31,8 +31,11 @@ AppScreen draw(NetworkClient& network) {
         next = AppScreen::WorldGeneration;
     }
     if (GuiButton(Rectangle{x, startY + 2 * (buttonHeight + gap), buttonWidth, buttonHeight}, "Simulation")) {
-        network.sendStartSimulation();
-        next = AppScreen::Simulation;
+        // Симулируется всегда конкретный сохранённый мир — сначала экран
+        // выбора. Список запрашиваем сразу, чтобы он был на месте к
+        // первому же кадру нового экрана.
+        network.sendListWorlds();
+        next = AppScreen::WorldSelect;
     }
 
     return next;

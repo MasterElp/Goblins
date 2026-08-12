@@ -2,21 +2,21 @@
 #include <iomanip>
 #include <iostream>
 #include <set>
+#include <string>
 #include <utility>
-#include <vector>
 
 #include "config/Config.hpp"
 #include "core/GameLoop.hpp"
 #include "core/World.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
-#include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/generation/BoulderScatter.hpp"
 #include "core/generation/TerrainGenerator.hpp"
 #include "core/systems/TimeSystem.hpp"
 #include "server/NetworkServer.hpp"
+#include "server/WorldSave.hpp"
 
 namespace {
 
@@ -49,22 +49,25 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     return params;
 }
 
-// Удаляет все Entity, созданные предыдущей генерацией (террейн и
-// булыжники), и очищает Area, чтобы сгенерировать заново на том же
-// месте. Мировой Entity (TimeComponent) не трогаем — у него нет ни
-// SoilComponent, ни ImpassableComponent.
-void clearGeneratedEntities(goblins::World& world) {
-    std::vector<entt::entity> toDestroy;
-    for (const auto entity : world.registry().view<goblins::SoilComponent>()) {
-        toDestroy.push_back(entity);
-    }
-    for (const auto entity : world.registry().view<goblins::ImpassableComponent>()) {
-        toDestroy.push_back(entity);
-    }
-    for (const auto entity : toDestroy) {
-        world.registry().destroy(entity);
-    }
-    world.area().clear();
+// Генерация мира с нуля: полный сброс (World::reset — пустой registry,
+// свежая Область заданного размера, нулевой тик), затем почва/вода и
+// булыжники. Один и тот же путь и для нового мира из меню, и для
+// Regenerate на экране генерации — сгенерированный мир всегда начинается
+// с тика 0, каким бы ни был предыдущий.
+goblins::GenerationStats generateWorld(goblins::World& world, const goblins::AreaSize& area,
+                                        const goblins::RegenerationRequest& request) {
+    world.reset(area.width, area.height);
+    const auto stats = generateTerrain(world, request.terrain_seed, toTerrainParams(request.terrain));
+    scatterBoulders(world, request.boulder_count, request.boulder_seed);
+    return stats;
+}
+
+// Мир, в котором нет ни одного размещённого Entity — это мир до первой
+// генерации (сервер только поднялся). Сохранять его бессмысленно: в
+// списке миров появился бы пустой мир, который можно "загрузить" и
+// получить чистую Область.
+bool worldIsEmpty(const goblins::World& world) {
+    return world.registry().view<const goblins::PositionComponent>().empty();
 }
 
 void printWorldStats(const goblins::World& world, int boulderCount) {
@@ -125,9 +128,16 @@ int main(int argc, char** argv) {
     goblins::ensureConfigExists<goblins::ServerConfig>(configPath);
     const auto config = goblins::loadServerConfig(configPath);
 
+    // Каталог сохранённых миров — по одному файлу на мир
+    // (server/WorldSave.hpp). Именно он определяет, что покажет клиент в
+    // меню выбора мира; если он пуст, клиент попросит сгенерировать
+    // новый мир.
+    const auto savesDirectory = goblins::resolveSaveDirectory(config.saves_dir);
+    std::cout << "Worlds directory: " << savesDirectory.string() << "\n";
+
     // Мир на первом этапе — одна Область (04_WorldModel.md, п.2), размер —
-    // из конфигурации. Размер Области не меняется живой регенерацией
-    // (см. RegenerationRequest) — для этого нужен перезапуск.
+    // из конфигурации. Новый мир генерируется этим размером; у
+    // загруженного мира размер свой, из файла сохранения (World::reset).
     // Почва/водоёмы/булыжники пока не генерируются — сервер только
     // поднимает WebSocket и ждёт команду "start_simulation" от клиента
     // (кнопка Simulation в главном меню). До этого мир пуст: экран World
@@ -146,7 +156,7 @@ int main(int argc, char** argv) {
     // Сетевой слой (07_TechStack.md, п.4): core ничего о нём не знает,
     // NetworkServer — часть server, читает состояние world через
     // публичный интерфейс World. Адрес и порт — из конфигурации.
-    goblins::NetworkServer network(world, config.host, config.port, loop.paused, config, configPath);
+    goblins::NetworkServer network(world, config.host, config.port, loop.paused, config, configPath, savesDirectory);
 
     goblins::RegenerationRequest generationConfig;
     generationConfig.terrain_seed = config.terrain_seed;
@@ -171,30 +181,121 @@ int main(int argc, char** argv) {
     // существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int ticksRun = 0;
     loop.run([&]() {
-        // Запуск симуляции по запросу клиента (кнопка Simulation) —
-        // первая генерация мира текущим конфигом и снятие паузы. Как и
+        // Запуск симуляции по запросу клиента (экран выбора мира) —
+        // либо загрузка сохранённого мира, либо генерация нового. Как и
         // регенерация ниже, выполняется здесь, на потоке GameLoop (ECS
         // registry не потокобезопасен между потоками).
-        if (network.takePendingStartSimulation()) {
-            const auto request = network.currentGenerationConfig();
-            // std::flush — эта строка обязана попасть в консоль ДО
-            // generateTerrain, даже если он зависнет (см. комментарий у
-            // printGenerationStats); без явного flush "\n" не гарантирует
-            // сброс буфера, если stdout не line-buffered (например, при
-            // перенаправлении в файл).
-            std::cout << "Simulation starting (terrain_seed=" << request.terrain_seed
-                       << ", boulder_seed=" << request.boulder_seed << ")...\n"
-                       << std::flush;
-            const auto genStats = generateTerrain(world, request.terrain_seed, toTerrainParams(request.terrain));
-            scatterBoulders(world, request.boulder_count, request.boulder_seed);
+        if (const auto start = network.takePendingStartSimulation()) {
+            // Генерация или загрузка мира занимает заметное время, а
+            // паузой сетевой поток управляет сам и сразу. Если за это
+            // время клиент успел прислать stop_simulation (вышел с
+            // экрана симуляции), снимать паузу в конце уже нельзя —
+            // сравниваем счётчик команд паузы до и после работы.
+            const auto pauseCommands = network.pauseCommandCount();
+            bool worldReady = false;
+
+            if (start->worldName.empty()) {
+                // Новый мир. Сразу после генерации он сохраняется — так
+                // состояние "мир как он сгенерирован", с нулевым тиком,
+                // существует на диске всегда, даже если игрок ни разу не
+                // нажмёт "Save world".
+                const auto request = network.currentGenerationConfig();
+                // std::flush — эта строка обязана попасть в консоль ДО
+                // generateTerrain, даже если он зависнет (см. комментарий
+                // у printGenerationStats); без явного flush "\n" не
+                // гарантирует сброс буфера, если stdout не line-buffered
+                // (например, при перенаправлении в файл).
+                std::cout << "Creating a new world (terrain_seed=" << request.terrain_seed
+                           << ", boulder_seed=" << request.boulder_seed << ")...\n"
+                           << std::flush;
+                const auto genStats = generateWorld(world, config.area, request);
+                printGenerationStats(genStats);
+                printWorldStats(world, request.boulder_count);
+
+                goblins::WorldSaveInfo info;
+                std::string error;
+                const auto name = goblins::makeUniqueWorldName(savesDirectory);
+                if (goblins::saveWorld(world, request, name, savesDirectory, info, error)) {
+                    network.setCurrentWorldName(info.name);
+                    std::cout << "New world saved as '" << info.name << "' (tick " << info.tick << ").\n";
+                    network.broadcastNotice("info", "New world '" + info.name + "' created.");
+                } else {
+                    // Мир сгенерирован и полностью играбелен — не
+                    // сохранился только файл. Это не повод не запускать
+                    // симуляцию, но игрок должен об этом узнать.
+                    network.setCurrentWorldName("");
+                    std::cerr << "Could not save the new world: " << error << "\n";
+                    network.broadcastNotice("error", "World generated, but not saved: " + error);
+                }
+                worldReady = true;
+            } else {
+                std::cout << "Loading world '" << start->worldName << "'...\n" << std::flush;
+
+                goblins::RegenerationRequest generation;
+                goblins::WorldSaveInfo info;
+                std::string error;
+                if (goblins::loadWorld(world, start->worldName, savesDirectory, generation, info, error)) {
+                    // Параметры генерации — из файла мира: панель на
+                    // экране World Generation должна показывать, чем
+                    // сгенерирован именно загруженный мир.
+                    network.setCurrentGenerationConfig(generation);
+                    network.setCurrentWorldName(info.name);
+                    std::cout << "World '" << info.name << "' loaded (tick " << info.tick << ", area "
+                               << info.area_width << "x" << info.area_height << ").\n";
+                    printWorldStats(world, generation.boulder_count);
+                    network.broadcastNotice("info", "World '" + info.name + "' loaded.");
+                    worldReady = true;
+                } else {
+                    // Мир при неудачной загрузке остаётся нетронутым
+                    // (см. loadWorld) — просто не снимаем паузу.
+                    std::cerr << "Could not load world: " << error << "\n";
+                    network.broadcastNotice("error", "Could not load world: " + error);
+                }
+            }
 
             network.broadcastSnapshot();
+            network.broadcastWorldList();
 
-            printGenerationStats(genStats);
-            printWorldStats(world, request.boulder_count);
+            if (worldReady && network.pauseCommandCount() == pauseCommands) {
+                loop.paused.store(false);
+                network.broadcastPauseState();
+            }
+        }
 
-            loop.paused.store(false);
-            network.broadcastPauseState();
+        // Сохранение текущего состояния мира по запросу клиента (кнопка
+        // "Save world"). Здесь же, на потоке GameLoop, а не в сетевом
+        // колбэке: запись читает весь ECS registry, и делать это
+        // параллельно с выполняющимся тиком нельзя.
+        if (const auto request = network.takePendingSaveWorld()) {
+            if (worldIsEmpty(world)) {
+                std::cerr << "Nothing to save: the world has not been generated yet.\n";
+                network.broadcastNotice("error", "Nothing to save: the world has not been generated yet.");
+            } else {
+                std::string name = request->name.empty() ? network.currentWorldName() : request->name;
+                if (name.empty()) {
+                    // Мир ещё ни разу не сохранялся (например, только что
+                    // перегенерирован на экране World Generation) — заводим
+                    // для него новый файл, а не переписываем чужой.
+                    name = goblins::makeUniqueWorldName(savesDirectory);
+                }
+
+                goblins::WorldSaveInfo info;
+                std::string error;
+                if (goblins::saveWorld(world, network.currentGenerationConfig(), name, savesDirectory, info, error)) {
+                    network.setCurrentWorldName(info.name);
+                    std::cout << "World saved as '" << info.name << "' (tick " << info.tick << ").\n";
+                    network.broadcastNotice(
+                        "info", "World saved as '" + info.name + "' (tick " + std::to_string(info.tick) + ").");
+                } else {
+                    std::cerr << "Could not save world: " << error << "\n";
+                    network.broadcastNotice("error", "Could not save world: " + error);
+                }
+                // Список миров несёт и имя текущего мира ("current"),
+                // поэтому рассылается в любом случае — клиенту нужно
+                // увидеть и новый мир в списке, и то, каким он теперь
+                // называется.
+                network.broadcastWorldList();
+            }
         }
 
         // Регенерация по запросу клиента (панель настроек) — проверяем
@@ -209,12 +310,16 @@ int main(int argc, char** argv) {
             std::cout << "Regenerating (terrain_seed=" << request->terrain_seed
                        << ", boulder_seed=" << request->boulder_seed << ")...\n"
                        << std::flush;
-            clearGeneratedEntities(world);
-            const auto genStats = generateTerrain(world, request->terrain_seed, toTerrainParams(request->terrain));
-            scatterBoulders(world, request->boulder_count, request->boulder_seed);
+            const auto genStats = generateWorld(world, config.area, *request);
 
             network.setCurrentGenerationConfig(*request);
+            // Перегенерированный мир — уже не тот, что лежит в файле, из
+            // которого он мог быть загружен: до явного "Save world" он
+            // безымянный, и сохранение заведёт ему новый файл, а не
+            // перезапишет чужой.
+            network.setCurrentWorldName("");
             network.broadcastSnapshot();
+            network.broadcastWorldList();
 
             printGenerationStats(genStats);
             printWorldStats(world, request->boulder_count);

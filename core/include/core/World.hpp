@@ -24,6 +24,19 @@ public:
         registry_.emplace<TimeComponent>(worldEntity_);
     }
 
+    // Полный сброс мира на месте: все Entity удаляются, Область
+    // заменяется на новую заданного размера, World Entity создаётся
+    // заново с нулевым TimeComponent. Нужен для загрузки сохранённого
+    // мира: размер его Области может отличаться от текущего, а ссылки на
+    // сам World (их держат GameLoop и NetworkServer) обязаны остаться
+    // валидными — поэтому мир именно сбрасывается, а не пересоздаётся.
+    void reset(int width, int height) {
+        registry_.clear();
+        area_ = Area(width, height);
+        worldEntity_ = registry_.create();
+        registry_.emplace<TimeComponent>(worldEntity_);
+    }
+
     entt::registry& registry() { return registry_; }
     const entt::registry& registry() const { return registry_; }
 

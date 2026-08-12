@@ -17,17 +17,26 @@ namespace goblins {
 // знать про размер окна просмотра клиента, а клиенту — про seed генерации
 // булыжников.
 
+// Все структуры конфигурации читаются через
+// NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT, а не через строгий
+// вариант: отсутствующее поле берёт значение по умолчанию вместо того,
+// чтобы уронить разбор всего файла. Иначе добавление любого нового поля
+// (например, saves_dir) превращало бы уже существующие config.json в
+// "невалидные" целиком — со сбросом на умолчания вообще всех настроек,
+// включая host/port. Конфигурация должна быть удобной, а не
+// обязательной — тот же принцип, что и у ensureConfigExists ниже.
+
 struct AreaSize {
     int width = 100;
     int height = 100;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AreaSize, width, height)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AreaSize, width, height)
 
 struct ViewSize {
     int width = 60;
     int height = 25;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewSize, width, height)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ViewSize, width, height)
 
 // Зеркало core::TerrainParams (core/generation/TerrainParams.hpp) — но
 // JSON-сериализуемое. Дублирование полей осознанное: core не знает о
@@ -65,7 +74,7 @@ struct TerrainConfig {
     float water_moisture_boost = 0.7f;
     float rock_moisture_reduction = 0.3f;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TerrainConfig, height_noise_frequency, rock_noise_frequency,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_frequency, rock_noise_frequency,
                                     compaction_noise_frequency, moisture_noise_frequency, noise_octaves,
                                     noise_lacunarity, noise_gain, rock_height_bump, compaction_height_bump,
                                     river_count, river_width, river_sinuosity, river_depth, river_max_flow_speed,
@@ -88,9 +97,14 @@ struct ServerConfig {
     // Отрицательное значение — тикать бесконечно (мир существует
     // независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int tick_count = -1;
+
+    // Каталог сохранённых миров (по одному JSON-файлу на мир, см.
+    // server/WorldSave.hpp). Относительный путь разрешается относительно
+    // каталога исполняемого файла сервера, а не рабочей директории.
+    std::string saves_dir = "saves";
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ServerConfig, host, port, area, terrain_seed, terrain, boulder_count,
-                                    boulder_seed, tick_interval_ms, tick_count)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, terrain_seed, terrain, boulder_count,
+                                    boulder_seed, tick_interval_ms, tick_count, saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
 // сети (протокол "regenerate", см. NetworkServer.hpp) без пересоздания
@@ -126,7 +140,7 @@ struct ClientConfig {
     int window_height = 720;
     bool fullscreen = false;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ClientConfig, host, port, view, scroll_step, tile_size, window_width,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, view, scroll_step, tile_size, window_width,
                                     window_height, fullscreen)
 
 namespace detail {

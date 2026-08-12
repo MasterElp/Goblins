@@ -20,6 +20,7 @@ add_executable(client
     src/MainMenuScreen.cpp
     src/SettingsScreen.cpp
     src/GenerationScreen.cpp
+    src/WorldSelectScreen.cpp
     src/SimulationScreen.cpp
 )
 

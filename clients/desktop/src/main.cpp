@@ -10,6 +10,7 @@
 #include "SettingsPanel.hpp"
 #include "SettingsScreen.hpp"
 #include "SimulationScreen.hpp"
+#include "WorldSelectScreen.hpp"
 #include "config/Config.hpp"
 
 // Клиент — графическое приложение (raylib), не консоль. Подключается
@@ -57,6 +58,9 @@ int main(int argc, char** argv) {
                 break;
             case AppScreen::WorldGeneration:
                 screen = GenerationScreen::draw(network, generationPanel);
+                break;
+            case AppScreen::WorldSelect:
+                screen = WorldSelectScreen::draw(network);
                 break;
             case AppScreen::Simulation:
                 screen = SimulationScreen::draw(network, config);

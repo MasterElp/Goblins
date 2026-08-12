@@ -123,13 +123,26 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     }
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
-    DrawText(TextFormat("Tick: %llu   Area: %dx%d   View: (%d,%d)   WASD-scroll  P-pause  Esc-menu",
+    DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   WASD-scroll  P-pause  Esc-menu",
+                         snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
                          static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
                          static_cast<int>(viewX / tileSize), static_cast<int>(viewY / tileSize)),
              10, 8, 16, textColor);
 
+    // Сохранение — состояние мира целиком на текущем тике, поверх того же
+    // файла, из которого мир загружен (а если он ещё безымянный — в
+    // новый). Сам мир при этом не останавливается: сервер сохраняет между
+    // тиками.
+    const bool savePressed =
+        GuiButton(Rectangle{static_cast<float>(screenW) - 220, 2, 100, kHudHeight - 4}, "Save world");
+    if (savePressed) {
+        network.sendSaveWorld();
+    }
+
     bool backPressed = GuiButton(Rectangle{static_cast<float>(screenW) - 110, 2, 100, kHudHeight - 4}, "Back (Esc)");
 
+    // Параметры тайла под курсором — по нижнему краю справа, как на
+    // экране генерации: в верхней полосе их теснят имя мира и кнопки.
     if (hasHoverTile) {
         const std::size_t hi = static_cast<std::size_t>(hoverY) * snapshot.areaWidth + hoverX;
         const std::string tileLabel =
@@ -137,7 +150,14 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
                        snapshot.rockiness[hi], snapshot.compaction[hi],
                        snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "");
         const int labelWidth = MeasureText(tileLabel.c_str(), 16);
-        DrawText(tileLabel.c_str(), viewportW - labelWidth - 120, 8, 16, cursorColor);
+        DrawText(tileLabel.c_str(), screenW - labelWidth - 12, screenH - 24, 16, cursorColor);
+    }
+
+    // Результат сохранения (или ошибка загрузки, если мир так и не
+    // открылся) — единственное место, где клиент об этом узнаёт.
+    if (hasFreshNotice(snapshot)) {
+        DrawText(snapshot.notice.c_str(), 10, screenH - 24, 16,
+                 snapshot.noticeIsError ? Color{230, 110, 110, 255} : textColor);
     }
 
     if (snapshot.paused) {

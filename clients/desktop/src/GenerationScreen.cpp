@@ -26,6 +26,13 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
     const Color cursorColor{255, 220, 90, 255};
 
     DrawText("World Generation - Stage 1: Soil & Water", 12, 10, 20, textColor);
+
+    // Сохранить то, что сейчас на экране, как отдельный мир: только что
+    // сгенерированный мир всегда стоит на нулевом тике, поэтому в списке
+    // миров он появится ровно в том состоянии, в каком его видно здесь.
+    if (GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 240, 6, 120, 28}, "Save as world")) {
+        network.sendSaveWorld();
+    }
     if (GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 110, 6, 100, 28}, "Back (Esc)")) {
         return AppScreen::MainMenu;
     }
@@ -115,6 +122,13 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
                        snapshot.rockiness[hi], snapshot.compaction[hi],
                        snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "");
         DrawText(label.c_str(), 12, screenH - 22, 16, cursorColor);
+    }
+
+    // Ответ сервера на "Save as world" — иначе кнопка выглядела бы
+    // ничего не делающей.
+    if (hasFreshNotice(snapshot)) {
+        DrawText(snapshot.notice.c_str(), 12, screenH - 44, 16,
+                 snapshot.noticeIsError ? Color{230, 110, 110, 255} : mutedColor);
     }
 
     goblins::RegenerationRequest regenerateRequest;

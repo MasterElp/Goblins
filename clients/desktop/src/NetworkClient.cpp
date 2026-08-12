@@ -41,9 +41,23 @@ void NetworkClient::sendRegenerate(const goblins::RegenerationRequest& request) 
     webSocket_.send(message.dump());
 }
 
-void NetworkClient::sendStartSimulation() {
+void NetworkClient::sendStartSimulation(const std::string& worldName) {
     nlohmann::json request;
     request["type"] = "start_simulation";
+    request["world"] = worldName;
+    webSocket_.send(request.dump());
+}
+
+void NetworkClient::sendListWorlds() {
+    nlohmann::json request;
+    request["type"] = "list_worlds";
+    webSocket_.send(request.dump());
+}
+
+void NetworkClient::sendSaveWorld(const std::string& name) {
+    nlohmann::json request;
+    request["type"] = "save_world";
+    request["name"] = name;
     webSocket_.send(request.dump());
 }
 
@@ -115,9 +129,26 @@ void NetworkClient::handleMessage(const std::string& payload) {
         state_.generation.boulder_count = json.value("boulder_count", state_.generation.boulder_count);
         state_.generation.boulder_seed = json.value("boulder_seed", state_.generation.boulder_seed);
         state_.hasGeneration = true;
+        state_.currentWorld = json.value("world", state_.currentWorld);
     } else if (type == "tick") {
         state_.tick = json.value("tick", state_.tick);
     } else if (type == "pause_state") {
         state_.paused = json.value("paused", state_.paused);
+    } else if (type == "world_list") {
+        state_.worlds.clear();
+        if (json.contains("worlds")) {
+            try {
+                state_.worlds = json["worlds"].get<std::vector<goblins::WorldSaveInfo>>();
+            } catch (const nlohmann::json::exception&) {
+                // Битый список — не повод ронять клиента: экран выбора
+                // мира просто покажет, что миров нет.
+            }
+        }
+        state_.currentWorld = json.value("current", state_.currentWorld);
+        state_.worldsReceived = true;
+    } else if (type == "notice") {
+        state_.notice = json.value("text", std::string{});
+        state_.noticeIsError = json.value("level", std::string{}) == "error";
+        state_.noticeAt = std::chrono::steady_clock::now();
     }
 }

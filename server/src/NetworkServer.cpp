@@ -12,6 +12,7 @@
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "server/WorldSave.hpp"
 
 namespace goblins {
 
@@ -27,17 +28,20 @@ float round3(float value) {
 } // namespace
 
 NetworkServer::NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused,
-                              ServerConfig baseConfig, std::string configPath)
+                              ServerConfig baseConfig, std::string configPath,
+                              std::filesystem::path savesDirectory)
     : world_(world), server_(port, host), paused_(paused), baseConfig_(std::move(baseConfig)),
-      configPath_(std::move(configPath)) {
+      configPath_(std::move(configPath)), savesDirectory_(std::move(savesDirectory)) {
     server_.setOnClientMessageCallback(
         [this](std::shared_ptr<ix::ConnectionState> /*state*/,
                ix::WebSocket& webSocket,
                const ix::WebSocketMessagePtr& msg) {
             if (msg->type == ix::WebSocketMessageType::Open) {
                 // Новый клиент сразу получает полный снапшот мира —
-                // ему ещё не известны накопленные изменения.
+                // ему ещё не известны накопленные изменения — и список
+                // сохранённых миров: с него начинается главное меню.
                 webSocket.send(buildSnapshotMessage());
+                webSocket.send(buildWorldListMessage());
             } else if (msg->type == ix::WebSocketMessageType::Message) {
                 handleClientMessage(msg->str);
             }
@@ -81,6 +85,16 @@ RegenerationRequest NetworkServer::currentGenerationConfig() const {
     return currentGenerationConfig_;
 }
 
+void NetworkServer::setCurrentWorldName(const std::string& name) {
+    std::lock_guard<std::mutex> lock(generationConfigMutex_);
+    currentWorldName_ = name;
+}
+
+std::string NetworkServer::currentWorldName() const {
+    std::lock_guard<std::mutex> lock(generationConfigMutex_);
+    return currentWorldName_;
+}
+
 std::optional<RegenerationRequest> NetworkServer::takePendingRegeneration() {
     std::lock_guard<std::mutex> lock(pendingRegenerationMutex_);
     auto result = pendingRegeneration_;
@@ -88,10 +102,17 @@ std::optional<RegenerationRequest> NetworkServer::takePendingRegeneration() {
     return result;
 }
 
-bool NetworkServer::takePendingStartSimulation() {
+std::optional<StartSimulationRequest> NetworkServer::takePendingStartSimulation() {
     std::lock_guard<std::mutex> lock(pendingStartMutex_);
-    const bool result = pendingStart_;
-    pendingStart_ = false;
+    auto result = pendingStart_;
+    pendingStart_.reset();
+    return result;
+}
+
+std::optional<SaveWorldRequest> NetworkServer::takePendingSaveWorld() {
+    std::lock_guard<std::mutex> lock(pendingSaveWorldMutex_);
+    auto result = pendingSaveWorld_;
+    pendingSaveWorld_.reset();
     return result;
 }
 
@@ -110,6 +131,7 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
     const std::string type = json.value("type", "");
     if (type == "toggle_pause") {
         const bool newState = !paused_.load();
+        pauseCommandCount_.fetch_add(1);
         paused_.store(newState);
         std::cout << "World " << (newState ? "paused" : "resumed") << " by client request.\n";
         broadcastPauseState();
@@ -125,8 +147,32 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
             std::cerr << "NetworkServer: invalid regenerate request (" << e.what() << ")\n";
         }
     } else if (type == "start_simulation") {
+        StartSimulationRequest request;
+        // Имя мира приходит от клиента и превращается в путь на диске —
+        // проверяем его здесь, до постановки в очередь, чтобы на потоке
+        // GameLoop уже не разбираться с заведомо негодным запросом.
+        request.worldName = json.value("world", std::string{});
+        if (!request.worldName.empty() && !isValidWorldName(request.worldName)) {
+            std::cerr << "NetworkServer: rejected start_simulation with invalid world name.\n";
+            broadcastNotice("error", "Invalid world name.");
+            return;
+        }
         std::lock_guard<std::mutex> lock(pendingStartMutex_);
-        pendingStart_ = true;
+        pendingStart_ = request;
+    } else if (type == "list_worlds") {
+        // Только чтение каталога сохранений, ECS registry не трогаем —
+        // можно прямо здесь, на сетевом потоке (как save_generation_config).
+        broadcastWorldList();
+    } else if (type == "save_world") {
+        SaveWorldRequest request;
+        request.name = json.value("name", std::string{});
+        if (!request.name.empty() && !isValidWorldName(request.name)) {
+            std::cerr << "NetworkServer: rejected save_world with invalid world name.\n";
+            broadcastNotice("error", "Invalid world name.");
+            return;
+        }
+        std::lock_guard<std::mutex> lock(pendingSaveWorldMutex_);
+        pendingSaveWorld_ = request;
     } else if (type == "save_generation_config") {
         // Только файловый ввод-вывод, ECS registry не трогаем — можно
         // прямо здесь, на сетевом потоке, как и toggle_pause.
@@ -145,6 +191,7 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
         // остановка — клиент нажал "Back", повторный запрос не должен
         // случайно снова запустить луп. paused_ атомарный, трогать его
         // отсюда (сетевой поток) безопасно, как и в toggle_pause.
+        pauseCommandCount_.fetch_add(1);
         paused_.store(true);
         std::cout << "Simulation stopped by client request.\n";
         broadcastPauseState();
@@ -156,6 +203,33 @@ void NetworkServer::broadcastPauseState() {
     message["type"] = "pause_state";
     message["paused"] = paused_.load();
     broadcastToAll(message.dump());
+}
+
+std::uint64_t NetworkServer::pauseCommandCount() const {
+    return pauseCommandCount_.load();
+}
+
+void NetworkServer::broadcastWorldList() {
+    broadcastToAll(buildWorldListMessage());
+}
+
+void NetworkServer::broadcastNotice(const std::string& level, const std::string& text) {
+    nlohmann::json message;
+    message["type"] = "notice";
+    message["level"] = level;
+    message["text"] = text;
+    broadcastToAll(message.dump());
+}
+
+std::string NetworkServer::buildWorldListMessage() const {
+    nlohmann::json message;
+    message["type"] = "world_list";
+    message["worlds"] = listWorldSaves(savesDirectory_);
+    {
+        std::lock_guard<std::mutex> lock(generationConfigMutex_);
+        message["current"] = currentWorldName_;
+    }
+    return message.dump();
 }
 
 void NetworkServer::broadcastToAll(const std::string& payload) {
@@ -179,6 +253,7 @@ std::string NetworkServer::buildSnapshotMessage() const {
 
     {
         std::lock_guard<std::mutex> lock(generationConfigMutex_);
+        message["world"] = currentWorldName_;
         message["terrain_seed"] = currentGenerationConfig_.terrain_seed;
         message["terrain"] = currentGenerationConfig_.terrain;
         message["boulder_count"] = currentGenerationConfig_.boulder_count;

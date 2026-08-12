@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -10,27 +11,51 @@
 
 #include "config/Config.hpp"
 #include "core/World.hpp"
+#include "world/WorldSaveInfo.hpp"
 
 namespace goblins {
+
+// Запрос на запуск симуляции. Пустое worldName — начать новый мир:
+// сгенерировать текущими параметрами генерации и сразу сохранить его как
+// мир с нулевым тиком. Непустое — загрузить сохранённый мир с этим
+// именем (см. server/WorldSave.hpp).
+struct StartSimulationRequest {
+    std::string worldName;
+};
+
+// Запрос на сохранение текущего состояния мира. Пустое name — сохранить
+// под именем мира, который сейчас в памяти (а если он ещё ни разу не
+// сохранялся — под новым сгенерированным именем).
+struct SaveWorldRequest {
+    std::string name;
+};
 
 // Сетевой слой сервера: транспорт (WebSocket) и сериализация (JSON) живут
 // здесь, а не в core — согласно "Все взаимодействия происходят через
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 4):
+// Протокол (версия 5):
 //   Сервер -> клиент, сразу при подключении и после регенерации:
 //     {"type": "world_snapshot", "area": {"width", "height"}, "tick": N,
-//      "paused": bool, "terrain_seed": N, "terrain": {...},
+//      "paused": bool, "world": "имя текущего мира или пустая строка",
+//      "terrain_seed": N, "terrain": {...},
 //      "boulder_count": N, "boulder_seed": N,
 //      "boulders": [{"x", "y"}, ...],
 //      "soil": {"moisture": [...], "rockiness": [...], "compaction": [...]},
 //              -- плоские массивы, row-major, по одному float на тайл
 //      "water": [{"x", "y", "depth"}, ...]}  -- только тайлы с водой
+//   Сервер -> клиент, сразу при подключении и после каждого сохранения:
+//     {"type": "world_list", "current": "имя текущего мира",
+//      "worlds": [WorldSaveInfo, ...]}  -- см. shared/world/WorldSaveInfo.hpp
 //   Сервер -> клиент, после каждого тика:
 //     {"type": "tick", "tick": N}
 //   Сервер -> клиент, при изменении паузы (рассылается всем клиентам):
 //     {"type": "pause_state", "paused": bool}
+//   Сервер -> клиент, результат операции, у которой нет своего ответа
+//   (сохранение/загрузка мира) — клиенту нужно показать, что именно
+//   произошло, особенно когда произошла ошибка:
+//     {"type": "notice", "level": "info"|"error", "text": "..."}
 //   Клиент -> сервер, запрос переключить паузу:
 //     {"type": "toggle_pause"}
 //   Клиент -> сервер, запрос остановить симуляцию (кнопка "Back" на
@@ -45,12 +70,20 @@ namespace goblins {
 //     Сервер выполняет это на потоке GameLoop (не сразу в сетевом
 //     колбэке — ECS registry не потокобезопасен), затем рассылает
 //     свежий world_snapshot всем подключённым клиентам.
-//   Клиент -> сервер, запрос запустить симуляцию (без payload):
-//     {"type": "start_simulation"}
+//   Клиент -> сервер, запрос прислать список сохранённых миров:
+//     {"type": "list_worlds"}
+//   Клиент -> сервер, запрос сохранить текущее состояние мира:
+//     {"type": "save_world", "name": "необязательное имя"}
+//     Выполняется на потоке GameLoop (чтение ECS registry), после чего
+//     сервер рассылает свежий world_list.
+//   Клиент -> сервер, запрос запустить симуляцию:
+//     {"type": "start_simulation", "world": "необязательное имя мира"}
 //     До этой команды сервер только слушает WebSocket — мир не
-//     сгенерирован и GameLoop не тикает (paused == true). Сервер
-//     генерирует мир текущим currentGenerationConfig_ (тем же потоком,
-//     что и regenerate) и снимает паузу.
+//     сгенерирован и GameLoop не тикает (paused == true). С именем мира
+//     сервер загружает сохранение, без имени — генерирует новый мир
+//     текущим currentGenerationConfig_ и сразу сохраняет его (мир с
+//     нулевым тиком). И то, и другое — на потоке GameLoop, как
+//     regenerate; затем пауза снимается.
 class NetworkServer {
 public:
     // paused — ссылка на флаг паузы игрового цикла (GameLoop::paused).
@@ -62,8 +95,11 @@ public:
     // сохраняем на диск полный ServerConfig (host/port/area/tick_* как
     // были при запуске), подменив в нём только поля генерации текущим
     // currentGenerationConfig_.
+    // savesDirectory — каталог сохранённых миров: сам сетевой слой
+    // только читает из него список миров (list_worlds), запись мира
+    // делает main.cpp с потока GameLoop.
     NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused,
-                  ServerConfig baseConfig, std::string configPath);
+                  ServerConfig baseConfig, std::string configPath, std::filesystem::path savesDirectory);
 
     // Возвращает false, если порт не удалось занять — например, он уже
     // используется другим процессом.
@@ -90,15 +126,26 @@ public:
     // виден клиенту в панели настроек.
     RegenerationRequest currentGenerationConfig() const;
 
+    // Имя мира, который сейчас в памяти (пустая строка — мир ещё ни разу
+    // не сохранялся: например, только что перегенерирован на экране
+    // World Generation). Попадает в снапшот и в world_list, чтобы клиент
+    // показывал, какой именно мир он видит.
+    void setCurrentWorldName(const std::string& name);
+    std::string currentWorldName() const;
+
     // Если клиент прислал запрос на регенерацию — возвращает его и
     // очищает очередь (иначе nullopt). Вызывать только с потока, где
     // крутится GameLoop, не из сетевого колбэка: сама регенерация трогает
     // ECS registry, который не потокобезопасен между потоками.
     std::optional<RegenerationRequest> takePendingRegeneration();
 
-    // Аналогично takePendingRegeneration, но для запроса на запуск
-    // симуляции (start_simulation) — просто флаг без параметров.
-    bool takePendingStartSimulation();
+    // Аналогично takePendingRegeneration — запрос на запуск симуляции
+    // (новый мир или загрузка сохранённого) и запрос на сохранение
+    // текущего состояния мира. Оба трогают ECS registry (генерация,
+    // загрузка, чтение всех Entity при записи файла), поэтому
+    // выполняются на потоке GameLoop.
+    std::optional<StartSimulationRequest> takePendingStartSimulation();
+    std::optional<SaveWorldRequest> takePendingSaveWorld();
 
     // Рассылает всем клиентам текущее состояние паузы. Обычно вызывается
     // изнутри handleClientMessage (toggle_pause), но также нужна снаружи —
@@ -106,26 +153,55 @@ public:
     // start_simulation на потоке GameLoop.
     void broadcastPauseState();
 
+    // Сколько явных команд паузы (toggle_pause / stop_simulation) пришло
+    // от клиентов за всё время. Пауза — единственное состояние, которое
+    // сетевой поток меняет сам и сразу, тогда как генерация и загрузка
+    // мира идут на потоке GameLoop и занимают заметное время. Если за это
+    // время клиент успел прислать stop_simulation (нажал "Back"), снимать
+    // паузу по завершении загрузки уже нельзя — иначе мир продолжил бы
+    // тикать после выхода с экрана симуляции. Поток GameLoop запоминает
+    // счётчик до работы и сравнивает после.
+    std::uint64_t pauseCommandCount() const;
+
+    // Рассылает всем клиентам список сохранённых миров — вызывать после
+    // каждой записи мира на диск, чтобы список в меню не устаревал.
+    void broadcastWorldList();
+
+    // Сообщение о результате операции (сохранение/загрузка мира) — то,
+    // что клиенту нужно показать пользователю. Ошибки без этого были бы
+    // видны только в консоли сервера.
+    void broadcastNotice(const std::string& level, const std::string& text);
+
 private:
     std::string buildSnapshotMessage() const;
+    std::string buildWorldListMessage() const;
     void handleClientMessage(const std::string& payload);
     void broadcastToAll(const std::string& payload);
 
     const World& world_;
     ix::WebSocketServer server_;
     std::atomic<bool>& paused_;
+    std::atomic<std::uint64_t> pauseCommandCount_{0};
 
+    // Под этим мьютексом — описание того, какой мир сейчас в памяти:
+    // чем он сгенерирован и под каким именем сохранён. Читается из
+    // сетевого потока (сборка снапшота), пишется с потока GameLoop.
     mutable std::mutex generationConfigMutex_;
     RegenerationRequest currentGenerationConfig_;
+    std::string currentWorldName_;
 
     ServerConfig baseConfig_;
     std::string configPath_;
+    std::filesystem::path savesDirectory_;
 
     std::mutex pendingRegenerationMutex_;
     std::optional<RegenerationRequest> pendingRegeneration_;
 
     std::mutex pendingStartMutex_;
-    bool pendingStart_ = false;
+    std::optional<StartSimulationRequest> pendingStart_;
+
+    std::mutex pendingSaveWorldMutex_;
+    std::optional<SaveWorldRequest> pendingSaveWorld_;
 };
 
 } // namespace goblins
