@@ -15,7 +15,12 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../shared ${CMAKE_CURRENT_BINARY
 
 add_executable(client
     src/main.cpp
+    src/NetworkClient.cpp
     src/SettingsPanel.cpp
+    src/MainMenuScreen.cpp
+    src/SettingsScreen.cpp
+    src/GenerationScreen.cpp
+    src/SimulationScreen.cpp
 )
 
 target_link_libraries(client PRIVATE nlohmann_json ixwebsocket shared_config raylib raygui)

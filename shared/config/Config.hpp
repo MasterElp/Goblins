@@ -107,15 +107,24 @@ struct ClientConfig {
     std::string host = "127.0.0.1";
     int port = 9002;
 
-    // Сколько тайлов видно в окне просмотра и с какой скоростью (тайлов в
-    // секунду) прокручивать при зажатой клавише.
+    // Сколько тайлов видно в окне просмотра (режим "Симуляция") и с
+    // какой скоростью (тайлов в секунду) прокручивать при зажатой
+    // клавише.
     ViewSize view{};
     int scroll_step = 5;
 
-    // Размер тайла в пикселях на экране.
+    // Размер тайла в пикселях на экране (режим "Симуляция"; в режиме
+    // "Генерация мира" тайл всегда пересчитывается так, чтобы вся карта
+    // помещалась на экране, это поле там не используется).
     int tile_size = 16;
+
+    // Графика — экран "Настройки". Сохраняется между запусками.
+    int window_width = 1280;
+    int window_height = 720;
+    bool fullscreen = false;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ClientConfig, host, port, view, scroll_step, tile_size)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ClientConfig, host, port, view, scroll_step, tile_size, window_width,
+                                    window_height, fullscreen)
 
 namespace detail {
 
@@ -170,6 +179,13 @@ inline ServerConfig loadServerConfig(const std::string& path) {
 
 inline ClientConfig loadClientConfig(const std::string& path) {
     return detail::loadConfigFile<ClientConfig>(path);
+}
+
+// Явное сохранение — используется экраном "Настройки" после применения
+// графических параметров, чтобы они не сбрасывались при следующем
+// запуске.
+inline void saveClientConfig(const std::string& path, const ClientConfig& config) {
+    detail::writeConfigFile(path, config);
 }
 
 // Путь к config.json рядом с текущим исполняемым файлом — конфигурация

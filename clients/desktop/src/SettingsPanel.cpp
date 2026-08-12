@@ -20,10 +20,6 @@ void SettingsPanel::loadFrom(const goblins::RegenerationRequest& current, bool f
 }
 
 bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequest) {
-    if (!visible) {
-        return false;
-    }
-
     // Immediate-mode: сначала считаем, сколько всего строк контента, чтобы
     // задать GuiScrollPanel настоящую высоту — иначе скролл не появится.
     // 2 (seed) + 1 (boulder count) + 4 (freq) + 3 (fractal) + 2 (bumps) +

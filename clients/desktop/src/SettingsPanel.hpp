@@ -4,10 +4,11 @@
 
 #include "config/Config.hpp"
 
-// Панель настроек генерации — immediate-mode GUI (raygui) поверх карты.
-// Инкапсулирует редактируемую копию параметров и прокрутку; сама сеть не
-// трогает — только возвращает готовый RegenerationRequest, когда
-// пользователь нажимает "Regenerate" (main.cpp сам решает, что с этим
+// Панель настроек генерации — immediate-mode GUI (raygui). Используется
+// как содержимое экрана "Генерация мира" (GenerationScreen). Инкапсулирует
+// редактируемую копию параметров и прокрутку; сама сеть не трогает —
+// только возвращает готовый RegenerationRequest, когда пользователь
+// нажимает "Regenerate" (вызывающая сторона сама решает, что с этим
 // запросом делать — отправить на сервер).
 class SettingsPanel {
 public:
@@ -17,11 +18,9 @@ public:
     // недописанные правки на каждый тик).
     void loadFrom(const goblins::RegenerationRequest& current, bool force = false);
 
-    // Рисует панель, если visible. Возвращает true и заполняет
-    // outRequest, если пользователь нажал "Regenerate".
+    // Рисует панель. Возвращает true и заполняет outRequest, если
+    // пользователь нажал "Regenerate".
     bool draw(Rectangle bounds, goblins::RegenerationRequest& outRequest);
-
-    bool visible = false;
 
 private:
     goblins::RegenerationRequest edited_{};
