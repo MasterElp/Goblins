@@ -9,9 +9,43 @@
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/TimeComponent.hpp"
+#include "core/components/WaterComponent.hpp"
 #include "core/generation/BoulderScatter.hpp"
+#include "core/generation/TerrainGenerator.hpp"
 #include "core/systems/TimeSystem.hpp"
 #include "server/NetworkServer.hpp"
+
+namespace {
+
+// core не знает о JSON/конфигурации (07_TechStack.md, п.6), поэтому
+// именно server переносит значения из ServerConfig::TerrainConfig в
+// core::TerrainParams перед вызовом generateTerrain.
+goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
+    goblins::TerrainParams params;
+    params.heightNoiseFrequency = config.height_noise_frequency;
+    params.rockNoiseFrequency = config.rock_noise_frequency;
+    params.compactionNoiseFrequency = config.compaction_noise_frequency;
+    params.moistureNoiseFrequency = config.moisture_noise_frequency;
+    params.noiseOctaves = config.noise_octaves;
+    params.noiseLacunarity = config.noise_lacunarity;
+    params.noiseGain = config.noise_gain;
+    params.rockHeightBump = config.rock_height_bump;
+    params.compactionHeightBump = config.compaction_height_bump;
+    params.riverThreshold = config.river_threshold;
+    params.riverDepthBase = config.river_depth_base;
+    params.riverDepthRange = config.river_depth_range;
+    params.edgeInflowMax = config.edge_inflow_max;
+    params.minPondDepth = config.min_pond_depth;
+    params.minPondSize = config.min_pond_size;
+    params.maxPondSize = config.max_pond_size;
+    params.pondDepthScale = config.pond_depth_scale;
+    params.moistureFalloff = config.moisture_falloff;
+    params.waterMoistureBoost = config.water_moisture_boost;
+    params.rockMoistureReduction = config.rock_moisture_reduction;
+    return params;
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
     const std::string configPath = argc > 1 ? argv[1] : goblins::defaultConfigPathNextToExecutable();
@@ -22,9 +56,17 @@ int main(int argc, char** argv) {
     // из конфигурации.
     goblins::World world(config.area.width, config.area.height);
 
+    // Почва и водоёмы генерируются первыми — булыжники ниже уже
+    // учитывают, где вода, и туда не попадают. Все числовые параметры —
+    // из конфигурации, ни одного зашитого значения.
+    generateTerrain(world, config.terrain_seed, toTerrainParams(config.terrain));
     scatterBoulders(world, config.boulder_count, config.boulder_seed);
 
     std::cout << "Area: " << world.area().width() << "x" << world.area().height() << "\n";
+
+    std::size_t waterTiles = 0;
+    world.registry().view<goblins::WaterComponent>().each([&](auto) { ++waterTiles; });
+    std::cout << "Water tiles: " << waterTiles << "\n";
 
     // Проверяем на практике правило "непроходимый Entity занимает тайл
     // полностью" (04_WorldModel.md, п.4): у каждого булыжника должен быть
@@ -74,3 +116,4 @@ int main(int argc, char** argv) {
     network.stop();
     return 0;
 }
+

@@ -29,11 +29,54 @@ struct ViewSize {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewSize, width, height)
 
+// Зеркало core::TerrainParams (core/generation/TerrainParams.hpp) — но
+// JSON-сериализуемое. Дублирование полей осознанное: core не знает о
+// JSON и конфигурации вообще (07_TechStack.md, п.6), поэтому именно
+// server (main.cpp) переносит значения из этой структуры в
+// core::TerrainParams перед вызовом generateTerrain. Имена и значения по
+// умолчанию должны совпадать с core::TerrainParams.
+struct TerrainConfig {
+    float height_noise_frequency = 0.02f;
+    float rock_noise_frequency = 0.05f;
+    float compaction_noise_frequency = 0.04f;
+    float moisture_noise_frequency = 0.03f;
+
+    int noise_octaves = 4;
+    float noise_lacunarity = 2.0f;
+    float noise_gain = 0.5f;
+
+    float rock_height_bump = 0.35f;
+    float compaction_height_bump = 0.25f;
+
+    float river_threshold = 55.0f;
+    float river_depth_base = 0.3f;
+    float river_depth_range = 2.2f;
+    float edge_inflow_max = 45.0f;
+
+    float min_pond_depth = 0.01f;
+    int min_pond_size = 1;
+    int max_pond_size = 0;
+    float pond_depth_scale = 4.0f;
+
+    float moisture_falloff = 8.0f;
+    float water_moisture_boost = 0.7f;
+    float rock_moisture_reduction = 0.3f;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TerrainConfig, height_noise_frequency, rock_noise_frequency,
+                                    compaction_noise_frequency, moisture_noise_frequency, noise_octaves,
+                                    noise_lacunarity, noise_gain, rock_height_bump, compaction_height_bump,
+                                    river_threshold, river_depth_base, river_depth_range, edge_inflow_max,
+                                    min_pond_depth, min_pond_size, max_pond_size, pond_depth_scale,
+                                    moisture_falloff, water_moisture_boost, rock_moisture_reduction)
+
 struct ServerConfig {
     std::string host = "127.0.0.1";
     int port = 9002;
 
     AreaSize area{};
+
+    unsigned terrain_seed = 54321;
+    TerrainConfig terrain{};
 
     int boulder_count = 40;
     unsigned boulder_seed = 12345;
@@ -43,8 +86,8 @@ struct ServerConfig {
     // независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int tick_count = -1;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ServerConfig, host, port, area, boulder_count, boulder_seed,
-                                    tick_interval_ms, tick_count)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ServerConfig, host, port, area, terrain_seed, terrain, boulder_count,
+                                    boulder_seed, tick_interval_ms, tick_count)
 
 struct ClientConfig {
     std::string host = "127.0.0.1";

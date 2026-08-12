@@ -4,8 +4,24 @@
 
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/WaterComponent.hpp"
 
 namespace goblins {
+
+namespace {
+
+// Тайл с водой (рекой или прудом) — терраформирующий Entity на нём несёт
+// WaterComponent (см. TerrainGenerator). Булыжник туда ставить нельзя.
+bool hasWater(const World& world, int x, int y) {
+    for (const auto entity : world.area().cellAt(x, y).entities) {
+        if (world.registry().all_of<WaterComponent>(entity)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
 
 void scatterBoulders(World& world, int count, unsigned seed) {
     std::mt19937 rng(seed);
@@ -27,7 +43,7 @@ void scatterBoulders(World& world, int count, unsigned seed) {
 
         // Непроходимый Entity занимает тайл полностью — если тайл уже
         // занят, пробуем другой (04_WorldModel.md, п.4).
-        if (world.area().isBlocked(x, y)) {
+        if (world.area().isBlocked(x, y) || hasWater(world, x, y)) {
             continue;
         }
 

@@ -58,6 +58,8 @@ Linux/macOS:
     "host": "127.0.0.1",
     "port": 9002,
     "area": { "width": 100, "height": 100 },
+    "terrain_seed": 54321,
+    "terrain": { "...": "см. ниже" },
     "boulder_count": 40,
     "boulder_seed": 12345,
     "tick_interval_ms": 200,
@@ -67,9 +69,56 @@ Linux/macOS:
 
 - `host`, `port` — где сервер слушает WebSocket.
 - `area` — размер Области в тайлах (04_WorldModel.md, п.2).
+- `terrain_seed` — seed для генерации почвы/рек/прудов; один и тот же seed даёт один и тот же результат.
+- `terrain` — все числовые параметры генерации почвы и водоёмов, подробности ниже.
 - `boulder_count`, `boulder_seed` — сколько непроходимых булыжников и с каким seed их генерировать (04_WorldModel.md, п.4); один и тот же seed даёт одну и ту же карту.
 - `tick_interval_ms` — целевой интервал тика (06_GameLoop.md, п.4).
 - `tick_count` — сколько тиков выполнить; `-1` — бесконечно (мир существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
+
+#### `terrain` — параметры генерации почвы и водоёмов
+
+Метод (реализация — `core/src/generation/TerrainGenerator.cpp`): heightmap
+на фрактальном шуме (fBm, OpenSimplex2) → Priority-Flood (Barnes et al.,
+2014) для заполнения впадин (пруды) → D8 flow accumulation по
+заполненному рельефу (реки) → влажность через distance transform от воды.
+Ни одно число не зашито в код — всё ниже читается из конфигурации.
+
+```json
+{
+    "height_noise_frequency": 0.02,
+    "rock_noise_frequency": 0.05,
+    "compaction_noise_frequency": 0.04,
+    "moisture_noise_frequency": 0.03,
+    "noise_octaves": 4,
+    "noise_lacunarity": 2.0,
+    "noise_gain": 0.5,
+    "rock_height_bump": 0.35,
+    "compaction_height_bump": 0.25,
+    "river_threshold": 55.0,
+    "river_depth_base": 0.3,
+    "river_depth_range": 2.2,
+    "edge_inflow_max": 45.0,
+    "min_pond_depth": 0.01,
+    "min_pond_size": 1,
+    "max_pond_size": 0,
+    "pond_depth_scale": 4.0,
+    "moisture_falloff": 8.0,
+    "water_moisture_boost": 0.7,
+    "rock_moisture_reduction": 0.3
+}
+```
+
+- `*_noise_frequency` — частота fBm-шума для каждого слоя (меньше — крупнее пятна/формы, больше — мельче и чаще).
+- `noise_octaves`/`noise_lacunarity`/`noise_gain` — параметры фрактального шума, общие для всех слоёв.
+- `rock_height_bump`, `compaction_height_bump` — насколько каменистость/утрамбованность поднимают высоту рельефа (вода физически огибает такие участки — этим и обеспечивается требование "где утрамбовано и каменисто, реки быть не может", без ручных исключений).
+- `river_threshold` — порог накопления стока (D8), выше которого клетка — река; `river_depth_base`/`river_depth_range` — диапазон глубины реки.
+- `edge_inflow_max` — максимальный случайный бонус к накоплению стока на граничных клетках (river может "начинаться" за краем карты).
+- `min_pond_depth` — минимальная глубина впадины, чтобы считаться прудом.
+- `min_pond_size`/`max_pond_size` — допустимый размер связной области пруда в тайлах; `max_pond_size: 0` — без верхнего ограничения.
+- `pond_depth_scale` — множитель глубины пруда (глубина впадины × этот коэффициент).
+- `moisture_falloff` — за сколько тайлов влияние воды на влажность спадает примерно вдвое.
+- `water_moisture_boost` — насколько вода поднимает влажность рядом с собой.
+- `rock_moisture_reduction` — насколько каменистая почва хуже держит влагу.
 
 ### Клиент — `config.json` рядом с `client`/`client.exe`
 

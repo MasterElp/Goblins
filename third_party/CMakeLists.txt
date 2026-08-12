@@ -13,6 +13,11 @@ target_include_directories(EnTT INTERFACE entt)
 add_library(nlohmann_json INTERFACE)
 target_include_directories(nlohmann_json INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# --- FastNoiseLite: header-only, используется core для генерации террейна
+# (почва, реки, пруды) ---
+add_library(FastNoiseLite INTERFACE)
+target_include_directories(FastNoiseLite INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # --- IXWebSocket: минимальный набор исходников без TLS и без zlib ---
 # (шифрование и сжатие не нужны для локальной сети). Список файлов
 # соответствует тому, что сама библиотека собирает при
