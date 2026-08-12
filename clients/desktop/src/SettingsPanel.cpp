@@ -5,9 +5,9 @@
 
 namespace {
 
-constexpr float kRowHeight = 22.0f;
+constexpr float kRowHeight = 36.0f;
 constexpr float kSectionGap = 10.0f;
-constexpr float kLabelWidth = 150.0f;
+constexpr float kLabelWidth = 125.0f;
 
 } // namespace
 
@@ -48,26 +48,29 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     };
 
     auto floatRow = [&](const char* label, float& value, float lo, float hi) {
-        GuiSlider(Rectangle{x + kLabelWidth, y, rowWidth - kLabelWidth, kRowHeight - 4}, label,
-                  TextFormat("%.4f", value), &value, lo, hi);
+        GuiLabel(Rectangle{x, y, rowWidth, 16}, TextFormat("%s: %.4f", label, value));
+        GuiSliderBar(Rectangle{x, y + 17, rowWidth, kRowHeight - 21}, nullptr, nullptr, &value, lo, hi);
         y += kRowHeight;
     };
 
     auto intRow = [&](const char* label, int& value, int lo, int hi) {
         float f = static_cast<float>(value);
-        GuiSlider(Rectangle{x + kLabelWidth, y, rowWidth - kLabelWidth, kRowHeight - 4}, label,
-                  TextFormat("%d", value), &f, static_cast<float>(lo), static_cast<float>(hi));
+        GuiLabel(Rectangle{x, y, rowWidth, 16}, TextFormat("%s: %d", label, value));
+        GuiSliderBar(Rectangle{x, y + 17, rowWidth, kRowHeight - 21}, nullptr, nullptr, &f, static_cast<float>(lo),
+                     static_cast<float>(hi));
         value = static_cast<int>(f + 0.5f);
         y += kRowHeight;
     };
 
     auto unsignedSeedRow = [&](const char* label, unsigned& value) {
         float f = static_cast<float>(value);
-        GuiSlider(Rectangle{x + kLabelWidth, y, rowWidth - kLabelWidth - 70, kRowHeight - 4}, label,
-                  TextFormat("%u", value), &f, 0.0f, 999999.0f);
-        value = static_cast<unsigned>(f + 0.5f);
-        if (GuiButton(Rectangle{x + rowWidth - 60, y, 60, kRowHeight - 4}, "Random")) {
+        GuiLabel(Rectangle{x, y, rowWidth - 70, 16}, TextFormat("%s: %u", label, value));
+        bool randomPressed = GuiButton(Rectangle{x + rowWidth - 60, y - 2, 60, 20}, "Random");
+        GuiSliderBar(Rectangle{x, y + 17, rowWidth, kRowHeight - 21}, nullptr, nullptr, &f, 0.0f, 999999.0f);
+        if (randomPressed) {
             value = static_cast<unsigned>(GetRandomValue(0, 999999));
+        } else {
+            value = static_cast<unsigned>(f + 0.5f);
         }
         y += kRowHeight;
     };

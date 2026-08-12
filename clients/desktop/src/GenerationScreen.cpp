@@ -11,7 +11,7 @@
 namespace GenerationScreen {
 
 namespace {
-constexpr float kPanelWidth = 340.0f;
+constexpr float kPanelWidth = 400.0f;
 constexpr float kTopBarHeight = 40.0f;
 } // namespace
 
