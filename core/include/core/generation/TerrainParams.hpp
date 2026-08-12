@@ -27,15 +27,15 @@ struct TerrainParams {
     float rockHeightBump = 0.35f;
     float compactionHeightBump = 0.25f;
 
-    // Река: порог накопления стока (D8 flow accumulation), после
-    // которого клетка считается рекой, и диапазон глубины.
-    float riverThreshold = 55.0f;
-    float riverDepthBase = 0.3f;
-    float riverDepthRange = 2.2f;
-    // Максимальный случайный бонус к накоплению стока на граничных
-    // клетках карты — имитация притока извне ("река может начинаться за
-    // краем карты").
-    float edgeInflowMax = 45.0f;
+    // Река: явное русло (не эмерджентное накопление стока) — сколько
+    // рек, их ширина в тайлах, извилистость (0 — прямая линия, 1 —
+    // максимальный меандр), глубина воды и скорость течения (у пруда
+    // скорость всегда 0 — см. WaterComponent).
+    int riverCount = 3;
+    float riverWidth = 3.0f;
+    float riverSinuosity = 0.5f;
+    float riverDepth = 1.5f;
+    float riverFlowSpeed = 1.0f;
 
     // Пруды (Priority-Flood): минимальная глубина впадины, чтобы
     // считаться прудом, и допустимый размер связной области в тайлах.

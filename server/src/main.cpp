@@ -33,10 +33,11 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.noiseGain = config.noise_gain;
     params.rockHeightBump = config.rock_height_bump;
     params.compactionHeightBump = config.compaction_height_bump;
-    params.riverThreshold = config.river_threshold;
-    params.riverDepthBase = config.river_depth_base;
-    params.riverDepthRange = config.river_depth_range;
-    params.edgeInflowMax = config.edge_inflow_max;
+    params.riverCount = config.river_count;
+    params.riverWidth = config.river_width;
+    params.riverSinuosity = config.river_sinuosity;
+    params.riverDepth = config.river_depth;
+    params.riverFlowSpeed = config.river_flow_speed;
     params.minPondDepth = config.min_pond_depth;
     params.minPondSize = config.min_pond_size;
     params.maxPondSize = config.max_pond_size;

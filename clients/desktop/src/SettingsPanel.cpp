@@ -23,10 +23,10 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     // Immediate-mode: сначала считаем, сколько всего строк контента, чтобы
     // задать GuiScrollPanel настоящую высоту — иначе скролл не появится.
     // 2 (seed) + 1 (boulder count) + 4 (freq) + 3 (fractal) + 2 (bumps) +
-    // 4 (river) + 4 (pond) + 3 (moisture) = 23 строки с параметрами,
+    // 5 (river) + 4 (pond) + 3 (moisture) = 24 строки с параметрами,
     // плюс 7 заголовков секций и 3 кнопки внизу (Regenerate, Save values,
     // Reset).
-    constexpr int kParamRows = 23;
+    constexpr int kParamRows = 24;
     constexpr int kSectionHeaders = 7;
     const float contentHeight =
         kParamRows * kRowHeight + kSectionHeaders * (kRowHeight + kSectionGap) + 4 * (kRowHeight + kSectionGap);
@@ -99,10 +99,11 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     floatRow("Compaction bump", edited_.terrain.compaction_height_bump, 0.0f, 1.0f);
 
     section("River");
-    floatRow("Threshold", edited_.terrain.river_threshold, 5.0f, 300.0f);
-    floatRow("Depth base", edited_.terrain.river_depth_base, 0.0f, 2.0f);
-    floatRow("Depth range", edited_.terrain.river_depth_range, 0.0f, 5.0f);
-    floatRow("Edge inflow max", edited_.terrain.edge_inflow_max, 0.0f, 200.0f);
+    intRow("Count", edited_.terrain.river_count, 0, 20);
+    floatRow("Width (tiles)", edited_.terrain.river_width, 1.0f, 12.0f);
+    floatRow("Sinuosity", edited_.terrain.river_sinuosity, 0.0f, 1.0f);
+    floatRow("Depth", edited_.terrain.river_depth, 0.2f, 5.0f);
+    floatRow("Flow speed", edited_.terrain.river_flow_speed, 0.1f, 10.0f);
 
     section("Ponds");
     floatRow("Min depth", edited_.terrain.min_pond_depth, 0.0f, 0.5f);

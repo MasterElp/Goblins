@@ -48,10 +48,11 @@ struct TerrainConfig {
     float rock_height_bump = 0.35f;
     float compaction_height_bump = 0.25f;
 
-    float river_threshold = 55.0f;
-    float river_depth_base = 0.3f;
-    float river_depth_range = 2.2f;
-    float edge_inflow_max = 45.0f;
+    int river_count = 3;
+    float river_width = 3.0f;
+    float river_sinuosity = 0.5f;
+    float river_depth = 1.5f;
+    float river_flow_speed = 1.0f;
 
     float min_pond_depth = 0.01f;
     int min_pond_size = 1;
@@ -65,7 +66,7 @@ struct TerrainConfig {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TerrainConfig, height_noise_frequency, rock_noise_frequency,
                                     compaction_noise_frequency, moisture_noise_frequency, noise_octaves,
                                     noise_lacunarity, noise_gain, rock_height_bump, compaction_height_bump,
-                                    river_threshold, river_depth_base, river_depth_range, edge_inflow_max,
+                                    river_count, river_width, river_sinuosity, river_depth, river_flow_speed,
                                     min_pond_depth, min_pond_size, max_pond_size, pond_depth_scale,
                                     moisture_falloff, water_moisture_boost, rock_moisture_reduction)
 
