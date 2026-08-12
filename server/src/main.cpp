@@ -2,12 +2,14 @@
 #include <iostream>
 #include <set>
 #include <utility>
+#include <vector>
 
 #include "config/Config.hpp"
 #include "core/GameLoop.hpp"
 #include "core/World.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/generation/BoulderScatter.hpp"
@@ -45,25 +47,25 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     return params;
 }
 
-} // namespace
+// Удаляет все Entity, созданные предыдущей генерацией (террейн и
+// булыжники), и очищает Area, чтобы сгенерировать заново на том же
+// месте. Мировой Entity (TimeComponent) не трогаем — у него нет ни
+// SoilComponent, ни ImpassableComponent.
+void clearGeneratedEntities(goblins::World& world) {
+    std::vector<entt::entity> toDestroy;
+    for (const auto entity : world.registry().view<goblins::SoilComponent>()) {
+        toDestroy.push_back(entity);
+    }
+    for (const auto entity : world.registry().view<goblins::ImpassableComponent>()) {
+        toDestroy.push_back(entity);
+    }
+    for (const auto entity : toDestroy) {
+        world.registry().destroy(entity);
+    }
+    world.area().clear();
+}
 
-int main(int argc, char** argv) {
-    const std::string configPath = argc > 1 ? argv[1] : goblins::defaultConfigPathNextToExecutable();
-    goblins::ensureConfigExists<goblins::ServerConfig>(configPath);
-    const auto config = goblins::loadServerConfig(configPath);
-
-    // Мир на первом этапе — одна Область (04_WorldModel.md, п.2), размер —
-    // из конфигурации.
-    goblins::World world(config.area.width, config.area.height);
-
-    // Почва и водоёмы генерируются первыми — булыжники ниже уже
-    // учитывают, где вода, и туда не попадают. Все числовые параметры —
-    // из конфигурации, ни одного зашитого значения.
-    generateTerrain(world, config.terrain_seed, toTerrainParams(config.terrain));
-    scatterBoulders(world, config.boulder_count, config.boulder_seed);
-
-    std::cout << "Area: " << world.area().width() << "x" << world.area().height() << "\n";
-
+void printWorldStats(const goblins::World& world, int boulderCount) {
     std::size_t waterTiles = 0;
     world.registry().view<goblins::WaterComponent>().each([&](auto) { ++waterTiles; });
     std::cout << "Water tiles: " << waterTiles << "\n";
@@ -80,10 +82,32 @@ int main(int argc, char** argv) {
             occupiedTiles.emplace(pos.x, pos.y);
         });
 
-    std::cout << "Boulders placed: " << placedBoulders << " of " << config.boulder_count << "\n";
+    std::cout << "Boulders placed: " << placedBoulders << " of " << boulderCount << "\n";
     std::cout << "Unique tiles: " << occupiedTiles.size()
                << (occupiedTiles.size() == placedBoulders ? " -- impassability rule holds\n\n"
                                                             : " -- ERROR: duplicate tiles found!\n\n");
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    const std::string configPath = argc > 1 ? argv[1] : goblins::defaultConfigPathNextToExecutable();
+    goblins::ensureConfigExists<goblins::ServerConfig>(configPath);
+    const auto config = goblins::loadServerConfig(configPath);
+
+    // Мир на первом этапе — одна Область (04_WorldModel.md, п.2), размер —
+    // из конфигурации. Размер Области не меняется живой регенерацией
+    // (см. RegenerationRequest) — для этого нужен перезапуск.
+    goblins::World world(config.area.width, config.area.height);
+
+    // Почва и водоёмы генерируются первыми — булыжники ниже уже
+    // учитывают, где вода, и туда не попадают. Все числовые параметры —
+    // из конфигурации, ни одного зашитого значения.
+    generateTerrain(world, config.terrain_seed, toTerrainParams(config.terrain));
+    scatterBoulders(world, config.boulder_count, config.boulder_seed);
+
+    std::cout << "Area: " << world.area().width() << "x" << world.area().height() << "\n";
+    printWorldStats(world, config.boulder_count);
 
     // Игровой цикл: один тик = TimeSystem, затем разрешение очереди команд
     // (06_GameLoop.md, п.2). Интервал тика — из конфигурации. Создаётся до
@@ -95,6 +119,14 @@ int main(int argc, char** argv) {
     // NetworkServer — часть server, читает состояние world через
     // публичный интерфейс World. Адрес и порт — из конфигурации.
     goblins::NetworkServer network(world, config.host, config.port, loop.paused);
+
+    goblins::RegenerationRequest generationConfig;
+    generationConfig.terrain_seed = config.terrain_seed;
+    generationConfig.terrain = config.terrain;
+    generationConfig.boulder_count = config.boulder_count;
+    generationConfig.boulder_seed = config.boulder_seed;
+    network.setCurrentGenerationConfig(generationConfig);
+
     if (!network.start()) {
         return 1;
     }
@@ -110,10 +142,28 @@ int main(int argc, char** argv) {
     // Отрицательный tick_count в конфигурации — тикать бесконечно (мир
     // существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int ticksRun = 0;
-    loop.run([&]() { return config.tick_count < 0 || ticksRun++ < config.tick_count; });
+    loop.run([&]() {
+        // Регенерация по запросу клиента (панель настроек) — проверяем
+        // и выполняем здесь, на потоке GameLoop, до вызова tick(): сама
+        // регенерация трогает ECS registry, а это не тот поток, откуда
+        // пришёл сетевой запрос (см. NetworkServer::handleClientMessage).
+        if (const auto request = network.takePendingRegeneration()) {
+            clearGeneratedEntities(world);
+            generateTerrain(world, request->terrain_seed, toTerrainParams(request->terrain));
+            scatterBoulders(world, request->boulder_count, request->boulder_seed);
+
+            network.setCurrentGenerationConfig(*request);
+            network.broadcastSnapshot();
+
+            std::cout << "World regenerated (terrain_seed=" << request->terrain_seed
+                       << ", boulder_seed=" << request->boulder_seed << ").\n";
+            printWorldStats(world, request->boulder_count);
+        }
+
+        return config.tick_count < 0 || ticksRun++ < config.tick_count;
+    });
 
     std::cout << "Simulation stopped.\n";
     network.stop();
     return 0;
 }
-

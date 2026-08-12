@@ -2,10 +2,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 #include <string>
 
 #include <ixwebsocket/IXWebSocketServer.h>
 
+#include "config/Config.hpp"
 #include "core/World.hpp"
 
 namespace goblins {
@@ -15,16 +18,26 @@ namespace goblins {
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 2):
-//   Сервер -> клиент, сразу при подключении:
+// Протокол (версия 3):
+//   Сервер -> клиент, сразу при подключении и после регенерации:
 //     {"type": "world_snapshot", "area": {"width", "height"}, "tick": N,
-//      "paused": bool, "boulders": [{"x", "y"}, ...]}
+//      "paused": bool, "terrain_seed": N, "terrain": {...},
+//      "boulder_count": N, "boulder_seed": N,
+//      "boulders": [{"x", "y"}, ...],
+//      "soil": {"moisture": [...], "rockiness": [...], "compaction": [...]},
+//              -- плоские массивы, row-major, по одному float на тайл
+//      "water": [{"x", "y", "depth"}, ...]}  -- только тайлы с водой
 //   Сервер -> клиент, после каждого тика:
 //     {"type": "tick", "tick": N}
 //   Сервер -> клиент, при изменении паузы (рассылается всем клиентам):
 //     {"type": "pause_state", "paused": bool}
 //   Клиент -> сервер, запрос переключить паузу:
 //     {"type": "toggle_pause"}
+//   Клиент -> сервер, запрос перегенерировать мир (почву/воду/булыжники):
+//     {"type": "regenerate", "params": RegenerationRequest}
+//     Сервер выполняет это на потоке GameLoop (не сразу в сетевом
+//     колбэке — ECS registry не потокобезопасен), затем рассылает
+//     свежий world_snapshot всем подключённым клиентам.
 class NetworkServer {
 public:
     // paused — ссылка на флаг паузы игрового цикла (GameLoop::paused).
@@ -43,6 +56,23 @@ public:
     // подключённым клиентам.
     void broadcastTick(std::uint64_t tick);
 
+    // Полный снапшот заново — вызвать после регенерации мира, чтобы все
+    // подключённые клиенты (не только тот, кто запросил) увидели новую
+    // карту.
+    void broadcastSnapshot();
+
+    // Параметры, которыми сейчас сгенерирован мир — включаются в
+    // снапшот (это отправная точка для панели настроек клиента). Вызвать
+    // один раз после начальной генерации и затем каждый раз после
+    // успешной регенерации.
+    void setCurrentGenerationConfig(const RegenerationRequest& config);
+
+    // Если клиент прислал запрос на регенерацию — возвращает его и
+    // очищает очередь (иначе nullopt). Вызывать только с потока, где
+    // крутится GameLoop, не из сетевого колбэка: сама регенерация трогает
+    // ECS registry, который не потокобезопасен между потоками.
+    std::optional<RegenerationRequest> takePendingRegeneration();
+
 private:
     std::string buildSnapshotMessage() const;
     void handleClientMessage(const std::string& payload);
@@ -52,6 +82,12 @@ private:
     const World& world_;
     ix::WebSocketServer server_;
     std::atomic<bool>& paused_;
+
+    mutable std::mutex generationConfigMutex_;
+    RegenerationRequest currentGenerationConfig_;
+
+    std::mutex pendingRegenerationMutex_;
+    std::optional<RegenerationRequest> pendingRegeneration_;
 };
 
 } // namespace goblins

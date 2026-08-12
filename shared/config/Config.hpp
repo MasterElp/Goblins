@@ -89,6 +89,20 @@ struct ServerConfig {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ServerConfig, host, port, area, terrain_seed, terrain, boulder_count,
                                     boulder_seed, tick_interval_ms, tick_count)
 
+// Подмножество ServerConfig, которое можно перегенерировать вживую по
+// сети (протокол "regenerate", см. NetworkServer.hpp) без пересоздания
+// World: размер Области — нет, она фиксирована при создании World и
+// затрагивает GameLoop/NetworkServer, которые держат на неё ссылку;
+// террейн и булыжники — да, это просто новый набор Entity на том же
+// Area.
+struct RegenerationRequest {
+    unsigned terrain_seed = 54321;
+    TerrainConfig terrain{};
+    int boulder_count = 40;
+    unsigned boulder_seed = 12345;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(RegenerationRequest, terrain_seed, terrain, boulder_count, boulder_seed)
+
 struct ClientConfig {
     std::string host = "127.0.0.1";
     int port = 9002;

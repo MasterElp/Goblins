@@ -103,4 +103,10 @@ if (GOBLINS_WITH_RAYLIB)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(PLATFORM "Desktop" CACHE STRING "" FORCE)
     add_subdirectory(raylib)
+
+    # raygui: immediate-mode GUI поверх raylib (тот же автор, тот же
+    # стиль вендоринга — один заголовок). Нужен для панели настроек
+    # генерации в клиенте.
+    add_library(raygui INTERFACE)
+    target_include_directories(raygui INTERFACE raygui)
 endif()

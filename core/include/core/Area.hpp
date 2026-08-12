@@ -54,6 +54,14 @@ public:
         }
     }
 
+    // Очищает все тайлы (список Entity и признак непроходимости), не
+    // меняя размер Области. Нужен для повторной генерации мира на месте —
+    // сами Entity нужно удалить из registry отдельно, до вызова clear();
+    // здесь только сброс индекса размещения.
+    void clear() {
+        cells_.assign(cells_.size(), Cell{});
+    }
+
 private:
     std::size_t index(int x, int y) const {
         return static_cast<std::size_t>(y) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(x);
