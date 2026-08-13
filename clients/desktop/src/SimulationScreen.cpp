@@ -31,6 +31,7 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     static bool showCompaction = true;
     static bool showMoisture = true;
     static bool showMinerals = true;
+    static bool showHeight = true;
     static bool confirmingExit = false;
     // Диалог ввода имени при сохранении — открывается кнопкой "Save
     // world", буфер предзаполняется именем текущего мира (пусто, если
@@ -87,13 +88,18 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
 
         // Слои почвы — каждый можно исключить из смешения цвета тайла
         // (каменистость/плотность/влажность/минералы считаются нулевыми,
-        // если слой выключен); вода всегда рисуется поверх независимо от
-        // этих флагов. Новый слой почвы добавляется сюда же (см.
-        // TileColors::soil) — тем же способом, что и три предыдущих.
+        // если слой выключен). Вода — тот же выключатель, что и влажность
+        // (KEY_THREE): вода на карте — это и есть источник влажности,
+        // раздельные флаги только путали бы (можно было увидеть воду при
+        // погашенном слое влажности). Высота (KEY_FIVE) — не часть
+        // смешения, а множитель яркости поверх готового цвета (см.
+        // TileColors::applyHeightShading), поэтому переключается и
+        // применяется отдельно от остальных четырёх.
         if (IsKeyPressed(KEY_ONE)) showRockiness = !showRockiness;
         if (IsKeyPressed(KEY_TWO)) showCompaction = !showCompaction;
         if (IsKeyPressed(KEY_THREE)) showMoisture = !showMoisture;
         if (IsKeyPressed(KEY_FOUR)) showMinerals = !showMinerals;
+        if (IsKeyPressed(KEY_FIVE)) showHeight = !showHeight;
 
         // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
         // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
@@ -105,6 +111,19 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     }
 
     const WorldState snapshot = network.snapshot();
+
+    // Диапазон высот текущей карты — для нормализации в
+    // TileColors::applyHeightShading. У HeightComponent.height нет
+    // фиксированного диапазона (зависит от параметров генерации), поэтому
+    // min/max считаются заново на каждый снапшот, а не берутся константой.
+    float minHeight = 0.0f;
+    float maxHeight = 0.0f;
+    if (showHeight && !snapshot.height.empty()) {
+        const auto [minIt, maxIt] = std::minmax_element(snapshot.height.begin(), snapshot.height.end());
+        minHeight = *minIt;
+        maxHeight = *maxIt;
+    }
+    const float heightRange = maxHeight - minHeight;
 
     if (snapshot.areaWidth > 0) {
         const float maxX = std::max(0.0f, static_cast<float>(snapshot.areaWidth) * tileSizeF - viewportW);
@@ -150,13 +169,20 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
                 const float screenX = static_cast<float>(tx) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(ty) * tileSizeF - viewY + kHudHeight;
 
-                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
-                              TileColors::soil(showMoisture ? snapshot.moisture[i] : 0.0f,
-                                                showRockiness ? snapshot.rockiness[i] : 0.0f,
-                                                showCompaction ? snapshot.compaction[i] : 0.0f,
-                                                showMinerals ? TileColors::mineralsFraction(snapshot.minerals[i])
-                                                             : 0.0f));
-                if (snapshot.waterDepth[i] > 0.0f) {
+                Color tileColor =
+                    TileColors::soil(showMoisture ? snapshot.moisture[i] : 0.0f,
+                                      showRockiness ? snapshot.rockiness[i] : 0.0f,
+                                      showCompaction ? snapshot.compaction[i] : 0.0f,
+                                      showMinerals ? TileColors::mineralsFraction(snapshot.minerals[i]) : 0.0f);
+                if (showHeight && heightRange > 0.0f) {
+                    tileColor = TileColors::applyHeightShading(tileColor, (snapshot.height[i] - minHeight) / heightRange);
+                }
+                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize, tileColor);
+                // Вода делит выключатель с влажностью (KEY_THREE) — вода
+                // на тайле и есть источник его влажности, отдельный
+                // флаг только запутывал бы (видно воду при погашенном
+                // слое влажности).
+                if (showMoisture && snapshot.waterDepth[i] > 0.0f) {
                     DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
                                   TileColors::water(snapshot.waterDepth[i]));
                 }
@@ -210,13 +236,14 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         };
         drawLayerLabel("[1] Rockiness", showRockiness);
         drawLayerLabel("[2] Compaction", showCompaction);
-        drawLayerLabel("[3] Moisture", showMoisture);
+        drawLayerLabel("[3] Moisture+Water", showMoisture);
         drawLayerLabel("[4] Minerals", showMinerals);
+        drawLayerLabel("[5] Height", showHeight);
     }
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
     DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   Zoom: %d%%   WASD-scroll  Wheel-zoom  "
-                         "1/2/3/4-layers  P-pause  Esc-menu",
+                         "1-5-layers  P-pause  Esc-menu",
                          snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
                          static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
                          static_cast<int>(viewX / tileSizeF), static_cast<int>(viewY / tileSizeF),

@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <set>
@@ -16,6 +17,7 @@
 #include "core/generation/TerrainGenerator.hpp"
 #include "core/systems/HydrologySystem.hpp"
 #include "core/systems/TimeSystem.hpp"
+#include "server/ConsoleHotkeyWatcher.hpp"
 #include "server/NetworkServer.hpp"
 #include "server/WorldSave.hpp"
 
@@ -59,6 +61,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.waterSlopeBoost = config.water_slope_boost;
     params.soilErosionRate = config.soil_erosion_rate;
     params.maxErosionDepth = config.max_erosion_depth;
+    params.edgeDrainRate = config.edge_drain_rate;
     return params;
 }
 
@@ -185,21 +188,48 @@ int main(int argc, char** argv) {
     }
     std::cout << "WebSocket server listening on ws://" << config.host << ":" << config.port << "\n\n";
 
+    // Вывод "Tick #N" — только каждый 10-й тик и только пока включён:
+    // при быстром тике на большом мире печать (и её flush через
+    // std::endl) каждый тик заметно отстаёт от реального времени, и
+    // визуально кажется, что сервер не реагирует на команды (например,
+    // stop_simulation) — хотя пауза уже стоит, просто консоль ещё
+    // "доигрывает" накопленный вывод. tickLoggingEnabled переключается
+    // горячей клавишей Ctrl+L (см. ниже, ConsoleHotkeyWatcher) —
+    // полезно вовсе отключить вывод при активной тонкой настройке
+    // параметров с экрана генерации.
+    bool tickLoggingEnabled = true;
+    constexpr std::uint64_t kTickLogInterval = 10;
+
     loop.addSystem(goblins::TimeSystem);
     loop.addSystem(goblins::HydrologySystem);
     loop.onTickComplete = [&](const goblins::World& w) {
         const auto& time = w.registry().get<const goblins::TimeComponent>(w.worldEntity());
-        std::cout << "Tick #" << time.tick << std::endl;
+        if (tickLoggingEnabled && time.tick % kTickLogInterval == 0) {
+            std::cout << "Tick #" << time.tick << std::endl;
+        }
         // Полный снапшот на каждый тик, а не только номер: HydrologySystem
         // непрерывно меняет почву/воду, и клиент должен видеть это
         // постепенное изменение вживую, а не только после регенерации.
+        // Троттлинг вывода в консоль на снапшоты не влияет — это разные
+        // потребители одних и тех же данных.
         network.broadcastSnapshot();
     };
+
+    // Неблокирующий опрос горячей клавиши Ctrl+L прямо из консоли сервера
+    // (сервер без окна — своего цикла событий, как у клиента на raylib, у
+    // него нет).
+    goblins::ConsoleHotkeyWatcher hotkeys;
 
     // Отрицательный tick_count в конфигурации — тикать бесконечно (мир
     // существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int ticksRun = 0;
     loop.run([&]() {
+        if (hotkeys.ctrlLPressed()) {
+            tickLoggingEnabled = !tickLoggingEnabled;
+            std::cout << "Tick console output " << (tickLoggingEnabled ? "enabled" : "disabled")
+                       << " (Ctrl+L to toggle).\n";
+        }
+
         // Запуск симуляции по запросу клиента (экран выбора мира) —
         // либо загрузка сохранённого мира, либо генерация нового. Как и
         // регенерация ниже, выполняется здесь, на потоке GameLoop (ECS

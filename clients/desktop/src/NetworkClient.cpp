@@ -114,6 +114,11 @@ void NetworkClient::handleMessage(const std::string& payload) {
         state_.compaction.assign(cellCount, 0.0f);
         state_.minerals.assign(cellCount, 0);
         state_.waterDepth.assign(cellCount, 0.0f);
+        state_.height.assign(cellCount, 0.0f);
+
+        if (json.contains("height")) {
+            state_.height = json["height"].get<std::vector<float>>();
+        }
 
         if (json.contains("soil")) {
             const auto& soil = json["soil"];

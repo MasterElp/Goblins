@@ -89,6 +89,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const float waterSlopeBoost = worldProperties.waterSlopeBoost;
     const float soilErosionRate = worldProperties.soilErosionRate;
     const float maxErosionDepth = worldProperties.maxErosionDepth;
+    const float edgeDrainRate = worldProperties.edgeDrainRate;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -292,6 +293,23 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
         if (isWaterSource[i]) {
             nextWaterDepth[i] += waterSourceStrength;
+        }
+    }
+
+    // --- 5c. Сток за край карты: у тайлов на самой границе Области —
+    // доля глубины уходит "за карту" независимо от испарения/течения. Без
+    // этого края ведут себя как стенки: течение толкает воду к краю, а
+    // деваться ей там некуда, и она просто копится. Доля (не абсолютная
+    // величина) — убыль сама замедляется по мере обмеления, "не быстро"
+    // получается без отдельного потолка. ---
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        if (waterDepth[i] <= 0.0f) {
+            continue;
+        }
+        const int x = static_cast<int>(i) % width;
+        const int y = static_cast<int>(i) / width;
+        if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
+            nextWaterDepth[i] -= waterDepth[i] * edgeDrainRate;
         }
     }
 

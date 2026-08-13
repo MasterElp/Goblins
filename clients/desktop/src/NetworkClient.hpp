@@ -37,6 +37,10 @@ struct WorldState {
     std::vector<int> minerals;
     std::vector<float> waterDepth;
 
+    // Высота рельефа (HeightComponent.height) — единиц измерения не несёт,
+    // экраны сами нормализуют по min/max текущей карты для слоя-рельефа.
+    std::vector<float> height;
+
     // Параметры, которыми сгенерирован текущий мир — стартовая точка для
     // панели настроек генерации.
     goblins::RegenerationRequest generation{};

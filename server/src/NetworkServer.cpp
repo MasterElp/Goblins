@@ -7,6 +7,7 @@
 #include <ixwebsocket/IXNetSystem.h>
 #include <nlohmann/json.hpp>
 
+#include "core/components/HeightComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -297,6 +298,20 @@ std::string NetworkServer::buildSnapshotMessage() const {
     message["soil"]["rockiness"] = rockiness;
     message["soil"]["compaction"] = compaction;
     message["soil"]["minerals"] = minerals;
+
+    // Высота рельефа — плоский массив, как почва (HeightComponent всегда
+    // идёт в паре с SoilComponent на террейн-Entity, см. WorldSave.hpp).
+    // Нужна клиенту для необязательного слоя-рельефа (затемнение низин,
+    // высветление возвышенностей) — само число единиц измерения не несёт,
+    // клиент нормализует по min/max текущей карты.
+    std::vector<float> heightValues(cellCount, 0.0f);
+    world_.registry()
+        .view<const PositionComponent, const HeightComponent>()
+        .each([&](const PositionComponent& pos, const HeightComponent& h) {
+            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
+            heightValues[i] = round3(h.height);
+        });
+    message["height"] = heightValues;
 
     // Вода — только тайлы, где она реально есть (03_CorePrinciples.md,
     // п.3: отсутствие компонента = отсутствие возможности); в разреженном

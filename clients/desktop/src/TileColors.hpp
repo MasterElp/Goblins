@@ -52,4 +52,16 @@ inline Color water(float depth) {
     return lerp(shallow, deep, t);
 }
 
+// Рельефный шейдинг — не отдельный цвет, а множитель поверх уже
+// смешанного цвета тайла (soil()/water()): низины темнее, возвышенности
+// светлее. normalizedHeight — 0..1, нормализовано вызывающей стороной по
+// min/max текущей карты (у HeightComponent.height нет фиксированного
+// диапазона — он зависит от параметров генерации).
+inline Color applyHeightShading(Color c, float normalizedHeight) {
+    const float factor = 0.7f + 0.6f * std::clamp(normalizedHeight, 0.0f, 1.0f);
+    return Color{static_cast<unsigned char>(std::clamp(c.r * factor, 0.0f, 255.0f)),
+                 static_cast<unsigned char>(std::clamp(c.g * factor, 0.0f, 255.0f)),
+                 static_cast<unsigned char>(std::clamp(c.b * factor, 0.0f, 255.0f)), c.a};
+}
+
 } // namespace TileColors

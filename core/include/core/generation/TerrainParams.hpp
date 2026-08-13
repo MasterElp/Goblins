@@ -107,6 +107,12 @@ struct TerrainParams {
     // читает.
     float soilErosionRate = 0.05f;
     float maxErosionDepth = 0.5f;
+
+    // Доля глубины, стекающая за край карты за тик у тайлов на самой
+    // границе Области (см. WorldPropertiesComponent) — тоже свойство
+    // мира: выбирается здесь, при генерации, HydrologySystem только
+    // читает.
+    float edgeDrainRate = 0.01f;
 };
 
 } // namespace goblins

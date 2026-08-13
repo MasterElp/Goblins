@@ -11,7 +11,9 @@
     "terrain": {
         "compaction_height_bump": 0.26760563254356384,
         "compaction_noise_frequency": 0.03999999910593033,
+        "edge_drain_rate": 0.009999999776482582,
         "height_noise_frequency": 0.029422534629702568,
+        "max_erosion_depth": 0.5,
         "max_pond_size": 0,
         "min_pond_depth": 0.11854460090398788,
         "min_pond_size": 3,
@@ -30,18 +32,19 @@
         "river_max_flow_speed": 1.5640844106674194,
         "river_minerals": 10,
         "river_sinuosity": 0.23004694283008575,
-        "river_width": 5.441314697265625,
+        "river_width": 6.913145542144775,
         "rock_height_bump": 0.4671361446380615,
         "rock_moisture_reduction": 0.4671361446380615,
         "rock_noise_frequency": 0.05000000074505806,
-        "water_evaporation_rate": 0.0001455399178666994,
+        "soil_erosion_rate": 0.05000000074505806,
+        "water_evaporation_rate": 0.0006032864330336452,
         "water_flow_rate": 0.30000001192092896,
         "water_moisture_boost": 0.4577464759349823,
         "water_slope_boost": 5.0,
         "water_source_count": 5,
-        "water_source_strength": 0.34741783142089844
+        "water_source_strength": 0.737089216709137
     },
-    "terrain_seed": 604203,
+    "terrain_seed": 518779,
     "tick_count": -1,
     "tick_interval_ms": 200
 }

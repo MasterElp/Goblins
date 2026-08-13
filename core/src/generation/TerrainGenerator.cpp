@@ -792,6 +792,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     worldProperties.waterSlopeBoost = params.waterSlopeBoost;
     worldProperties.soilErosionRate = params.soilErosionRate;
     worldProperties.maxErosionDepth = params.maxErosionDepth;
+    worldProperties.edgeDrainRate = params.edgeDrainRate;
 
     stats.totalMs = elapsedMs(totalStart);
     return stats;

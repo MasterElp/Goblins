@@ -95,6 +95,11 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // источником размывается без остановки в бездонную яму.
     ops.floatRow("Max scour depth", edited.terrain.max_erosion_depth, 0.0f, 3.0f);
 
+    ops.section("Map edges");
+    // Доля глубины, стекающая "за карту" у тайлов на самой границе —
+    // без этого края ведут себя как стенки и вода копится у кромки.
+    ops.floatRow("Edge drain rate", edited.terrain.edge_drain_rate, 0.0f, 0.2f);
+
     ops.section("Water sources");
     ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
     // Оба — свойства мира, как порог минералов выше. precision=6 у

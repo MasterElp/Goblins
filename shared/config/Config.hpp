@@ -117,6 +117,11 @@ struct TerrainConfig {
     // core::TerrainParams::soilErosionRate/maxErosionDepth.
     float soil_erosion_rate = 0.05f;
     float max_erosion_depth = 0.5f;
+
+    // Доля глубины, стекающая за край карты за тик у тайлов на самой
+    // границе Области — тоже свойство мира, см.
+    // core::TerrainParams::edgeDrainRate.
+    float edge_drain_rate = 0.01f;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_frequency, rock_noise_frequency,
                                     compaction_noise_frequency, moisture_noise_frequency, minerals_noise_frequency,
@@ -127,7 +132,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_freq
                                     rock_moisture_reduction, minerals_average, river_minerals,
                                     mineral_moisture_threshold, water_source_count, water_evaporation_rate,
                                     water_source_strength, water_flow_rate, water_slope_boost,
-                                    soil_erosion_rate, max_erosion_depth)
+                                    soil_erosion_rate, max_erosion_depth, edge_drain_rate)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";
