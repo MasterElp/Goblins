@@ -13,6 +13,9 @@ namespace SimulationScreen {
 
 namespace {
 constexpr int kHudHeight = 32;
+constexpr float kMinZoom = 0.25f;
+constexpr float kMaxZoom = 4.0f;
+constexpr float kZoomStep = 1.1f;
 } // namespace
 
 AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
@@ -21,10 +24,10 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     // осознанное поведение, не забытый сброс).
     static float viewX = 0.0f;
     static float viewY = 0.0f;
+    static float zoom = 1.0f;
 
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
-    const int tileSize = config.tile_size;
     const int viewportW = screenW;
     const int viewportH = screenH - kHudHeight;
 
@@ -35,13 +38,35 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     const Color cursorColor{255, 220, 90, 255};
     const Color pausedColor{220, 70, 70, 255};
 
+    // Масштаб — рантайм-множитель поверх config.tile_size (базового
+    // размера тайла), не персистится: при перезапуске клиента сбрасывается
+    // к 100%, как и позиция прокрутки.
+    float tileSizeF = static_cast<float>(config.tile_size) * zoom;
+
     const float dt = GetFrameTime();
-    const float scrollSpeedPx = static_cast<float>(config.scroll_step * tileSize);
+    const float scrollSpeedPx = static_cast<float>(config.scroll_step) * tileSizeF;
 
     if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
     if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
     if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) viewX -= scrollSpeedPx * dt;
     if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) viewX += scrollSpeedPx * dt;
+
+    // Зум колёсиком мыши — к точке под курсором: мировая координата под
+    // курсором остаётся на месте, чтобы приближение/отдаление не
+    // "убегало" в сторону.
+    const float wheel = GetMouseWheelMove();
+    if (wheel != 0.0f) {
+        const Vector2 wheelMouse = GetMousePosition();
+        const float worldX = wheelMouse.x + viewX;
+        const float worldY = wheelMouse.y - kHudHeight + viewY;
+
+        const float factor = wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep;
+        zoom = std::clamp(zoom * factor, kMinZoom, kMaxZoom);
+        tileSizeF = static_cast<float>(config.tile_size) * zoom;
+
+        viewX = worldX * factor - wheelMouse.x;
+        viewY = worldY * factor - wheelMouse.y;
+    }
 
     // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
     // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
@@ -54,8 +79,8 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     const WorldState snapshot = network.snapshot();
 
     if (snapshot.areaWidth > 0) {
-        const float maxX = std::max(0.0f, static_cast<float>(snapshot.areaWidth * tileSize - viewportW));
-        const float maxY = std::max(0.0f, static_cast<float>(snapshot.areaHeight * tileSize - viewportH));
+        const float maxX = std::max(0.0f, static_cast<float>(snapshot.areaWidth) * tileSizeF - viewportW);
+        const float maxY = std::max(0.0f, static_cast<float>(snapshot.areaHeight) * tileSizeF - viewportH);
         viewX = std::clamp(viewX, 0.0f, maxX);
         viewY = std::clamp(viewY, 0.0f, maxY);
     } else {
@@ -63,14 +88,16 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         viewY = std::max(0.0f, viewY);
     }
 
+    const int tileSize = std::max(1, static_cast<int>(std::round(tileSizeF)));
+
     const Vector2 mouse = GetMousePosition();
     bool hasHoverTile = false;
     int hoverX = 0;
     int hoverY = 0;
     if (snapshot.areaWidth > 0 && mouse.x >= 0 && mouse.x < viewportW && mouse.y >= kHudHeight &&
         mouse.y < kHudHeight + viewportH) {
-        hoverX = static_cast<int>(std::floor((mouse.x + viewX) / tileSize));
-        hoverY = static_cast<int>(std::floor((mouse.y - kHudHeight + viewY) / tileSize));
+        hoverX = static_cast<int>(std::floor((mouse.x + viewX) / tileSizeF));
+        hoverY = static_cast<int>(std::floor((mouse.y - kHudHeight + viewY) / tileSizeF));
         hasHoverTile = hoverX >= 0 && hoverX < snapshot.areaWidth && hoverY >= 0 && hoverY < snapshot.areaHeight;
     }
 
@@ -82,16 +109,18 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     } else {
         BeginScissorMode(0, kHudHeight, viewportW, viewportH);
 
-        const int firstTileX = std::max(0, static_cast<int>(viewX) / tileSize);
-        const int firstTileY = std::max(0, static_cast<int>(viewY) / tileSize);
-        const int lastTileX = std::min(snapshot.areaWidth - 1, firstTileX + viewportW / tileSize + 1);
-        const int lastTileY = std::min(snapshot.areaHeight - 1, firstTileY + viewportH / tileSize + 1);
+        const int firstTileX = std::max(0, static_cast<int>(viewX / tileSizeF));
+        const int firstTileY = std::max(0, static_cast<int>(viewY / tileSizeF));
+        const int lastTileX =
+            std::min(snapshot.areaWidth - 1, firstTileX + static_cast<int>(viewportW / tileSizeF) + 1);
+        const int lastTileY =
+            std::min(snapshot.areaHeight - 1, firstTileY + static_cast<int>(viewportH / tileSizeF) + 1);
 
         for (int ty = firstTileY; ty <= lastTileY; ++ty) {
             for (int tx = firstTileX; tx <= lastTileX; ++tx) {
                 const std::size_t i = static_cast<std::size_t>(ty) * snapshot.areaWidth + tx;
-                const float screenX = static_cast<float>(tx * tileSize) - viewX;
-                const float screenY = static_cast<float>(ty * tileSize) - viewY + kHudHeight;
+                const float screenX = static_cast<float>(tx) * tileSizeF - viewX;
+                const float screenY = static_cast<float>(ty) * tileSizeF - viewY + kHudHeight;
 
                 DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
                               TileColors::soil(snapshot.moisture[i], snapshot.rockiness[i], snapshot.compaction[i]));
@@ -103,8 +132,8 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         }
 
         for (const auto& boulder : snapshot.boulders) {
-            const float screenX = static_cast<float>(boulder.first * tileSize) - viewX;
-            const float screenY = static_cast<float>(boulder.second * tileSize) - viewY + kHudHeight;
+            const float screenX = static_cast<float>(boulder.first) * tileSizeF - viewX;
+            const float screenY = static_cast<float>(boulder.second) * tileSizeF - viewY + kHudHeight;
             if (screenX + tileSize < 0 || screenX > viewportW || screenY + tileSize < kHudHeight ||
                 screenY > viewportH + kHudHeight) {
                 continue;
@@ -114,8 +143,8 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         }
 
         if (hasHoverTile) {
-            const float screenX = static_cast<float>(hoverX * tileSize) - viewX;
-            const float screenY = static_cast<float>(hoverY * tileSize) - viewY + kHudHeight;
+            const float screenX = static_cast<float>(hoverX) * tileSizeF - viewX;
+            const float screenY = static_cast<float>(hoverY) * tileSizeF - viewY + kHudHeight;
             DrawRectangleLines(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize, cursorColor);
         }
 
@@ -123,10 +152,12 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     }
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
-    DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   WASD-scroll  P-pause  Esc-menu",
+    DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   Zoom: %d%%   WASD-scroll  Wheel-zoom  "
+                         "P-pause  Esc-menu",
                          snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
                          static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
-                         static_cast<int>(viewX / tileSize), static_cast<int>(viewY / tileSize)),
+                         static_cast<int>(viewX / tileSizeF), static_cast<int>(viewY / tileSizeF),
+                         static_cast<int>(std::round(zoom * 100.0f))),
              10, 8, 16, textColor);
 
     // Сохранение — состояние мира целиком на текущем тике, поверх того же
