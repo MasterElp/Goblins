@@ -25,6 +25,10 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     static float viewX = 0.0f;
     static float viewY = 0.0f;
     static float zoom = 1.0f;
+    static bool showRockiness = true;
+    static bool showCompaction = true;
+    static bool showMoisture = true;
+    static bool confirmingExit = false;
 
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
@@ -46,34 +50,46 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     const float dt = GetFrameTime();
     const float scrollSpeedPx = static_cast<float>(config.scroll_step) * tileSizeF;
 
-    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
-    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
-    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) viewX -= scrollSpeedPx * dt;
-    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) viewX += scrollSpeedPx * dt;
+    // Пока открыт диалог подтверждения выхода, мир под ним не должен
+    // реагировать на ввод (прокрутка/зум/слои/пауза) — иначе клик по
+    // кнопке диалога совпадёт с движением камеры или сменой слоя позади.
+    if (!confirmingExit) {
+        if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
+        if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
+        if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) viewX -= scrollSpeedPx * dt;
+        if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) viewX += scrollSpeedPx * dt;
 
-    // Зум колёсиком мыши — к точке под курсором: мировая координата под
-    // курсором остаётся на месте, чтобы приближение/отдаление не
-    // "убегало" в сторону.
-    const float wheel = GetMouseWheelMove();
-    if (wheel != 0.0f) {
-        const Vector2 wheelMouse = GetMousePosition();
-        const float worldX = wheelMouse.x + viewX;
-        const float worldY = wheelMouse.y - kHudHeight + viewY;
+        // Зум колёсиком мыши — к точке под курсором: мировая координата под
+        // курсором остаётся на месте, чтобы приближение/отдаление не
+        // "убегало" в сторону.
+        const float wheel = GetMouseWheelMove();
+        if (wheel != 0.0f) {
+            const Vector2 wheelMouse = GetMousePosition();
+            const float worldX = wheelMouse.x + viewX;
+            const float worldY = wheelMouse.y - kHudHeight + viewY;
 
-        const float factor = wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep;
-        zoom = std::clamp(zoom * factor, kMinZoom, kMaxZoom);
-        tileSizeF = static_cast<float>(config.tile_size) * zoom;
+            const float factor = wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep;
+            zoom = std::clamp(zoom * factor, kMinZoom, kMaxZoom);
+            tileSizeF = static_cast<float>(config.tile_size) * zoom;
 
-        viewX = worldX * factor - wheelMouse.x;
-        viewY = worldY * factor - wheelMouse.y;
-    }
+            viewX = worldX * factor - wheelMouse.x;
+            viewY = worldY * factor - wheelMouse.y;
+        }
 
-    // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
-    // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
-    // подтверждения через pause_state/world_snapshot, чтобы все
-    // подключённые клиенты видели одно и то же состояние.
-    if (IsKeyPressed(KEY_P)) {
-        network.sendTogglePause();
+        // Слои почвы — каждый можно исключить из смешения цвета тайла
+        // (каменистость/плотность/влажность считаются нулевыми, если слой
+        // выключен); вода всегда рисуется поверх независимо от этих флагов.
+        if (IsKeyPressed(KEY_ONE)) showRockiness = !showRockiness;
+        if (IsKeyPressed(KEY_TWO)) showCompaction = !showCompaction;
+        if (IsKeyPressed(KEY_THREE)) showMoisture = !showMoisture;
+
+        // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
+        // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
+        // подтверждения через pause_state/world_snapshot, чтобы все
+        // подключённые клиенты видели одно и то же состояние.
+        if (IsKeyPressed(KEY_P)) {
+            network.sendTogglePause();
+        }
     }
 
     const WorldState snapshot = network.snapshot();
@@ -123,7 +139,9 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
                 const float screenY = static_cast<float>(ty) * tileSizeF - viewY + kHudHeight;
 
                 DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
-                              TileColors::soil(snapshot.moisture[i], snapshot.rockiness[i], snapshot.compaction[i]));
+                              TileColors::soil(showMoisture ? snapshot.moisture[i] : 0.0f,
+                                                showRockiness ? snapshot.rockiness[i] : 0.0f,
+                                                showCompaction ? snapshot.compaction[i] : 0.0f));
                 if (snapshot.waterDepth[i] > 0.0f) {
                     DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
                                   TileColors::water(snapshot.waterDepth[i]));
@@ -149,11 +167,27 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         }
 
         EndScissorMode();
+
+        // Статус слоёв почвы — под верхней панелью, слева: включённые
+        // слои белым, выключенные приглушённым серым, чтобы состояние
+        // читалось с одного взгляда.
+        const Color layerOnColor = textColor;
+        const Color layerOffColor{110, 110, 110, 255};
+        int layerX = 10;
+        const int layerY = kHudHeight + 6;
+        auto drawLayerLabel = [&](const char* label, bool enabled) {
+            const Color c = enabled ? layerOnColor : layerOffColor;
+            DrawText(label, layerX, layerY, 14, c);
+            layerX += MeasureText(label, 14) + 14;
+        };
+        drawLayerLabel("[1] Rockiness", showRockiness);
+        drawLayerLabel("[2] Compaction", showCompaction);
+        drawLayerLabel("[3] Moisture", showMoisture);
     }
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
     DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   Zoom: %d%%   WASD-scroll  Wheel-zoom  "
-                         "P-pause  Esc-menu",
+                         "1/2/3-layers  P-pause  Esc-menu",
                          snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
                          static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
                          static_cast<int>(viewX / tileSizeF), static_cast<int>(viewY / tileSizeF),
@@ -164,6 +198,7 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     // файла, из которого мир загружен (а если он ещё безымянный — в
     // новый). Сам мир при этом не останавливается: сервер сохраняет между
     // тиками.
+    if (confirmingExit) GuiLock();
     const bool savePressed =
         GuiButton(Rectangle{static_cast<float>(screenW) - 220, 2, 100, kHudHeight - 4}, "Save world");
     if (savePressed) {
@@ -171,6 +206,7 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     }
 
     bool backPressed = GuiButton(Rectangle{static_cast<float>(screenW) - 110, 2, 100, kHudHeight - 4}, "Back (Esc)");
+    if (confirmingExit) GuiUnlock();
 
     // Параметры тайла под курсором — по нижнему краю справа, как на
     // экране генерации: в верхней полосе их теснят имя мира и кнопки.
@@ -198,9 +234,53 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         DrawText(pausedLabel, viewportW / 2 - labelWidth / 2, kHudHeight + 12, 24, pausedColor);
     }
 
-    if (backPressed || IsKeyPressed(KEY_ESCAPE)) {
-        network.sendStopSimulation();
-        return AppScreen::MainMenu;
+    // Выход всегда идёт через подтверждение: несохранённые изменения
+    // мира иначе легко потерять случайным Esc/Back. Esc, открывший
+    // диалог, не должен в тот же кадр его же и закрыть — поэтому это
+    // if/else, а не два независимых if с одним и тем же нажатием.
+    const bool escapePressed = IsKeyPressed(KEY_ESCAPE);
+    if (!confirmingExit) {
+        if (backPressed || escapePressed) {
+            confirmingExit = true;
+        }
+    } else if (escapePressed) {
+        confirmingExit = false;
+    }
+
+    if (confirmingExit) {
+        DrawRectangle(0, 0, screenW, screenH, Color{0, 0, 0, 150});
+
+        const int boxW = 380;
+        const int boxH = 130;
+        const int boxX = screenW / 2 - boxW / 2;
+        const int boxY = screenH / 2 - boxH / 2;
+        DrawRectangle(boxX, boxY, boxW, boxH, hudColor);
+        DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
+        DrawText("Save world before exiting?", boxX + 20, boxY + 16, 18, textColor);
+
+        const bool saveExit =
+            GuiButton(Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 56, 160, 30},
+                      "Save & Exit");
+        const bool discardExit =
+            GuiButton(Rectangle{static_cast<float>(boxX) + 200, static_cast<float>(boxY) + 56, 160, 30},
+                      "Discard & Exit");
+        const bool cancelExit = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 94, 340, 26}, "Cancel (Esc)");
+
+        if (saveExit) {
+            network.sendSaveWorld();
+            network.sendStopSimulation();
+            confirmingExit = false;
+            return AppScreen::MainMenu;
+        }
+        if (discardExit) {
+            network.sendStopSimulation();
+            confirmingExit = false;
+            return AppScreen::MainMenu;
+        }
+        if (cancelExit) {
+            confirmingExit = false;
+        }
     }
     return AppScreen::Simulation;
 }
