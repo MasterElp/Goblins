@@ -16,8 +16,15 @@ constexpr float kRowGap = 6.0f;
 // Строка списка: имя мира крупно, под ним — чем этот мир отличается от
 // соседнего (тик, размер Области, seed, когда сохранён). Сама строка —
 // кнопка целиком (текст рисуем поверх), чтобы попадать по ней мышью не
-// целясь в маленькую "Load".
-bool worldRow(Rectangle bounds, const goblins::WorldSaveInfo& world, bool isCurrent) {
+// целясь в маленькую "Load". Кнопка "Delete" рисуется поверх той же
+// строки в отдельном углу — при клике по ней клик по строке-кнопке
+// (raygui не знает про z-order ввода) отбрасывается вызывающей стороной.
+struct RowClick {
+    bool load = false;
+    bool remove = false;
+};
+
+RowClick worldRow(Rectangle bounds, const goblins::WorldSaveInfo& world, bool isCurrent) {
     // Строка рисуется поверх кнопки raygui, а она светлая — цвета текста
     // здесь тёмные, в отличие от остальных экранов, где текст лежит на
     // тёмном фоне окна.
@@ -25,7 +32,7 @@ bool worldRow(Rectangle bounds, const goblins::WorldSaveInfo& world, bool isCurr
     const Color mutedColor{95, 95, 100, 255};
     const Color currentColor{170, 105, 0, 255};
 
-    const bool clicked = GuiButton(bounds, "");
+    const bool rowClicked = GuiButton(bounds, "");
 
     DrawText(world.name.c_str(), static_cast<int>(bounds.x) + 12, static_cast<int>(bounds.y) + 8, 20,
              isCurrent ? currentColor : textColor);
@@ -35,11 +42,17 @@ bool worldRow(Rectangle bounds, const goblins::WorldSaveInfo& world, bool isCurr
              static_cast<int>(bounds.x) + 12, static_cast<int>(bounds.y) + 34, 14, mutedColor);
 
     const char* action = world.tick == 0 ? "Play (as generated)" : "Continue";
-    const int actionWidth = MeasureText(action, 16);
-    DrawText(action, static_cast<int>(bounds.x + bounds.width) - actionWidth - 14, static_cast<int>(bounds.y) + 20, 16,
+    const int actionWidth = MeasureText(action, 14);
+    DrawText(action, static_cast<int>(bounds.x + bounds.width) - actionWidth - 14, static_cast<int>(bounds.y) + 8, 14,
              mutedColor);
 
-    return clicked;
+    const Rectangle deleteRect{bounds.x + bounds.width - 82, bounds.y + bounds.height - 28, 70, 20};
+    const bool deleteClicked = GuiButton(deleteRect, "Delete");
+
+    RowClick result;
+    result.remove = deleteClicked;
+    result.load = rowClicked && !deleteClicked;
+    return result;
 }
 
 } // namespace
@@ -47,6 +60,9 @@ bool worldRow(Rectangle bounds, const goblins::WorldSaveInfo& world, bool isCurr
 AppScreen draw(NetworkClient& network) {
     // Прокрутка списка персистентна между кадрами, пока экран активен.
     static Vector2 scroll{0, 0};
+    // Имя мира, который сейчас предлагается удалить (диалог
+    // подтверждения) — пусто, если диалог закрыт.
+    static std::string pendingDelete;
 
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
@@ -61,9 +77,19 @@ AppScreen draw(NetworkClient& network) {
     DrawText("Simulation always runs a saved world: pick one to continue, or create a new one.", 30, 60, 16,
              mutedColor);
 
+    // Пока открыт диалог подтверждения удаления, фон не должен реагировать
+    // на клики (Back/строки списка) под ним; Esc в этом состоянии
+    // закрывает диалог, а не уходит в меню.
+    if (!pendingDelete.empty()) GuiLock();
     const bool backPressed = GuiButton(Rectangle{static_cast<float>(screenW) - 140, 24, 110, 32}, "Back (Esc)");
-    if (backPressed || IsKeyPressed(KEY_ESCAPE)) {
-        return AppScreen::MainMenu;
+    if (!pendingDelete.empty()) GuiUnlock();
+    const bool escapePressed = IsKeyPressed(KEY_ESCAPE);
+    if (pendingDelete.empty()) {
+        if (backPressed || escapePressed) {
+            return AppScreen::MainMenu;
+        }
+    } else if (escapePressed) {
+        pendingDelete.clear();
     }
 
     const WorldState snapshot = network.snapshot();
@@ -88,6 +114,7 @@ AppScreen draw(NetworkClient& network) {
         return AppScreen::Simulation;
     }
 
+    if (!pendingDelete.empty()) GuiLock();
     if (GuiButton(Rectangle{30, 92, 220, 34}, "New world")) {
         network.sendStartSimulation();
         return AppScreen::Simulation;
@@ -117,15 +144,45 @@ AppScreen draw(NetworkClient& network) {
         if (row.y + row.height < view.y || row.y > view.y + view.height) {
             continue;
         }
-        if (worldRow(row, snapshot.worlds[i], snapshot.worlds[i].name == snapshot.currentWorld)) {
+        const RowClick click = worldRow(row, snapshot.worlds[i], snapshot.worlds[i].name == snapshot.currentWorld);
+        if (click.load) {
             selected = snapshot.worlds[i].name;
+        }
+        if (click.remove) {
+            pendingDelete = snapshot.worlds[i].name;
         }
     }
 
     EndScissorMode();
+    if (!pendingDelete.empty()) GuiUnlock();
 
     if (hasFreshNotice(snapshot)) {
         DrawText(snapshot.notice.c_str(), 30, screenH - 34, 16, snapshot.noticeIsError ? errorColor : mutedColor);
+    }
+
+    if (!pendingDelete.empty()) {
+        DrawRectangle(0, 0, screenW, screenH, Color{0, 0, 0, 150});
+
+        const int boxW = 420;
+        const int boxH = 130;
+        const int boxX = screenW / 2 - boxW / 2;
+        const int boxY = screenH / 2 - boxH / 2;
+        DrawRectangle(boxX, boxY, boxW, boxH, Color{18, 18, 20, 255});
+        DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
+        DrawText(TextFormat("Delete world '%s'? This cannot be undone.", pendingDelete.c_str()), boxX + 20,
+                 boxY + 16, 16, textColor);
+
+        const bool confirmDelete = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 56, 180, 30}, "Delete");
+        const bool cancelDelete = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 220, static_cast<float>(boxY) + 56, 180, 30}, "Cancel (Esc)");
+
+        if (confirmDelete) {
+            network.sendDeleteWorld(pendingDelete);
+            pendingDelete.clear();
+        } else if (cancelDelete) {
+            pendingDelete.clear();
+        }
     }
 
     if (!selected.empty()) {

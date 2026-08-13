@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 
 #include <nlohmann/json.hpp>
 #include <raygui.h>
@@ -30,6 +32,11 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     static bool showMoisture = true;
     static bool showMinerals = true;
     static bool confirmingExit = false;
+    // Диалог ввода имени при сохранении — открывается кнопкой "Save
+    // world", буфер предзаполняется именем текущего мира (пусто, если
+    // мир ещё не сохранён).
+    static bool showSaveDialog = false;
+    static char saveNameBuffer[64] = "";
 
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
@@ -51,10 +58,11 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     const float dt = GetFrameTime();
     const float scrollSpeedPx = static_cast<float>(config.scroll_step) * tileSizeF;
 
-    // Пока открыт диалог подтверждения выхода, мир под ним не должен
-    // реагировать на ввод (прокрутка/зум/слои/пауза) — иначе клик по
-    // кнопке диалога совпадёт с движением камеры или сменой слоя позади.
-    if (!confirmingExit) {
+    // Пока открыт диалог подтверждения выхода или диалог сохранения, мир
+    // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —
+    // иначе клик по кнопке диалога совпадёт с движением камеры или сменой
+    // слоя позади, а буквенные клавиши при вводе имени — с WASD/P/1-4.
+    if (!confirmingExit && !showSaveDialog) {
         if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
         if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
         if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) viewX -= scrollSpeedPx * dt;
@@ -204,16 +212,19 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     // Сохранение — состояние мира целиком на текущем тике, поверх того же
     // файла, из которого мир загружен (а если он ещё безымянный — в
     // новый). Сам мир при этом не останавливается: сервер сохраняет между
-    // тиками.
-    if (confirmingExit) GuiLock();
+    // тиками. Кнопка открывает диалог с именем вместо немедленного
+    // сохранения — так можно и сохранить под текущим именем (просто
+    // нажать Save), и сделать копию мира под новым.
+    if (confirmingExit || showSaveDialog) GuiLock();
     const bool savePressed =
         GuiButton(Rectangle{static_cast<float>(screenW) - 220, 2, 100, kHudHeight - 4}, "Save world");
     if (savePressed) {
-        network.sendSaveWorld();
+        std::snprintf(saveNameBuffer, sizeof(saveNameBuffer), "%s", snapshot.currentWorld.c_str());
+        showSaveDialog = true;
     }
 
     bool backPressed = GuiButton(Rectangle{static_cast<float>(screenW) - 110, 2, 100, kHudHeight - 4}, "Back (Esc)");
-    if (confirmingExit) GuiUnlock();
+    if (confirmingExit || showSaveDialog) GuiUnlock();
 
     // Параметры тайла под курсором — по нижнему краю справа, как на
     // экране генерации: в верхней полосе их теснят имя мира и кнопки.
@@ -244,14 +255,47 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     // Выход всегда идёт через подтверждение: несохранённые изменения
     // мира иначе легко потерять случайным Esc/Back. Esc, открывший
     // диалог, не должен в тот же кадр его же и закрыть — поэтому это
-    // if/else, а не два независимых if с одним и тем же нажатием.
+    // if/else, а не независимые if с одним и тем же нажатием. Диалог
+    // имени при сохранении имеет приоритет: Esc в нём просто отменяет
+    // ввод имени, а не открывает диалог выхода.
     const bool escapePressed = IsKeyPressed(KEY_ESCAPE);
-    if (!confirmingExit) {
+    if (showSaveDialog) {
+        if (escapePressed) {
+            showSaveDialog = false;
+        }
+    } else if (!confirmingExit) {
         if (backPressed || escapePressed) {
             confirmingExit = true;
         }
     } else if (escapePressed) {
         confirmingExit = false;
+    }
+
+    if (showSaveDialog) {
+        DrawRectangle(0, 0, screenW, screenH, Color{0, 0, 0, 150});
+
+        const int boxW = 380;
+        const int boxH = 130;
+        const int boxX = screenW / 2 - boxW / 2;
+        const int boxY = screenH / 2 - boxH / 2;
+        DrawRectangle(boxX, boxY, boxW, boxH, hudColor);
+        DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
+        DrawText("Save world as:", boxX + 20, boxY + 16, 18, textColor);
+
+        GuiTextBox(Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 44, 340, 28}, saveNameBuffer,
+                   sizeof(saveNameBuffer), true);
+
+        const bool confirmSave = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 84, 160, 30}, "Save");
+        const bool cancelSave = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 200, static_cast<float>(boxY) + 84, 160, 30}, "Cancel (Esc)");
+
+        if (confirmSave || (IsKeyPressed(KEY_ENTER) && std::strlen(saveNameBuffer) > 0)) {
+            network.sendSaveWorld(saveNameBuffer);
+            showSaveDialog = false;
+        } else if (cancelSave) {
+            showSaveDialog = false;
+        }
     }
 
     if (confirmingExit) {
