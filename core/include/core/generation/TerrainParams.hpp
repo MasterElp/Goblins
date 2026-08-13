@@ -77,13 +77,17 @@ struct TerrainParams {
     // "родников" в случайных точках карты. waterEvaporationRate и
     // waterSourceStrength — тоже свойства мира (как mineralMoistureThreshold
     // выше): выбираются здесь, при генерации, и HydrologySystem их
-    // только читает. Маленький waterEvaporationRate и большой
-    // waterSourceStrength по умолчанию — испарение действует на каждую
-    // водную клетку карты (их могут быть тысячи), а источников всегда
-    // единицы, поэтому баланс просит именно такую асимметрию.
+    // только читает. waterSourceStrength — абсолютный приток (глубина за
+    // тик), не множитель waterEvaporationRate: не должен зависеть от
+    // того, насколько маленькое испарение настроено.
     int waterSourceCount = 3;
-    float waterEvaporationRate = 0.002f;
-    float waterSourceStrength = 40.0f;
+    float waterEvaporationRate = 0.00004f;
+    float waterSourceStrength = 0.05f;
+
+    // Скорость растекания воды (см. WorldPropertiesComponent) — тоже
+    // свойство мира: выбирается здесь, при генерации, HydrologySystem
+    // только читает.
+    float waterFlowRate = 0.3f;
 };
 
 } // namespace goblins

@@ -90,15 +90,20 @@ struct TerrainConfig {
 
     // Источники воды (WaterSourceComponent): сколько "родников" в
     // случайных точках карты (плюс автоматически — по одному на исток
-    // каждой реки). water_evaporation_rate/water_source_strength — тоже
-    // свойства мира, как mineral_moisture_threshold — см.
-    // core::TerrainParams::waterSourceCount/waterEvaporationRate/
-    // waterSourceStrength. Испарение маленькое, а сила источников — на
-    // порядки больше единицы: испарение действует на каждую водную клетку
-    // карты (их могут быть тысячи), а источников всегда единицы.
+    // каждой реки). water_evaporation_rate/water_source_strength/
+    // water_flow_rate — тоже свойства мира, как mineral_moisture_threshold
+    // — см. core::TerrainParams::waterSourceCount/waterEvaporationRate/
+    // waterSourceStrength/waterFlowRate. water_source_strength —
+    // абсолютный приток (глубина за тик), не множитель
+    // water_evaporation_rate: не должен зависеть от того, насколько
+    // маленькое испарение настроено.
     int water_source_count = 3;
-    float water_evaporation_rate = 0.002f;
-    float water_source_strength = 40.0f;
+    float water_evaporation_rate = 0.00004f;
+    float water_source_strength = 0.05f;
+
+    // Доля разницы уровней поверхности, перетекающая к самому низкому
+    // соседу за тик — см. core::TerrainParams::waterFlowRate.
+    float water_flow_rate = 0.3f;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_frequency, rock_noise_frequency,
                                     compaction_noise_frequency, moisture_noise_frequency, minerals_noise_frequency,
@@ -108,7 +113,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_freq
                                     pond_depth_scale, moisture_falloff, water_moisture_boost,
                                     rock_moisture_reduction, minerals_average, river_minerals,
                                     mineral_moisture_threshold, water_source_count, water_evaporation_rate,
-                                    water_source_strength)
+                                    water_source_strength, water_flow_rate)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";

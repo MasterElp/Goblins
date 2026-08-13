@@ -763,6 +763,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     worldProperties.mineralMoistureThreshold = params.mineralMoistureThreshold;
     worldProperties.waterEvaporationRate = params.waterEvaporationRate;
     worldProperties.waterSourceStrength = params.waterSourceStrength;
+    worldProperties.waterFlowRate = params.waterFlowRate;
 
     stats.totalMs = elapsedMs(totalStart);
     return stats;

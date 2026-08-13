@@ -54,6 +54,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.waterSourceCount = config.water_source_count;
     params.waterEvaporationRate = config.water_evaporation_rate;
     params.waterSourceStrength = config.water_source_strength;
+    params.waterFlowRate = config.water_flow_rate;
     return params;
 }
 

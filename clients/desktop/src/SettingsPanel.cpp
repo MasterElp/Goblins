@@ -69,16 +69,24 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // симуляции HydrologySystem его больше не меняет.
     ops.floatRow("Moisture threshold", edited.terrain.mineral_moisture_threshold, 0.0f, 1.0f);
 
+    ops.section("Water flow");
+    // Свойство мира (06_GameLoop.md, п.1a): доля разницы уровней
+    // поверхности, перетекающая к самому низкому соседу за тик — больше
+    // значение, быстрее вода растекается/заполняет впадины (и быстрее
+    // приток от источника расходится по руслу, а не скапливается рядом с
+    // истоком).
+    ops.floatRow("Flow rate", edited.terrain.water_flow_rate, 0.0f, 1.0f);
+
     ops.section("Water sources");
     ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
-    // Оба — свойства мира (06_GameLoop.md, п.1a), как порог минералов
-    // выше. Испарение действует на КАЖДУЮ водную клетку карты (их могут
-    // быть тысячи на 100x100), а источников — единицы, поэтому сила
-    // источника по умолчанию на порядки больше единицы: она должна
-    // перекрыть испарение не только у себя, но и у всей воды, которую
-    // питает.
-    ops.floatRow("Evaporation rate", edited.terrain.water_evaporation_rate, 0.0f, 0.02f);
-    ops.floatRow("Source strength", edited.terrain.water_source_strength, 1.0f, 200.0f);
+    // Оба — свойства мира, как порог минералов выше. precision=6 у
+    // Evaporation rate — иначе такое маленькое значение читалось бы как
+    // "0.0000". Source strength — АБСОЛЮТНЫЙ приток (глубина за тик), не
+    // множитель Evaporation rate (было так раньше — и при маленьком
+    // испарении даже огромный множитель давал ничтожный приток, источник
+    // не мог угнаться за собственным оттоком через течение).
+    ops.floatRow("Evaporation rate", edited.terrain.water_evaporation_rate, 0.0f, 0.001f, 6);
+    ops.floatRow("Source strength", edited.terrain.water_source_strength, 0.0f, 2.0f);
 }
 
 // Только считает высоту, ничего не рисует — используется до
@@ -87,7 +95,10 @@ struct MeasureOps {
     float height = 0.0f;
 
     void section(const char*) { height += kRowHeight + kSectionGap; }
-    void floatRow(const char*, float&, float, float) { height += kRowHeight; }
+    void floatRow(const char*, float&, float, float, int precision = 4) {
+        (void)precision;
+        height += kRowHeight;
+    }
     void intRow(const char*, int&, int, int) { height += kRowHeight; }
     void unsignedSeedRow(const char*, unsigned&) { height += kRowHeight; }
 };
@@ -105,8 +116,12 @@ struct DrawOps {
         y += kRowHeight + kSectionGap;
     }
 
-    void floatRow(const char* label, float& value, float lo, float hi) {
-        GuiLabel(Rectangle{x, y, rowWidth, 18}, TextFormat("%s: %.4f", label, value));
+    // precision — знаков после запятой в подписи; по умолчанию 4 хватает
+    // почти всем параметрам, но у совсем маленьких (например,
+    // water_evaporation_rate, доли тысячной) %.4f показал бы "0.0000" —
+    // неотличимо от нуля.
+    void floatRow(const char* label, float& value, float lo, float hi, int precision = 4) {
+        GuiLabel(Rectangle{x, y, rowWidth, 18}, TextFormat("%s: %.*f", label, precision, value));
         GuiSliderBar(Rectangle{x, y + 20, rowWidth, kRowHeight - 24}, nullptr, nullptr, &value, lo, hi);
         y += kRowHeight;
     }

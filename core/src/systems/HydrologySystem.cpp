@@ -37,11 +37,6 @@ constexpr float kCompactionRockFloor = 0.6f;
 constexpr float kCompactionSoftenReach = 4.0f;
 constexpr float kCompactionSoftenRate = 0.02f;
 
-// Течение: доля "избытка" (половины разницы уровней поверхности) воды,
-// перетекающая к самому низкому соседу за тик — маленькая, чтобы форма
-// водоёмов менялась постепенно, а не скачками.
-constexpr float kFlowRate = 0.03f;
-
 // Эрозия сопровождает перенос воды: источник теряет высоту, приёмник
 // получает ровно столько же (сохранение "материала", без источников из
 // ниоткуда) — масштабируется каменистостью (сопротивляется эрозии) и текущей
@@ -87,6 +82,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const float mineralMoistureThreshold = worldProperties.mineralMoistureThreshold;
     const float waterEvaporationRate = worldProperties.waterEvaporationRate;
     const float waterSourceStrength = worldProperties.waterSourceStrength;
+    const float waterFlowRate = worldProperties.waterFlowRate;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -216,7 +212,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
         const std::size_t j = static_cast<std::size_t>(bestNeighbor);
         const float diff = surface - bestSurface;
-        const float amount = std::min(waterDepth[i], diff * 0.5f) * kFlowRate;
+        const float amount = std::min(waterDepth[i], diff * 0.5f) * waterFlowRate;
         if (amount <= 0.0f) {
             continue;
         }
@@ -235,19 +231,20 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // --- 5b. Испарение + источники: независимые правки поверх nextWaterDepth
     // из течения выше — каждый тик всякая вода теряет waterEvaporationRate
     // глубины, а источники (истоки рек, "родники") получают приток
-    // waterEvaporationRate * waterSourceStrength — свойства мира, обе
-    // читаются выше, не константы (06_GameLoop.md, п.1a). Испарение
-    // действует на каждую водную клетку карты (их могут быть тысячи), а
-    // источников — единицы, поэтому waterSourceStrength по умолчанию на
-    // порядок больше, чем можно было бы подумать "по одной клетке". Оба
-    // читают снимок (waterDepth/isWaterSource), не друг друга и не
-    // результат течения — порядок клеток не важен. ---
+    // waterSourceStrength — свойства мира, обе читаются выше, не константы
+    // (06_GameLoop.md, п.1a). waterSourceStrength — АБСОЛЮТНАЯ величина, не
+    // множитель waterEvaporationRate: раньше была множителем, и при
+    // маленьком испарении (по умолчанию) источник не мог угнаться за
+    // собственным оттоком через течение выше — глубина проседала почти до
+    // нуля независимо от того, насколько увеличивали "силу". Оба читают
+    // снимок (waterDepth/isWaterSource), не друг друга и не результат
+    // течения — порядок клеток не важен. ---
     for (std::size_t i = 0; i < cellCount; ++i) {
         if (waterDepth[i] > 0.0f) {
             nextWaterDepth[i] -= waterEvaporationRate;
         }
         if (isWaterSource[i]) {
-            nextWaterDepth[i] += waterEvaporationRate * waterSourceStrength;
+            nextWaterDepth[i] += waterSourceStrength;
         }
     }
 
