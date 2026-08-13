@@ -11,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/components/HeightComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -55,6 +56,10 @@ struct ParsedEntity {
     PositionComponent position{};
     bool hasSoil = false;
     SoilComponent soil{};
+    // Не разделяем на hasHeight: высота всегда идёт в паре с почвой
+    // (parsed.hasSoil), а для старых сохранений без поля "height" уже есть
+    // безопасное значение по умолчанию — 0.0f.
+    float height = 0.0f;
     bool hasWater = false;
     WaterComponent water{};
     bool impassable = false;
@@ -82,6 +87,9 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["soil"] = {{"moisture", soil->moisture},
                               {"rockiness", soil->rockiness},
                               {"compaction", soil->compaction}};
+        }
+        if (const auto* heightComponent = registry.try_get<HeightComponent>(entity)) {
+            record["height"] = heightComponent->height;
         }
         if (const auto* water = registry.try_get<WaterComponent>(entity)) {
             record["water"] = {{"depth", water->depth}, {"flow_speed", water->flowSpeed}};
@@ -139,6 +147,7 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.soil.rockiness = record["soil"].value("rockiness", 0.0f);
             parsed.soil.compaction = record["soil"].value("compaction", 0.0f);
         }
+        parsed.height = record.value("height", 0.0f);
         if (record.contains("water")) {
             parsed.hasWater = true;
             parsed.water.depth = record["water"].value("depth", 0.0f);
@@ -413,6 +422,10 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         }
         if (parsed.hasSoil) {
             world.registry().emplace<SoilComponent>(entity, parsed.soil);
+            // Высота всегда идёт в паре с почвой на террейн-Entity, как и
+            // при генерации; в старых сохранениях без поля "height" —
+            // 0.0f (плоский рельеф), см. WorldSave.hpp.
+            world.registry().emplace<HeightComponent>(entity, HeightComponent{parsed.height});
         }
         if (parsed.hasWater) {
             world.registry().emplace<WaterComponent>(entity, parsed.water);

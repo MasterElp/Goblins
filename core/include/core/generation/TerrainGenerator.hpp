@@ -68,7 +68,8 @@ struct GenerationStats {
 // одного зашитого значения внутри .cpp.
 //
 // Создаёт один терраформирующий Entity на тайл: PositionComponent +
-// SoilComponent, и WaterComponent — там, где есть река или пруд.
+// SoilComponent + HeightComponent, и WaterComponent — там, где есть река или
+// пруд.
 //
 // Возвращает статистику вызова (GenerationStats) — вызывающая сторона
 // (server) печатает её в консоль как единственный источник диагностики:

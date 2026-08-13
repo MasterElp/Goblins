@@ -12,6 +12,7 @@
 
 #include <fastnoiselite/FastNoiseLite.h>
 
+#include "core/components/HeightComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -699,6 +700,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const auto entity = world.registry().create();
             world.registry().emplace<PositionComponent>(entity, PositionComponent{x, y});
             world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, rockiness[i], compaction[i]});
+            world.registry().emplace<HeightComponent>(entity, HeightComponent{elevation[i]});
             if (waterDepth[i] > 0.0f) {
                 world.registry().emplace<WaterComponent>(entity, WaterComponent{waterDepth[i], flowSpeed[i]});
             }

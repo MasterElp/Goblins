@@ -14,6 +14,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/generation/BoulderScatter.hpp"
 #include "core/generation/TerrainGenerator.hpp"
+#include "core/systems/HydrologySystem.hpp"
 #include "core/systems/TimeSystem.hpp"
 #include "server/NetworkServer.hpp"
 #include "server/WorldSave.hpp"
@@ -145,8 +146,10 @@ int main(int argc, char** argv) {
     // работает независимо от старта симуляции).
     goblins::World world(config.area.width, config.area.height);
 
-    // Игровой цикл: один тик = TimeSystem, затем разрешение очереди команд
-    // (06_GameLoop.md, п.2). Интервал тика — из конфигурации. Создаётся до
+    // Игровой цикл: один тик = TimeSystem, затем HydrologySystem (почва и
+    // вода — 06_GameLoop.md, п.3: порядок систем фиксирован), затем
+    // разрешение очереди команд (06_GameLoop.md, п.2). Интервал тика — из
+    // конфигурации. Создаётся до
     // NetworkServer, потому что тот получает ссылку на loop.paused и
     // управляет им напрямую по команде клиента. Стартует на паузе — до
     // start_simulation мир не сгенерирован, тикать нечего.
@@ -171,6 +174,7 @@ int main(int argc, char** argv) {
     std::cout << "WebSocket server listening on ws://" << config.host << ":" << config.port << "\n\n";
 
     loop.addSystem(goblins::TimeSystem);
+    loop.addSystem(goblins::HydrologySystem);
     loop.onTickComplete = [&](const goblins::World& w) {
         const auto& time = w.registry().get<const goblins::TimeComponent>(w.worldEntity());
         std::cout << "Tick #" << time.tick << std::endl;

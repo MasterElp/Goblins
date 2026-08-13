@@ -29,9 +29,14 @@ namespace goblins {
 //    "generation": RegenerationRequest,
 //    "entities": [ {"position": {"x","y"},
 //                   "soil": {"moisture","rockiness","compaction"},
+//                   "height": H,
 //                   "water": {"depth","flow_speed"},
 //                   "impassable": true,
 //                   "time": {"tick": N}}, ... ]}
+//
+// "height" (HeightComponent) добавлено без смены версии формата: старые
+// файлы без этого поля читаются как есть (высота считается 0 — плоский
+// рельеф), HydrologySystem корректно работает и без начального градиента.
 //
 // Сохраняется полное состояние мира — все Entity со всеми компонентами,
 // включая World Entity с TimeComponent (запись с ключом "time"), а не

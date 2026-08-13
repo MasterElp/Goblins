@@ -1,5 +1,6 @@
 add_library(core STATIC
     src/systems/TimeSystem.cpp
+    src/systems/HydrologySystem.cpp
     src/generation/BoulderScatter.cpp
     src/generation/TerrainGenerator.cpp
 )
