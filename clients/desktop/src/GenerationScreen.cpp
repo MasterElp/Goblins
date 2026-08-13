@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
-#include <cstring>
 
 #include <raygui.h>
 #include <raylib.h>
@@ -18,12 +16,6 @@ constexpr float kTopBarHeight = 40.0f;
 } // namespace
 
 AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
-    // Диалог ввода имени при сохранении — тот же паттерн, что и на экране
-    // симуляции (SimulationScreen): буфер предзаполняется именем текущего
-    // мира, пока диалог открыт.
-    static bool showSaveDialog = false;
-    static char saveNameBuffer[64] = "";
-
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
 
@@ -37,19 +29,17 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
 
     const WorldState snapshot = network.snapshot();
 
-    // Сохранить то, что сейчас на экране, как отдельный мир: только что
-    // сгенерированный мир всегда стоит на нулевом тике, поэтому в списке
-    // миров он появится ровно в том состоянии, в каком его видно здесь.
-    if (showSaveDialog) GuiLock();
-    const bool savePressed =
-        GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 240, 6, 120, 28}, "Save as world");
-    if (savePressed) {
-        std::snprintf(saveNameBuffer, sizeof(saveNameBuffer), "%s", snapshot.currentWorld.c_str());
-        showSaveDialog = true;
+    // Пуск/остановка симуляции прямо здесь: подбор параметров генерации
+    // точнее, когда HydrologySystem не размывает только что
+    // сгенерированную почву/воду между двумя правками ползунка. Тот же
+    // paused, что и на экране симуляции (один мир, один флаг паузы на
+    // сервере) — Stop останавливает его так же, как P на экране симуляции.
+    if (GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 250, 6, 130, 28},
+                  snapshot.paused ? "Start" : "Stop")) {
+        network.sendTogglePause();
     }
     const bool backPressed =
         GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 110, 6, 100, 28}, "Back (Esc)");
-    if (showSaveDialog) GuiUnlock();
     if (snapshot.hasGeneration) {
         panel.loadFrom(snapshot.generation);
     }
@@ -134,8 +124,9 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
 
         EndScissorMode();
 
-        DrawText(TextFormat("Area: %dx%d   Tile: %dpx", snapshot.areaWidth, snapshot.areaHeight, tileSize), 12,
-                 static_cast<int>(kTopBarHeight) + 4, 14, mutedColor);
+        DrawText(TextFormat("Area: %dx%d   Tile: %dpx   %s", snapshot.areaWidth, snapshot.areaHeight, tileSize,
+                             snapshot.paused ? "PAUSED" : "RUNNING"),
+                 12, static_cast<int>(kTopBarHeight) + 4, 14, mutedColor);
     }
 
     if (hasHoverTile) {
@@ -151,66 +142,20 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
         DrawText(label.c_str(), 12, screenH - 22, 16, cursorColor);
     }
 
-    // Ответ сервера на "Save as world" — иначе кнопка выглядела бы
-    // ничего не делающей.
-    if (hasFreshNotice(snapshot)) {
-        DrawText(snapshot.notice.c_str(), 12, screenH - 44, 16,
-                 snapshot.noticeIsError ? Color{230, 110, 110, 255} : mutedColor);
-    }
-
     goblins::RegenerationRequest regenerateRequest;
     bool saveRequested = false;
     const Rectangle panelBounds{static_cast<float>(screenW) - kPanelWidth, 0, kPanelWidth,
                                  static_cast<float>(screenH)};
-    if (showSaveDialog) GuiLock();
-    const bool regeneratePressed = panel.draw(panelBounds, regenerateRequest, saveRequested);
-    if (showSaveDialog) GuiUnlock();
-    if (regeneratePressed) {
+    if (panel.draw(panelBounds, regenerateRequest, saveRequested)) {
         network.sendRegenerate(regenerateRequest);
     }
     if (saveRequested) {
         network.sendSaveGenerationConfig();
     }
 
-    // Esc, открывший диалог сохранения, не должен в тот же кадр его же и
-    // закрыть — поэтому это if/else, а не независимые if с одним и тем же
-    // нажатием (см. тот же паттерн в SimulationScreen).
-    const bool escapePressed = IsKeyPressed(KEY_ESCAPE);
-    if (showSaveDialog) {
-        if (escapePressed) {
-            showSaveDialog = false;
-        }
-    } else if (backPressed || escapePressed) {
+    if (backPressed || IsKeyPressed(KEY_ESCAPE)) {
         return AppScreen::MainMenu;
     }
-
-    if (showSaveDialog) {
-        DrawRectangle(0, 0, screenW, screenH, Color{0, 0, 0, 150});
-
-        const int boxW = 380;
-        const int boxH = 130;
-        const int boxX = screenW / 2 - boxW / 2;
-        const int boxY = screenH / 2 - boxH / 2;
-        DrawRectangle(boxX, boxY, boxW, boxH, Color{18, 18, 20, 255});
-        DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
-        DrawText("Save world as:", boxX + 20, boxY + 16, 18, textColor);
-
-        GuiTextBox(Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 44, 340, 28}, saveNameBuffer,
-                   sizeof(saveNameBuffer), true);
-
-        const bool confirmSave = GuiButton(
-            Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 84, 160, 30}, "Save");
-        const bool cancelSave = GuiButton(
-            Rectangle{static_cast<float>(boxX) + 200, static_cast<float>(boxY) + 84, 160, 30}, "Cancel (Esc)");
-
-        if (confirmSave || (IsKeyPressed(KEY_ENTER) && std::strlen(saveNameBuffer) > 0)) {
-            network.sendSaveWorld(saveNameBuffer);
-            showSaveDialog = false;
-        } else if (cancelSave) {
-            showSaveDialog = false;
-        }
-    }
-
     return AppScreen::WorldGeneration;
 }
 

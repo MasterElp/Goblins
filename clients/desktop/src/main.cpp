@@ -1,4 +1,6 @@
+#include <chrono>
 #include <string>
+#include <thread>
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <raylib.h>
@@ -71,6 +73,18 @@ int main(int argc, char** argv) {
     }
 
     CloseWindow();
+
+    // Закрытие окна (крестик/Alt+F4) не проходит через кнопку "Back" ни на
+    // экране симуляции, ни на экране генерации (там теперь тоже можно
+    // запустить мир кнопкой Start) — без этого сервер продолжил бы тикать
+    // мир, за которым уже никто не наблюдает. Безусловно и безопасно:
+    // stop_simulation лишь гарантирует паузу, что бы ни показывал текущий
+    // экран. sendStopSimulation() лишь ставит сообщение в очередь отправки
+    // IXWebSocket (не блокирует) — короткая пауза перед disconnect() даёт
+    // фоновому потоку сокета шанс реально отправить его до разрыва
+    // соединения.
+    network.sendStopSimulation();
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
     network.disconnect();
     ix::uninitNetSystem();

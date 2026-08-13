@@ -37,7 +37,7 @@
         "water_flow_rate": 0.30000001192092896,
         "water_moisture_boost": 0.699999988079071,
         "water_source_count": 5,
-        "water_source_strength": 75.27464294433594
+        "water_source_strength": 2.0
     },
     "terrain_seed": 214923,
     "tick_count": -1,
