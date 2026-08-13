@@ -9,6 +9,7 @@
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "core/components/WorldPropertiesComponent.hpp"
 
 namespace goblins {
 
@@ -52,6 +53,21 @@ constexpr float kErosionRate = 0.05f;
 constexpr float kWaterAppearThreshold = 0.05f;
 constexpr float kWaterDisappearThreshold = 0.001f;
 
+// Минералы: выравнивание с единственным соседом за тик, а не раздача
+// всем сразу. Клетка A ищет среди соседей, которые "притягивают" минералы
+// (есть вода или влажность выше порога — они "вымываются" туда), самого
+// бедного B; если A богаче B минимум на kMineralSlopeThreshold, к B уходит
+// ровно половина разницы (целочисленно) — 8 и 6 становятся 7 и 7, 10 и 6
+// — 8 и 8. Обязательно ОДИН сосед, не несколько: если считать перетоки к
+// нескольким соседям независимо по одному и тому же снимку (как было
+// раньше), клетка может отдать больше, чем у неё есть, и вместо
+// предсказуемого сглаживания получаются на вид хаотичные "волны" — тот же
+// приём единственного лучшего соседа, что и у течения воды выше. Порог
+// влажности — не константа здесь, а свойство мира
+// (WorldPropertiesComponent.mineralMoistureThreshold, см. 06_GameLoop.md,
+// п.1a): выбирается один раз при генерации, System его только читает.
+constexpr int kMineralSlopeThreshold = 2;
+
 } // namespace
 
 void HydrologySystem(World& world, CommandQueue& commands) {
@@ -64,6 +80,11 @@ void HydrologySystem(World& world, CommandQueue& commands) {
 
     auto index = [width](int x, int y) { return static_cast<std::size_t>(y) * width + x; };
 
+    // Свойство мира, выбранное один раз при генерации — System только
+    // читает, никогда не пишет (06_GameLoop.md, п.1a).
+    const float mineralMoistureThreshold =
+        world.registry().get<const WorldPropertiesComponent>(world.worldEntity()).mineralMoistureThreshold;
+
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
     // напрямую: у него шаблонный неограниченный operator T(), из-за чего
@@ -75,6 +96,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     std::vector<float> moisture(cellCount, 0.0f);
     std::vector<float> rockiness(cellCount, 0.0f);
     std::vector<float> compaction(cellCount, 0.0f);
+    std::vector<int> minerals(cellCount, 0);
     std::vector<float> terrainHeight(cellCount, 0.0f);
     std::vector<float> waterDepth(cellCount, 0.0f);
     std::vector<float> flowSpeed(cellCount, 0.0f);
@@ -94,6 +116,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         moisture[i] = soil.moisture;
         rockiness[i] = soil.rockiness;
         compaction[i] = soil.compaction;
+        minerals[i] = soil.minerals;
         terrainHeight[i] = heightComponent.height;
 
         if (const auto* water = registry.try_get<WaterComponent>(entity)) {
@@ -204,7 +227,44 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         nextTerrainHeight[j] += erosion;
     }
 
-    // --- 6/7. Запись обратно: значения существующих компонентов правятся
+    // --- 6. Минералы: снимок -> для каждой клетки найти ОДНОГО (самого
+    // бедного из притягивающих) соседа -> аккумулятор — тот же приём, что
+    // и течение воды выше, поэтому порядок обхода клеток не влияет на
+    // результат. ---
+    std::vector<int> nextMinerals(minerals);
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        if (entities[i] == entt::null || minerals[i] < kMineralSlopeThreshold) {
+            continue;
+        }
+        const int x = static_cast<int>(i) % width;
+        const int y = static_cast<int>(i) / width;
+
+        int bestNeighbor = -1;
+        int bestMinerals = minerals[i];
+        for (int dir = 0; dir < 8; ++dir) {
+            const int nx = x + kDx8[dir];
+            const int ny = y + kDy8[dir];
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+                continue;
+            }
+            const std::size_t j = index(nx, ny);
+            const bool neighborAttractsMinerals = waterDepth[j] > 0.0f || moisture[j] > mineralMoistureThreshold;
+            if (!neighborAttractsMinerals || minerals[j] >= bestMinerals) {
+                continue;
+            }
+            bestMinerals = minerals[j];
+            bestNeighbor = static_cast<int>(j);
+        }
+
+        if (bestNeighbor < 0 || minerals[i] - bestMinerals < kMineralSlopeThreshold) {
+            continue;
+        }
+        const int amount = (minerals[i] - bestMinerals) / 2;
+        nextMinerals[i] -= amount;
+        nextMinerals[static_cast<std::size_t>(bestNeighbor)] += amount;
+    }
+
+    // --- 7/8. Запись обратно: значения существующих компонентов правятся
     // напрямую, появление/исчезание WaterComponent — через очередь команд
     // (05_Entity.md, п.5: структурные изменения не мгновенны). ---
     for (std::size_t i = 0; i < cellCount; ++i) {
@@ -216,6 +276,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         auto& soil = registry.get<SoilComponent>(entity);
         soil.moisture = std::clamp(nextMoisture[i], 0.0f, 1.0f);
         soil.compaction = std::clamp(nextCompaction[i], 0.0f, 1.0f);
+        soil.minerals = std::max(0, nextMinerals[i]);
         registry.get<HeightComponent>(entity).height = nextTerrainHeight[i];
 
         const float depth = std::max(0.0f, nextWaterDepth[i]);

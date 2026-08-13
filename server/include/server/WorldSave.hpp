@@ -28,11 +28,22 @@ namespace goblins {
 //    "info": WorldSaveInfo,
 //    "generation": RegenerationRequest,
 //    "entities": [ {"position": {"x","y"},
-//                   "soil": {"moisture","rockiness","compaction"},
+//                   "soil": {"moisture","rockiness","compaction","minerals"},
 //                   "height": H,
 //                   "water": {"depth","flow_speed"},
 //                   "impassable": true,
-//                   "time": {"tick": N}}, ... ]}
+//                   "time": {"tick": N},
+//                   "world_properties": {"mineral_moisture_threshold": T}}, ... ]}
+//
+// "soil.minerals" (SoilComponent.minerals, целое число) — как и "height",
+// добавлено без смены версии: у старых файлов без этого поля минералы
+// читаются как 0.
+//
+// "world_properties" (WorldPropertiesComponent, живёт на том же World
+// Entity, что и "time" — 06_GameLoop.md, п.1a) — свойства мира, выбранные
+// один раз при генерации и не меняющиеся во время симуляции. У старых
+// файлов без этого поля используется значение по умолчанию
+// (mineral_moisture_threshold = 0.5), World::reset выставляет его сам.
 //
 // "height" (HeightComponent) добавлено без смены версии формата: старые
 // файлы без этого поля читаются как есть (высота считается 0 — плоский
@@ -87,5 +98,10 @@ bool saveWorld(const World& world, const RegenerationRequest& generation, const 
 // мир остаётся нетронутым, а не наполовину загруженным.
 bool loadWorld(World& world, const std::string& name, const std::filesystem::path& directory,
                RegenerationRequest& outGeneration, WorldSaveInfo& outInfo, std::string& outError);
+
+// Удаляет `<directory>/<name>.json`. Только файловый ввод-вывод, ECS
+// registry не трогает — в отличие от saveWorld/loadWorld, можно вызывать
+// прямо с сетевого потока (как list_worlds).
+bool deleteWorld(const std::string& name, const std::filesystem::path& directory, std::string& outError);
 
 } // namespace goblins

@@ -11,7 +11,7 @@
 namespace GenerationScreen {
 
 namespace {
-constexpr float kPanelWidth = 400.0f;
+constexpr float kPanelWidth = 460.0f;
 constexpr float kTopBarHeight = 40.0f;
 } // namespace
 
@@ -81,7 +81,8 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
                 const float screenY = offsetY + y * tileSizeF;
 
                 DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
-                              TileColors::soil(snapshot.moisture[i], snapshot.rockiness[i], snapshot.compaction[i]));
+                              TileColors::soil(snapshot.moisture[i], snapshot.rockiness[i], snapshot.compaction[i],
+                                                TileColors::mineralsFraction(snapshot.minerals[i])));
                 if (snapshot.waterDepth[i] > 0.0f) {
                     DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
                                   TileColors::water(snapshot.waterDepth[i]));
@@ -118,8 +119,8 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
     if (hasHoverTile) {
         const std::size_t hi = static_cast<std::size_t>(hoverY) * snapshot.areaWidth + hoverX;
         const std::string label =
-            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f%s", hoverX, hoverY, snapshot.moisture[hi],
-                       snapshot.rockiness[hi], snapshot.compaction[hi],
+            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s", hoverX, hoverY,
+                       snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi], snapshot.minerals[hi],
                        snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "");
         DrawText(label.c_str(), 12, screenH - 22, 16, cursorColor);
     }

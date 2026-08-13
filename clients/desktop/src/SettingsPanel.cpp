@@ -29,11 +29,11 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
 
     // Immediate-mode: сначала считаем, сколько всего строк контента, чтобы
     // задать GuiScrollPanel настоящую высоту — иначе скролл не появится.
-    // 2 (seed) + 1 (boulder count) + 4 (freq) + 3 (fractal) + 2 (bumps) +
-    // 5 (river) + 4 (pond) + 3 (moisture) = 24 строки с параметрами,
-    // плюс 7 заголовков секций.
-    constexpr int kParamRows = 24;
-    constexpr int kSectionHeaders = 7;
+    // 2 (seed) + 1 (boulder count) + 5 (freq) + 3 (fractal) + 2 (bumps) +
+    // 5 (river) + 4 (pond) + 3 (moisture) + 3 (minerals) = 28 строк с
+    // параметрами, плюс 8 заголовков секций.
+    constexpr int kParamRows = 28;
+    constexpr int kSectionHeaders = 8;
     const float contentHeight = kParamRows * kRowHeight + kSectionHeaders * (kRowHeight + kSectionGap) + kSectionGap;
 
     static Rectangle view{};
@@ -93,6 +93,7 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     floatRow("Rockiness", edited_.terrain.rock_noise_frequency, 0.002f, 0.2f);
     floatRow("Compaction", edited_.terrain.compaction_noise_frequency, 0.002f, 0.2f);
     floatRow("Moisture", edited_.terrain.moisture_noise_frequency, 0.002f, 0.2f);
+    floatRow("Minerals", edited_.terrain.minerals_noise_frequency, 0.002f, 0.2f);
 
     section("Fractal noise shape");
     intRow("Octaves", edited_.terrain.noise_octaves, 1, 8);
@@ -120,6 +121,14 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     floatRow("Falloff (tiles)", edited_.terrain.moisture_falloff, 1.0f, 40.0f);
     floatRow("Water boost", edited_.terrain.water_moisture_boost, 0.0f, 1.0f);
     floatRow("Rock reduction", edited_.terrain.rock_moisture_reduction, 0.0f, 1.0f);
+
+    section("Minerals");
+    floatRow("Average", edited_.terrain.minerals_average, 0.0f, 50.0f);
+    intRow("River value", edited_.terrain.river_minerals, 0, 50);
+    // Свойство мира (06_GameLoop.md, п.1a), не текущий параметр
+    // симуляции: выбирается здесь, при генерации, и во время самой
+    // симуляции HydrologySystem его больше не меняет.
+    floatRow("Moisture threshold", edited_.terrain.mineral_moisture_threshold, 0.0f, 1.0f);
 
     EndScissorMode();
 

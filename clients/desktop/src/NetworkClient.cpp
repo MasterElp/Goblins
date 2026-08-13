@@ -61,6 +61,13 @@ void NetworkClient::sendSaveWorld(const std::string& name) {
     webSocket_.send(request.dump());
 }
 
+void NetworkClient::sendDeleteWorld(const std::string& name) {
+    nlohmann::json request;
+    request["type"] = "delete_world";
+    request["name"] = name;
+    webSocket_.send(request.dump());
+}
+
 void NetworkClient::sendStopSimulation() {
     nlohmann::json request;
     request["type"] = "stop_simulation";
@@ -98,6 +105,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         state_.moisture.assign(cellCount, 0.0f);
         state_.rockiness.assign(cellCount, 0.0f);
         state_.compaction.assign(cellCount, 0.0f);
+        state_.minerals.assign(cellCount, 0);
         state_.waterDepth.assign(cellCount, 0.0f);
 
         if (json.contains("soil")) {
@@ -110,6 +118,9 @@ void NetworkClient::handleMessage(const std::string& payload) {
             }
             if (soil.contains("compaction")) {
                 state_.compaction = soil["compaction"].get<std::vector<float>>();
+            }
+            if (soil.contains("minerals")) {
+                state_.minerals = soil["minerals"].get<std::vector<int>>();
             }
         }
         if (json.contains("water")) {

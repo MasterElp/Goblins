@@ -17,6 +17,7 @@
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "core/components/WorldPropertiesComponent.hpp"
 #include "platform/ExecutablePath.hpp"
 
 namespace goblins {
@@ -63,11 +64,14 @@ struct ParsedEntity {
     bool hasWater = false;
     WaterComponent water{};
     bool impassable = false;
-    // World Entity — это Entity с TimeComponent (06_GameLoop.md, п.1).
-    // При загрузке он не создаётся заново: World::reset уже создал его,
-    // применяется только значение тика.
+    // World Entity — это Entity с TimeComponent и WorldPropertiesComponent
+    // (06_GameLoop.md, п.1/п.1a). При загрузке он не создаётся заново:
+    // World::reset уже создал его (со значениями по умолчанию для
+    // свойств мира) — применяются только сохранённые значения.
     bool hasTime = false;
     std::uint64_t tick = 0;
+    bool hasWorldProperties = false;
+    WorldPropertiesComponent worldProperties{};
 };
 
 nlohmann::json buildEntitiesJson(const World& world) {
@@ -80,13 +84,17 @@ nlohmann::json buildEntitiesJson(const World& world) {
         if (const auto* time = registry.try_get<TimeComponent>(entity)) {
             record["time"] = {{"tick", time->tick}};
         }
+        if (const auto* worldProperties = registry.try_get<WorldPropertiesComponent>(entity)) {
+            record["world_properties"] = {{"mineral_moisture_threshold", worldProperties->mineralMoistureThreshold}};
+        }
         if (const auto* position = registry.try_get<PositionComponent>(entity)) {
             record["position"] = {{"x", position->x}, {"y", position->y}};
         }
         if (const auto* soil = registry.try_get<SoilComponent>(entity)) {
             record["soil"] = {{"moisture", soil->moisture},
                               {"rockiness", soil->rockiness},
-                              {"compaction", soil->compaction}};
+                              {"compaction", soil->compaction},
+                              {"minerals", soil->minerals}};
         }
         if (const auto* heightComponent = registry.try_get<HeightComponent>(entity)) {
             record["height"] = heightComponent->height;
@@ -130,6 +138,11 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.hasTime = true;
             parsed.tick = record["time"].value("tick", static_cast<std::uint64_t>(0));
         }
+        if (record.contains("world_properties")) {
+            parsed.hasWorldProperties = true;
+            parsed.worldProperties.mineralMoistureThreshold =
+                record["world_properties"].value("mineral_moisture_threshold", 0.5f);
+        }
         if (record.contains("position")) {
             parsed.hasPosition = true;
             parsed.position.x = record["position"].value("x", 0);
@@ -146,6 +159,7 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.soil.moisture = record["soil"].value("moisture", 0.0f);
             parsed.soil.rockiness = record["soil"].value("rockiness", 0.0f);
             parsed.soil.compaction = record["soil"].value("compaction", 0.0f);
+            parsed.soil.minerals = record["soil"].value("minerals", 0);
         }
         parsed.height = record.value("height", 0.0f);
         if (record.contains("water")) {
@@ -408,11 +422,17 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
 
     std::uint64_t tick = info.tick;
     for (const auto& parsed : entities) {
-        if (parsed.hasTime) {
-            // World Entity уже существует (создан в reset) — у мира он
-            // один, поэтому вторая такая запись просто уточнит тик, а не
-            // создаст второй "мировой" Entity.
-            tick = parsed.tick;
+        if (parsed.hasTime || parsed.hasWorldProperties) {
+            // World Entity уже существует (создан в reset, со значениями
+            // по умолчанию для свойств мира) — у мира он один, поэтому
+            // эта запись просто уточняет его данные, а не создаёт второй
+            // "мировой" Entity.
+            if (parsed.hasTime) {
+                tick = parsed.tick;
+            }
+            if (parsed.hasWorldProperties) {
+                world.registry().get<WorldPropertiesComponent>(world.worldEntity()) = parsed.worldProperties;
+            }
             continue;
         }
 
@@ -445,6 +465,27 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
 
     outGeneration = generation;
     outInfo = info;
+    return true;
+}
+
+bool deleteWorld(const std::string& name, const std::filesystem::path& directory, std::string& outError) {
+    if (!isValidWorldName(name)) {
+        outError = "invalid world name '" + name + "'";
+        return false;
+    }
+
+    const auto path = savePath(directory, name);
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        outError = "no saved world '" + name + "' in '" + directory.string() + "'";
+        return false;
+    }
+
+    if (!std::filesystem::remove(path, ec) || ec) {
+        outError = "could not delete '" + path.string() + "'" + (ec ? " (" + ec.message() + ")" : "");
+        return false;
+    }
+
     return true;
 }
 

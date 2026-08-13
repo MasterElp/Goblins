@@ -16,17 +16,32 @@ inline Color lerp(Color a, Color b, float t) {
 }
 
 // Каменистость и утрамбованность задают материал (серый/утоптанная
-// земля), влажность затемняет поверх.
-inline Color soil(float moisture, float rockiness, float compaction) {
+// земля), влажность затемняет поверх, минералы добавляют золотистый
+// отблеск. mineralsFraction — уже нормализованная доля (0..1), см.
+// mineralsFraction(int) ниже: сам SoilComponent.minerals — счётное целое,
+// не доля, поэтому нормализация вынесена отдельно, а не в этот блендер.
+inline Color soil(float moisture, float rockiness, float compaction, float mineralsFraction) {
     static const Color dirt{101, 67, 33, 255};
     static const Color rock{132, 130, 124, 255};
     static const Color packed{150, 132, 96, 255};
     static const Color wet{40, 46, 38, 255};
+    static const Color mineral{196, 168, 62, 255};
 
     Color c = lerp(dirt, rock, rockiness);
     c = lerp(c, packed, compaction * (1.0f - rockiness * 0.5f));
     c = lerp(c, wet, moisture * 0.6f);
+    c = lerp(c, mineral, mineralsFraction * 0.5f);
     return c;
+}
+
+// Насыщение цвета — с этого количества минералов на тайле дальнейший рост
+// уже не меняет оттенок. Не привязано к TerrainParams::mineralsAverage
+// (тот — про генерацию, это — чисто про то, где видимая шкала выходит на
+// плато), поэтому отдельная константа, а не общий параметр.
+constexpr float kMineralsVisualCap = 30.0f;
+
+inline float mineralsFraction(int minerals) {
+    return std::clamp(static_cast<float>(minerals) / kMineralsVisualCap, 0.0f, 1.0f);
 }
 
 // От мелкой (светлее, бирюзовее) до глубокой (тёмно-синяя) воды.

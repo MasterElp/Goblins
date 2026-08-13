@@ -63,6 +63,14 @@ struct GenerationStats {
 //      возникают без явного русла.
 //   5. Влажность — фоновый шум + затухание по расстоянию до воды
 //      (multi-source BFS, distance transform).
+//   6. Минералы (SoilComponent.minerals, целое число) — шум, в среднем
+//      дающий mineralsAverage; на клетках реки не шум, а всегда одно и то
+//      же фиксированное riverMinerals. Дальнейшее движение минералов
+//      между тайлами по правилу песочной кучи — не здесь, а в
+//      HydrologySystem (каждый тик, а не один раз при генерации).
+//   7. Свойства мира (WorldPropertiesComponent на World Entity,
+//      06_GameLoop.md, п.1a) — выбираются здесь один раз (например,
+//      mineralMoistureThreshold) и дальше не меняются System-ами.
 //
 // Все числовые пороги и коэффициенты — в params (TerrainParams.hpp), ни
 // одного зашитого значения внутри .cpp.

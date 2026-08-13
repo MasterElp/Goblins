@@ -49,6 +49,7 @@ struct TerrainConfig {
     float rock_noise_frequency = 0.05f;
     float compaction_noise_frequency = 0.04f;
     float moisture_noise_frequency = 0.03f;
+    float minerals_noise_frequency = 0.06f;
 
     int noise_octaves = 4;
     float noise_lacunarity = 2.0f;
@@ -73,13 +74,28 @@ struct TerrainConfig {
     float moisture_falloff = 8.0f;
     float water_moisture_boost = 0.7f;
     float rock_moisture_reduction = 0.3f;
+
+    // Минералы (SoilComponent.minerals): среднее значение при генерации
+    // обычной почвы и фиксированное значение на клетках реки — см.
+    // core::TerrainParams::mineralsAverage/riverMinerals.
+    float minerals_average = 10.0f;
+    int river_minerals = 10;
+
+    // Порог влажности для переноса минералов — свойство мира
+    // (core::WorldPropertiesComponent), не текущий параметр симуляции:
+    // генерация выбирает его один раз, регенерация (заново) может
+    // задать другое значение, но во время самой симуляции он не
+    // меняется — см. core::TerrainParams::mineralMoistureThreshold.
+    float mineral_moisture_threshold = 0.5f;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_frequency, rock_noise_frequency,
-                                    compaction_noise_frequency, moisture_noise_frequency, noise_octaves,
-                                    noise_lacunarity, noise_gain, rock_height_bump, compaction_height_bump,
-                                    river_count, river_width, river_sinuosity, river_depth, river_max_flow_speed,
-                                    min_pond_depth, min_pond_size, max_pond_size, pond_depth_scale,
-                                    moisture_falloff, water_moisture_boost, rock_moisture_reduction)
+                                    compaction_noise_frequency, moisture_noise_frequency, minerals_noise_frequency,
+                                    noise_octaves, noise_lacunarity, noise_gain, rock_height_bump,
+                                    compaction_height_bump, river_count, river_width, river_sinuosity, river_depth,
+                                    river_max_flow_speed, min_pond_depth, min_pond_size, max_pond_size,
+                                    pond_depth_scale, moisture_falloff, water_moisture_boost,
+                                    rock_moisture_reduction, minerals_average, river_minerals,
+                                    mineral_moisture_threshold)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";

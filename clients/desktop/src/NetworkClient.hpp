@@ -26,10 +26,12 @@ struct WorldState {
     // Почва — плоские массивы (row-major, x + y*areaWidth), одно значение
     // на тайл. Вода — так же; глубина 0 значит "воды нет" (сам компонент
     // на сервере просто отсутствует у тайла — см. 02_CorePrinciples.md,
-    // п.3: отсутствие компонента = отсутствие возможности).
+    // п.3: отсутствие компонента = отсутствие возможности). minerals —
+    // целое количество (SoilComponent.minerals), не нормализовано.
     std::vector<float> moisture;
     std::vector<float> rockiness;
     std::vector<float> compaction;
+    std::vector<int> minerals;
     std::vector<float> waterDepth;
 
     // Параметры, которыми сгенерирован текущий мир — стартовая точка для
@@ -94,6 +96,9 @@ public:
     // Сохранить текущее состояние мира. Пустое name — под именем
     // текущего мира (или под новым, если мир ещё не сохранялся).
     void sendSaveWorld(const std::string& name = std::string{});
+
+    // Удалить сохранённый мир по имени.
+    void sendDeleteWorld(const std::string& name);
 
 private:
     void handleMessage(const std::string& payload);

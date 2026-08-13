@@ -15,6 +15,7 @@ struct TerrainParams {
     float rockNoiseFrequency = 0.05f;
     float compactionNoiseFrequency = 0.04f;
     float moistureNoiseFrequency = 0.03f;
+    float mineralsNoiseFrequency = 0.06f;
 
     // Параметры фрактального шума, общие для всех слоёв.
     int noiseOctaves = 4;
@@ -54,6 +55,21 @@ struct TerrainParams {
     float moistureFalloff = 8.0f;
     float waterMoistureBoost = 0.7f;
     float rockMoistureReduction = 0.3f;
+
+    // Минералы (SoilComponent.minerals, целое число): на обычной почве —
+    // шум (mineralsNoiseFrequency выше), в среднем по карте дающий
+    // mineralsAverage; на клетках реки — не шум, а всегда одно и то же
+    // фиксированное значение riverMinerals (см. TerrainGenerator.cpp).
+    // Дальнейшее движение минералов между тайлами по правилу песочной
+    // кучи — HydrologySystem, не генерация.
+    float mineralsAverage = 10.0f;
+    int riverMinerals = 10;
+
+    // Порог влажности для правила переноса минералов (см.
+    // WorldPropertiesComponent) — свойство мира: генерация выбирает его
+    // один раз и записывает на World Entity, дальше HydrologySystem
+    // только читает, никогда не меняет (06_GameLoop.md, п.1a).
+    float mineralMoistureThreshold = 0.5f;
 };
 
 } // namespace goblins

@@ -16,6 +16,7 @@
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "core/components/WorldPropertiesComponent.hpp"
 
 namespace goblins {
 
@@ -357,6 +358,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     auto rockNoise = makeFbmNoise(static_cast<int>(seed) + 1, params.rockNoiseFrequency, params);
     auto compactionNoise = makeFbmNoise(static_cast<int>(seed) + 2, params.compactionNoiseFrequency, params);
     auto moistureNoise = makeFbmNoise(static_cast<int>(seed) + 3, params.moistureNoiseFrequency, params);
+    auto mineralsNoise = makeFbmNoise(static_cast<int>(seed) + 4, params.mineralsNoiseFrequency, params);
 
     std::vector<float> elevation(cellCount);
     std::vector<float> rockiness(cellCount);
@@ -697,9 +699,20 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
                     waterBoost * params.waterMoistureBoost,
                 0.0f, 1.0f);
 
+            // Минералы: на обычной почве — шум, в среднем дающий
+            // params.mineralsAverage (noise01 в среднем ~0.5, поэтому
+            // *2*mineralsAverage сходится к среднему mineralsAverage); на
+            // клетках реки — не шум, а всегда фиксированное riverMinerals
+            // (river/dwater flowSpeed[i] > 0 однозначно отличает реку от
+            // пруда, где flowSpeed == 0 — см. WaterComponent).
+            const float mineralsNoise01 = normalize01(mineralsNoise.GetNoise(static_cast<float>(x), static_cast<float>(y)));
+            const int generatedMinerals =
+                std::max(0, static_cast<int>(std::lround(mineralsNoise01 * params.mineralsAverage * 2.0f)));
+            const int minerals = flowSpeed[i] > 0.0f ? params.riverMinerals : generatedMinerals;
+
             const auto entity = world.registry().create();
             world.registry().emplace<PositionComponent>(entity, PositionComponent{x, y});
-            world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, rockiness[i], compaction[i]});
+            world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, rockiness[i], compaction[i], minerals});
             world.registry().emplace<HeightComponent>(entity, HeightComponent{elevation[i]});
             if (waterDepth[i] > 0.0f) {
                 world.registry().emplace<WaterComponent>(entity, WaterComponent{waterDepth[i], flowSpeed[i]});
@@ -708,6 +721,15 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
         }
     }
     stats.entityMs = elapsedMs(entityStart);
+
+    // --- Свойства мира: выбираются один раз здесь, дальше System-ы (в
+    // частности HydrologySystem) их только читают (06_GameLoop.md,
+    // п.1a). WorldPropertiesComponent на World Entity уже существует
+    // (создан в World::reset/конструкторе) — значения по умолчанию
+    // просто перезаписываются выбором этой генерации.
+    world.registry().get<WorldPropertiesComponent>(world.worldEntity()).mineralMoistureThreshold =
+        params.mineralMoistureThreshold;
+
     stats.totalMs = elapsedMs(totalStart);
     return stats;
 }

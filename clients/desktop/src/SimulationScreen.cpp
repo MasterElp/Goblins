@@ -28,6 +28,7 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     static bool showRockiness = true;
     static bool showCompaction = true;
     static bool showMoisture = true;
+    static bool showMinerals = true;
     static bool confirmingExit = false;
 
     const int screenW = GetScreenWidth();
@@ -77,11 +78,14 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         }
 
         // Слои почвы — каждый можно исключить из смешения цвета тайла
-        // (каменистость/плотность/влажность считаются нулевыми, если слой
-        // выключен); вода всегда рисуется поверх независимо от этих флагов.
+        // (каменистость/плотность/влажность/минералы считаются нулевыми,
+        // если слой выключен); вода всегда рисуется поверх независимо от
+        // этих флагов. Новый слой почвы добавляется сюда же (см.
+        // TileColors::soil) — тем же способом, что и три предыдущих.
         if (IsKeyPressed(KEY_ONE)) showRockiness = !showRockiness;
         if (IsKeyPressed(KEY_TWO)) showCompaction = !showCompaction;
         if (IsKeyPressed(KEY_THREE)) showMoisture = !showMoisture;
+        if (IsKeyPressed(KEY_FOUR)) showMinerals = !showMinerals;
 
         // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
         // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
@@ -141,7 +145,9 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
                 DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
                               TileColors::soil(showMoisture ? snapshot.moisture[i] : 0.0f,
                                                 showRockiness ? snapshot.rockiness[i] : 0.0f,
-                                                showCompaction ? snapshot.compaction[i] : 0.0f));
+                                                showCompaction ? snapshot.compaction[i] : 0.0f,
+                                                showMinerals ? TileColors::mineralsFraction(snapshot.minerals[i])
+                                                             : 0.0f));
                 if (snapshot.waterDepth[i] > 0.0f) {
                     DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
                                   TileColors::water(snapshot.waterDepth[i]));
@@ -183,11 +189,12 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         drawLayerLabel("[1] Rockiness", showRockiness);
         drawLayerLabel("[2] Compaction", showCompaction);
         drawLayerLabel("[3] Moisture", showMoisture);
+        drawLayerLabel("[4] Minerals", showMinerals);
     }
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
     DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   Zoom: %d%%   WASD-scroll  Wheel-zoom  "
-                         "1/2/3-layers  P-pause  Esc-menu",
+                         "1/2/3/4-layers  P-pause  Esc-menu",
                          snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
                          static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
                          static_cast<int>(viewX / tileSizeF), static_cast<int>(viewY / tileSizeF),
@@ -213,8 +220,8 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     if (hasHoverTile) {
         const std::size_t hi = static_cast<std::size_t>(hoverY) * snapshot.areaWidth + hoverX;
         const std::string tileLabel =
-            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f%s", hoverX, hoverY, snapshot.moisture[hi],
-                       snapshot.rockiness[hi], snapshot.compaction[hi],
+            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s", hoverX, hoverY,
+                       snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi], snapshot.minerals[hi],
                        snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "");
         const int labelWidth = MeasureText(tileLabel.c_str(), 16);
         DrawText(tileLabel.c_str(), screenW - labelWidth - 12, screenH - 24, 16, cursorColor);

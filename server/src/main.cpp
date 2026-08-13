@@ -30,6 +30,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.rockNoiseFrequency = config.rock_noise_frequency;
     params.compactionNoiseFrequency = config.compaction_noise_frequency;
     params.moistureNoiseFrequency = config.moisture_noise_frequency;
+    params.mineralsNoiseFrequency = config.minerals_noise_frequency;
     params.noiseOctaves = config.noise_octaves;
     params.noiseLacunarity = config.noise_lacunarity;
     params.noiseGain = config.noise_gain;
@@ -47,6 +48,9 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.moistureFalloff = config.moisture_falloff;
     params.waterMoistureBoost = config.water_moisture_boost;
     params.rockMoistureReduction = config.rock_moisture_reduction;
+    params.mineralsAverage = config.minerals_average;
+    params.riverMinerals = config.river_minerals;
+    params.mineralMoistureThreshold = config.mineral_moisture_threshold;
     return params;
 }
 

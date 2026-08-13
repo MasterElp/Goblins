@@ -166,6 +166,19 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
         }
         std::lock_guard<std::mutex> lock(pendingSaveWorldMutex_);
         pendingSaveWorld_ = request;
+    } else if (type == "delete_world") {
+        // Только файловый ввод-вывод, ECS registry не трогаем — можно
+        // прямо здесь, на сетевом потоке, как list_worlds.
+        const std::string name = json.value("name", std::string{});
+        std::string error;
+        if (deleteWorld(name, savesDirectory_, error)) {
+            std::cout << "World '" << name << "' deleted by client request.\n";
+            broadcastNotice("info", "World '" + name + "' deleted.");
+            broadcastWorldList();
+        } else {
+            std::cerr << "NetworkServer: delete_world failed (" << error << ")\n";
+            broadcastNotice("error", error);
+        }
     } else if (type == "save_generation_config") {
         // Только файловый ввод-вывод, ECS registry не трогаем — можно
         // прямо здесь, на сетевом потоке, как и toggle_pause.
@@ -267,6 +280,7 @@ std::string NetworkServer::buildSnapshotMessage() const {
     std::vector<float> moisture(cellCount, 0.0f);
     std::vector<float> rockiness(cellCount, 0.0f);
     std::vector<float> compaction(cellCount, 0.0f);
+    std::vector<int> minerals(cellCount, 0);
 
     world_.registry()
         .view<const PositionComponent, const SoilComponent>()
@@ -275,11 +289,13 @@ std::string NetworkServer::buildSnapshotMessage() const {
             moisture[i] = round3(soil.moisture);
             rockiness[i] = round3(soil.rockiness);
             compaction[i] = round3(soil.compaction);
+            minerals[i] = soil.minerals;
         });
 
     message["soil"]["moisture"] = moisture;
     message["soil"]["rockiness"] = rockiness;
     message["soil"]["compaction"] = compaction;
+    message["soil"]["minerals"] = minerals;
 
     // Вода — только тайлы, где она реально есть (03_CorePrinciples.md,
     // п.3: отсутствие компонента = отсутствие возможности); в разреженном
