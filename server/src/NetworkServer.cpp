@@ -64,13 +64,6 @@ void NetworkServer::stop() {
     server_.stop();
 }
 
-void NetworkServer::broadcastTick(std::uint64_t tick) {
-    nlohmann::json message;
-    message["type"] = "tick";
-    message["tick"] = tick;
-    broadcastToAll(message.dump());
-}
-
 void NetworkServer::broadcastSnapshot() {
     broadcastToAll(buildSnapshotMessage());
 }

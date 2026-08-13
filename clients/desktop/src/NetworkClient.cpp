@@ -130,8 +130,6 @@ void NetworkClient::handleMessage(const std::string& payload) {
         state_.generation.boulder_seed = json.value("boulder_seed", state_.generation.boulder_seed);
         state_.hasGeneration = true;
         state_.currentWorld = json.value("world", state_.currentWorld);
-    } else if (type == "tick") {
-        state_.tick = json.value("tick", state_.tick);
     } else if (type == "pause_state") {
         state_.paused = json.value("paused", state_.paused);
     } else if (type == "world_list") {

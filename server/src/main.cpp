@@ -178,7 +178,10 @@ int main(int argc, char** argv) {
     loop.onTickComplete = [&](const goblins::World& w) {
         const auto& time = w.registry().get<const goblins::TimeComponent>(w.worldEntity());
         std::cout << "Tick #" << time.tick << std::endl;
-        network.broadcastTick(time.tick);
+        // Полный снапшот на каждый тик, а не только номер: HydrologySystem
+        // непрерывно меняет почву/воду, и клиент должен видеть это
+        // постепенное изменение вживую, а не только после регенерации.
+        network.broadcastSnapshot();
     };
 
     // Отрицательный tick_count в конфигурации — тикать бесконечно (мир
