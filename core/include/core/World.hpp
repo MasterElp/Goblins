@@ -3,6 +3,7 @@
 #include <entt/entt.hpp>
 
 #include "core/Area.hpp"
+#include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 
@@ -20,7 +21,10 @@ namespace goblins {
 // мира не могут быть просто переменной кода. WorldPropertiesComponent
 // создаётся здесь же, с значениями по умолчанию, — гарантия, что он
 // существует всегда, даже до генерации/загрузки конкретного мира
-// (значения выставляет generateTerrain или WorldSave::loadWorld).
+// (значения выставляет generateTerrain или WorldSave::loadWorld). По той
+// же причине здесь создаётся и пустой PlantSpeciesComponent (виды травы
+// этого мира, заполняет seedGrass): системе не нужно знать, был ли этап
+// заселения растительностью — она просто увидит, что видов нет.
 class World {
 public:
     explicit World(int width = 100, int height = 100)
@@ -28,6 +32,7 @@ public:
         worldEntity_ = registry_.create();
         registry_.emplace<TimeComponent>(worldEntity_);
         registry_.emplace<WorldPropertiesComponent>(worldEntity_);
+        registry_.emplace<PlantSpeciesComponent>(worldEntity_);
     }
 
     // Полный сброс мира на месте: все Entity удаляются, Область
@@ -43,6 +48,7 @@ public:
         worldEntity_ = registry_.create();
         registry_.emplace<TimeComponent>(worldEntity_);
         registry_.emplace<WorldPropertiesComponent>(worldEntity_);
+        registry_.emplace<PlantSpeciesComponent>(worldEntity_);
     }
 
     entt::registry& registry() { return registry_; }

@@ -23,9 +23,28 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     ops.section("Seeds");
     ops.unsignedSeedRow("Terrain seed", edited.terrain_seed);
     ops.unsignedSeedRow("Boulder seed", edited.boulder_seed);
+    ops.unsignedSeedRow("Plant seed", edited.plant_seed);
 
     ops.section("Boulders");
     ops.intRow("Boulder count", edited.boulder_count, 0, 300);
+
+    ops.section("Grass");
+    // Число видов травы — 3..12 (ядро всё равно обрежет значение к этим
+    // границам): меньше трёх видов не даёт конкуренции, больше
+    // двенадцати — виды перестают отличаться друг от друга при одном и
+    // том же бюджете преимуществ.
+    ops.intRow("Species", edited.plants.grass_species, 3, 12);
+    // Стартовая заселённость, а не итоговая: дальше трава расселяется
+    // сама и занимает всё, что ей подходит.
+    ops.floatRow("Initial coverage", edited.plants.grass_coverage, 0.0f, 0.4f, 3);
+    // Свойства мира (06_GameLoop.md, п.1a), как и порог минералов выше:
+    // выбираются при генерации, во время симуляции не меняются.
+    // Мутация — доля вложения черты, а не доля значения гена (у всех
+    // черт вложение живёт в одном диапазоне, поэтому настройка одна на
+    // весь геном).
+    ops.floatRow("Mutation rate", edited.plants.mutation_rate, 0.0f, 0.3f, 3);
+    // Сколько крупиц минералов перегной возвращает в почву за тик.
+    ops.floatRow("Humus decay (per tick)", edited.plants.humus_decay_rate, 0.001f, 0.2f, 3);
 
     ops.section("Noise frequency (smaller = bigger shapes)");
     ops.floatRow("Height", edited.terrain.height_noise_frequency, 0.002f, 0.2f);

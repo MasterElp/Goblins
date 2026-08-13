@@ -12,13 +12,18 @@
 #include <nlohmann/json.hpp>
 
 #include "core/components/HeightComponent.hpp"
+#include "core/components/HumusComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
+#include "core/components/PlantComponent.hpp"
+#include "core/components/PlantGenomeComponent.hpp"
+#include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
+#include "core/generation/PlantGenetics.hpp"
 #include "platform/ExecutablePath.hpp"
 
 namespace goblins {
@@ -49,6 +54,30 @@ std::filesystem::path savePath(const std::filesystem::path& directory, const std
     return directory / (name + kExtension);
 }
 
+// Геном пишется и читается обходом таблицы черт (core::kGrassTraits), а не
+// перечислением полей: имена в файле — это имена черт, поэтому новая
+// черта попадает в сохранение сама. Отсутствующая в старом файле черта
+// берёт значение по умолчанию — та же логика, что и у "height"/"minerals"
+// (см. заголовок WorldSave.hpp): формат от этого не ломается и версию
+// поднимать не нужно.
+nlohmann::json genomeToJson(const PlantGenomeComponent& genome) {
+    nlohmann::json record;
+    record["species"] = genome.species;
+    for (const auto& trait : kGrassTraits) {
+        record[trait.name] = genome.*trait.gene;
+    }
+    return record;
+}
+
+PlantGenomeComponent genomeFromJson(const nlohmann::json& record) {
+    PlantGenomeComponent genome;
+    genome.species = record.value("species", 0);
+    for (const auto& trait : kGrassTraits) {
+        genome.*trait.gene = record.value(trait.name, genome.*trait.gene);
+    }
+    return genome;
+}
+
 // Разобранный Entity из файла — промежуточный шаг между JSON и ECS.
 // Нужен именно как отдельный тип: сначала разбирается и проверяется весь
 // файл целиком и только потом мир сбрасывается и заполняется, иначе
@@ -75,6 +104,22 @@ struct ParsedEntity {
     std::uint64_t tick = 0;
     bool hasWorldProperties = false;
     WorldPropertiesComponent worldProperties{};
+    // Виды травы — тоже данные World Entity (PlantSpeciesComponent, см.
+    // 06_GameLoop.md, п.1a): выбраны при генерации и не меняются.
+    bool hasPlantSpecies = false;
+    std::vector<PlantGenomeComponent> plantSpecies;
+
+    // Живое растение — Entity с состоянием и геномом (оба обязательно
+    // вместе: растение без генома не смогло бы ни расти, ни дать потомка).
+    bool hasPlant = false;
+    PlantComponent plant{};
+    PlantGenomeComponent genome{};
+
+    // Перегной лежит на терраформирующем Entity тайла, рядом с почвой и
+    // водой (см. HumusComponent), поэтому это признак того же самого
+    // Entity, а не отдельная запись.
+    bool hasHumus = false;
+    HumusComponent humus{};
 };
 
 nlohmann::json buildEntitiesJson(const World& world) {
@@ -95,7 +140,17 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           {"water_slope_boost", worldProperties->waterSlopeBoost},
                                           {"soil_erosion_rate", worldProperties->soilErosionRate},
                                           {"max_erosion_depth", worldProperties->maxErosionDepth},
-                                          {"edge_drain_rate", worldProperties->edgeDrainRate}};
+                                          {"edge_drain_rate", worldProperties->edgeDrainRate},
+                                          {"plant_mutation_rate", worldProperties->plantMutationRate},
+                                          {"humus_decay_rate", worldProperties->humusDecayRate},
+                                          {"plant_random_seed", worldProperties->plantRandomSeed}};
+        }
+        if (const auto* plantSpecies = registry.try_get<PlantSpeciesComponent>(entity)) {
+            auto archetypes = nlohmann::json::array();
+            for (const auto& archetype : plantSpecies->archetypes) {
+                archetypes.push_back(genomeToJson(archetype));
+            }
+            record["plant_species"] = std::move(archetypes);
         }
         if (const auto* position = registry.try_get<PositionComponent>(entity)) {
             record["position"] = {{"x", position->x}, {"y", position->y}};
@@ -111,6 +166,20 @@ nlohmann::json buildEntitiesJson(const World& world) {
         }
         if (const auto* water = registry.try_get<WaterComponent>(entity)) {
             record["water"] = {{"depth", water->depth}, {"flow_speed", water->flowSpeed}};
+        }
+        if (const auto* humus = registry.try_get<HumusComponent>(entity)) {
+            record["humus"] = {{"minerals", humus->minerals}, {"pending", humus->pending}};
+        }
+        if (const auto* plant = registry.try_get<PlantComponent>(entity)) {
+            record["plant"] = {{"age", plant->age},
+                               {"growth", plant->growth},
+                               {"moisture", plant->moisture},
+                               {"minerals", plant->minerals},
+                               {"mineral_pending", plant->mineralPending},
+                               {"stress", plant->stress}};
+        }
+        if (const auto* genome = registry.try_get<PlantGenomeComponent>(entity)) {
+            record["genome"] = genomeToJson(*genome);
         }
         // Тег-компонент без данных — в файле это просто признак наличия
         // (02_CorePrinciples.md, п.3: отсутствие компонента = отсутствие
@@ -169,6 +238,20 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("max_erosion_depth", 0.5f);
             parsed.worldProperties.edgeDrainRate =
                 record["world_properties"].value("edge_drain_rate", 0.01f);
+            parsed.worldProperties.plantMutationRate =
+                record["world_properties"].value("plant_mutation_rate", 0.06f);
+            parsed.worldProperties.humusDecayRate =
+                record["world_properties"].value("humus_decay_rate", 0.02f);
+            parsed.worldProperties.plantRandomSeed =
+                record["world_properties"].value("plant_random_seed", 0u);
+        }
+        if (record.contains("plant_species") && record["plant_species"].is_array()) {
+            parsed.hasPlantSpecies = true;
+            for (const auto& archetype : record["plant_species"]) {
+                if (archetype.is_object()) {
+                    parsed.plantSpecies.push_back(genomeFromJson(archetype));
+                }
+            }
         }
         if (record.contains("position")) {
             parsed.hasPosition = true;
@@ -196,11 +279,34 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         }
         parsed.impassable = record.value("impassable", false);
         parsed.waterSource = record.value("water_source", false);
+        if (record.contains("humus")) {
+            parsed.hasHumus = true;
+            parsed.humus.minerals = record["humus"].value("minerals", 0);
+            parsed.humus.pending = record["humus"].value("pending", 0.0f);
+        }
+        if (record.contains("plant")) {
+            parsed.hasPlant = true;
+            parsed.plant.age = record["plant"].value("age", 0.0f);
+            parsed.plant.growth = record["plant"].value("growth", 0.0f);
+            parsed.plant.moisture = record["plant"].value("moisture", 0.0f);
+            parsed.plant.minerals = record["plant"].value("minerals", 0);
+            parsed.plant.mineralPending = record["plant"].value("mineral_pending", 0.0f);
+            parsed.plant.stress = record["plant"].value("stress", 0.0f);
+            // Геном обязателен: растение без него не смогло бы ни расти,
+            // ни размножаться, а подставлять "средний геном" значило бы
+            // втихую менять состояние мира при загрузке.
+            if (!record.contains("genome")) {
+                outError = "plant entity has no genome";
+                return false;
+            }
+            parsed.genome = genomeFromJson(record["genome"]);
+        }
 
         // Позиция — единственное, чем Entity привязан к тайлу; без неё
         // Area не знает, куда его положить, а непроходимость становится
         // бессмысленной (04_WorldModel.md, п.4).
-        if (!parsed.hasPosition && (parsed.hasSoil || parsed.hasWater || parsed.impassable || parsed.waterSource)) {
+        if (!parsed.hasPosition && (parsed.hasSoil || parsed.hasWater || parsed.impassable || parsed.waterSource ||
+                                     parsed.hasPlant || parsed.hasHumus)) {
             outError = "entity has world components but no position";
             return false;
         }
@@ -450,7 +556,7 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
 
     std::uint64_t tick = info.tick;
     for (const auto& parsed : entities) {
-        if (parsed.hasTime || parsed.hasWorldProperties) {
+        if (parsed.hasTime || parsed.hasWorldProperties || parsed.hasPlantSpecies) {
             // World Entity уже существует (создан в reset, со значениями
             // по умолчанию для свойств мира) — у мира он один, поэтому
             // эта запись просто уточняет его данные, а не создаёт второй
@@ -460,6 +566,9 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             }
             if (parsed.hasWorldProperties) {
                 world.registry().get<WorldPropertiesComponent>(world.worldEntity()) = parsed.worldProperties;
+            }
+            if (parsed.hasPlantSpecies) {
+                world.registry().get<PlantSpeciesComponent>(world.worldEntity()).archetypes = parsed.plantSpecies;
             }
             continue;
         }
@@ -477,6 +586,13 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         }
         if (parsed.hasWater) {
             world.registry().emplace<WaterComponent>(entity, parsed.water);
+        }
+        if (parsed.hasHumus) {
+            world.registry().emplace<HumusComponent>(entity, parsed.humus);
+        }
+        if (parsed.hasPlant) {
+            world.registry().emplace<PlantComponent>(entity, parsed.plant);
+            world.registry().emplace<PlantGenomeComponent>(entity, parsed.genome);
         }
         if (parsed.impassable) {
             world.registry().emplace<ImpassableComponent>(entity);

@@ -32,7 +32,11 @@ namespace goblins {
 //                   "height": H,
 //                   "water": {"depth","flow_speed"},
 //                   "water_source": true,
+//                   "humus": {"minerals","pending"},
 //                   "impassable": true,
+//                   "plant": {"age","growth","moisture","minerals",
+//                              "mineral_pending","stress"},
+//                   "genome": {"species": N, "<черта>": V, ...},
 //                   "time": {"tick": N},
 //                   "world_properties": {"mineral_moisture_threshold": T,
 //                                         "water_evaporation_rate": R,
@@ -41,7 +45,11 @@ namespace goblins {
 //                                         "water_slope_boost": B,
 //                                         "soil_erosion_rate": E,
 //                                         "max_erosion_depth": D,
-//                                         "edge_drain_rate": G}}, ... ]}
+//                                         "edge_drain_rate": G,
+//                                         "plant_mutation_rate": M,
+//                                         "humus_decay_rate": H,
+//                                         "plant_random_seed": P},
+//                   "plant_species": [ {"species": 0, "<черта>": V, ...}, ... ]}, ... ]}
 //
 // "soil.minerals" (SoilComponent.minerals, целое число) — как и "height",
 // добавлено без смены версии: у старых файлов без этого поля минералы
@@ -64,6 +72,16 @@ namespace goblins {
 // "height" (HeightComponent) добавлено без смены версии формата: старые
 // файлы без этого поля читаются как есть (высота считается 0 — плоский
 // рельеф), HydrologySystem корректно работает и без начального градиента.
+//
+// "plant"/"genome" (живое растение), "humus" (HumusComponent — лежит на
+// том же Entity тайла, что почва и вода) и "plant_species" (виды травы
+// этого мира, на World Entity) — тоже без смены версии: в мире из старого
+// файла растений просто нет. Черты генома пишутся по именам из таблицы
+// core::kGrassTraits, а не фиксированным списком полей, поэтому новая
+// черта попадает в файл сама, а её отсутствие в старом файле означает
+// значение по умолчанию, а не ошибку разбора. Растение без генома —
+// ошибка: подставить "средний геном" значило бы втихую изменить
+// состояние мира при загрузке.
 //
 // Сохраняется полное состояние мира — все Entity со всеми компонентами,
 // включая World Entity с TimeComponent (запись с ключом "time"), а не

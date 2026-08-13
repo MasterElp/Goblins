@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include <raygui.h>
@@ -32,6 +33,7 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     static bool showMoisture = true;
     static bool showMinerals = true;
     static bool showHeight = true;
+    static bool showPlants = true;
     static bool confirmingExit = false;
     // Диалог ввода имени при сохранении — открывается кнопкой "Save
     // world", буфер предзаполняется именем текущего мира (пусто, если
@@ -62,7 +64,7 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     // Пока открыт диалог подтверждения выхода или диалог сохранения, мир
     // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —
     // иначе клик по кнопке диалога совпадёт с движением камеры или сменой
-    // слоя позади, а буквенные клавиши при вводе имени — с WASD/P/1-4.
+    // слоя позади, а буквенные клавиши при вводе имени — с WASD/P/1-6.
     if (!confirmingExit && !showSaveDialog) {
         if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
         if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
@@ -100,6 +102,10 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         if (IsKeyPressed(KEY_THREE)) showMoisture = !showMoisture;
         if (IsKeyPressed(KEY_FOUR)) showMinerals = !showMinerals;
         if (IsKeyPressed(KEY_FIVE)) showHeight = !showHeight;
+        // Растения и перегной — один выключатель (KEY_SIX): перегной это
+        // и есть след умершего растения, разделять их значило бы видеть
+        // остатки при погашенном слое травы.
+        if (IsKeyPressed(KEY_SIX)) showPlants = !showPlants;
 
         // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
         // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
@@ -177,6 +183,16 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
                 if (showHeight && heightRange > 0.0f) {
                     tileColor = TileColors::applyHeightShading(tileColor, (snapshot.height[i] - minHeight) / heightRange);
                 }
+                // Перегной — под травой: на клетке может быть и то, и
+                // другое (семя охотно прорастает там, где перегной
+                // возвращает минералы в почву), и тогда сверху видна
+                // именно трава.
+                if (showPlants && snapshot.humus[i] > 0) {
+                    tileColor = TileColors::humus(tileColor, snapshot.humus[i]);
+                }
+                if (showPlants && snapshot.plantSpeciesAt[i] >= 0) {
+                    tileColor = TileColors::plant(tileColor, snapshot.plantSpeciesAt[i], snapshot.plantGrowth[i]);
+                }
                 DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize, tileColor);
                 // Вода делит выключатель с влажностью (KEY_THREE) — вода
                 // на тайле и есть источник его влажности, отдельный
@@ -239,11 +255,35 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         drawLayerLabel("[3] Moisture+Water", showMoisture);
         drawLayerLabel("[4] Minerals", showMinerals);
         drawLayerLabel("[5] Height", showHeight);
+        drawLayerLabel("[6] Grass+Humus", showPlants);
+
+        // Виды травы: цвет, номер и текущая численность — сколько тайлов
+        // занимает каждый вид прямо сейчас. Считается по тому же
+        // плотному массиву, что и рисуется, поэтому легенда всегда
+        // соответствует картинке. Это единственное место, где видно, как
+        // виды делят мир между собой на протяжении симуляции.
+        if (showPlants && !snapshot.plantSpecies.empty()) {
+            std::vector<int> population(snapshot.plantSpecies.size(), 0);
+            for (const int species : snapshot.plantSpeciesAt) {
+                if (species >= 0 && static_cast<std::size_t>(species) < population.size()) {
+                    ++population[static_cast<std::size_t>(species)];
+                }
+            }
+
+            int legendX = 10;
+            const int legendY = layerY + 20;
+            for (std::size_t s = 0; s < population.size(); ++s) {
+                DrawRectangle(legendX, legendY + 1, 10, 10, TileColors::plantSpecies(static_cast<int>(s)));
+                const char* label = TextFormat("sp%zu %d", s, population[s]);
+                DrawText(label, legendX + 14, legendY, 14, layerOnColor);
+                legendX += 14 + MeasureText(label, 14) + 12;
+            }
+        }
     }
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
     DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   Zoom: %d%%   WASD-scroll  Wheel-zoom  "
-                         "1-5-layers  P-pause  Esc-menu",
+                         "1-6-layers  P-pause  Esc-menu",
                          snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
                          static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
                          static_cast<int>(viewX / tileSizeF), static_cast<int>(viewY / tileSizeF),
@@ -275,10 +315,15 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
             std::any_of(snapshot.waterSources.begin(), snapshot.waterSources.end(),
                         [&](const auto& s) { return s.first == hoverX && s.second == hoverY; });
         const std::string tileLabel =
-            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s%s", hoverX, hoverY,
+            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s%s%s%s", hoverX, hoverY,
                        snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi], snapshot.minerals[hi],
                        snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "",
-                       hoverIsSource ? "  [source]" : "");
+                       hoverIsSource ? "  [source]" : "",
+                       snapshot.plantSpeciesAt[hi] >= 0
+                           ? TextFormat("  grass sp%d %.0f%%", snapshot.plantSpeciesAt[hi],
+                                        snapshot.plantGrowth[hi] * 100.0f)
+                           : "",
+                       snapshot.humus[hi] > 0 ? TextFormat("  humus %d", snapshot.humus[hi]) : "");
         const int labelWidth = MeasureText(tileLabel.c_str(), 16);
         DrawText(tileLabel.c_str(), screenW - labelWidth - 12, screenH - 24, 16, cursorColor);
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -51,6 +52,21 @@ public:
         cell.entities.push_back(entity);
         if (impassable) {
             cell.impassableOccupant = entity;
+        }
+    }
+
+    // Снимает Entity с тайла. Нужен с появлением Entity, которые
+    // исчезают во время симуляции (умершее растение, PlantSystem): до
+    // них Entity только создавались — при генерации — и жили до конца
+    // мира, поэтому обратной операции не требовалось. Без неё в клетке
+    // копились бы идентификаторы уничтоженных Entity, а EnTT выдаёт
+    // идентификаторы повторно — и проверка "занята ли клетка" в какой-то
+    // момент начала бы отвечать про совсем другой объект.
+    void remove(entt::entity entity, int x, int y) {
+        auto& cell = cellAt(x, y);
+        cell.entities.erase(std::remove(cell.entities.begin(), cell.entities.end(), entity), cell.entities.end());
+        if (cell.impassableOccupant == entity) {
+            cell.impassableOccupant.reset();
         }
     }
 

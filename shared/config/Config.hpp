@@ -134,6 +134,31 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_freq
                                     water_source_strength, water_flow_rate, water_slope_boost,
                                     soil_erosion_rate, max_erosion_depth, edge_drain_rate)
 
+// Зеркало core::PlantParams (core/generation/PlantParams.hpp) — по той же
+// причине, что и TerrainConfig выше: core не знает о JSON, поэтому
+// перенос значений делает server (main.cpp). Имена и значения по
+// умолчанию должны совпадать с core::PlantParams.
+struct PlantConfig {
+    // Сколько видов травы в мире. Ядро обрежет значение до 3..12
+    // (core::kMinGrassSpecies/kMaxGrassSpecies): меньше трёх — не о чем
+    // говорить, больше двенадцати — виды перестают быть различимыми при
+    // одном и том же бюджете преимуществ.
+    int grass_species = 5;
+
+    // Какая доля клеток засевается при генерации. Дальше трава
+    // расселяется сама (PlantSystem), поэтому это стартовая
+    // заселённость, а не итоговая.
+    float grass_coverage = 0.06f;
+
+    // Свойства мира (core::WorldPropertiesComponent), как и
+    // mineral_moisture_threshold у террейна: выбираются при генерации,
+    // во время симуляции PlantSystem их только читает.
+    float mutation_rate = 0.06f;
+    float humus_decay_rate = 0.02f;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PlantConfig, grass_species, grass_coverage, mutation_rate,
+                                    humus_decay_rate)
+
 struct ServerConfig {
     std::string host = "127.0.0.1";
     int port = 9002;
@@ -146,6 +171,9 @@ struct ServerConfig {
     int boulder_count = 40;
     unsigned boulder_seed = 12345;
 
+    PlantConfig plants{};
+    unsigned plant_seed = 24680;
+
     int tick_interval_ms = 200;
     // Отрицательное значение — тикать бесконечно (мир существует
     // независимо от наблюдателя, 02_CorePrinciples.md, п.1).
@@ -157,7 +185,7 @@ struct ServerConfig {
     std::string saves_dir = "saves";
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, terrain_seed, terrain, boulder_count,
-                                    boulder_seed, tick_interval_ms, tick_count, saves_dir)
+                                    boulder_seed, plants, plant_seed, tick_interval_ms, tick_count, saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
 // сети (протокол "regenerate", см. NetworkServer.hpp) без пересоздания
@@ -170,8 +198,16 @@ struct RegenerationRequest {
     TerrainConfig terrain{};
     int boulder_count = 40;
     unsigned boulder_seed = 12345;
+    PlantConfig plants{};
+    unsigned plant_seed = 24680;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(RegenerationRequest, terrain_seed, terrain, boulder_count, boulder_seed)
+// ..._WITH_DEFAULT, а не строгий вариант, — по той же причине, что и у
+// структур конфигурации выше: этот запрос лежит внутри каждого файла
+// сохранённого мира ("generation"), и со строгим разбором добавление
+// любого нового поля (например, растений) делало бы все ранее
+// сохранённые миры нечитаемыми целиком.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, terrain_seed, terrain, boulder_count,
+                                    boulder_seed, plants, plant_seed)
 
 struct ClientConfig {
     std::string host = "127.0.0.1";

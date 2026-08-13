@@ -145,6 +145,52 @@ void NetworkClient::handleMessage(const std::string& payload) {
             }
         }
 
+        // Растения: плотные массивы (-1 — пустая клетка), перегной —
+        // разреженный список, как вода.
+        state_.plantSpeciesAt.assign(cellCount, -1);
+        state_.plantGrowth.assign(cellCount, 0.0f);
+        state_.humus.assign(cellCount, 0);
+        if (json.contains("plants")) {
+            const auto& plants = json["plants"];
+            if (plants.contains("species")) {
+                state_.plantSpeciesAt = plants["species"].get<std::vector<int>>();
+            }
+            if (plants.contains("growth")) {
+                // Развитость приходит целыми процентами (так плотный
+                // массив в JSON вчетверо компактнее) — внутри клиента
+                // удобнее долей 0..1, как и остальные слои.
+                const auto percent = plants["growth"].get<std::vector<int>>();
+                state_.plantGrowth.assign(percent.size(), 0.0f);
+                for (std::size_t i = 0; i < percent.size(); ++i) {
+                    state_.plantGrowth[i] = static_cast<float>(percent[i]) / 100.0f;
+                }
+            }
+        }
+        if (json.contains("humus")) {
+            for (const auto& h : json["humus"]) {
+                const int hx = h.value("x", -1);
+                const int hy = h.value("y", -1);
+                if (hx >= 0 && hx < state_.areaWidth && hy >= 0 && hy < state_.areaHeight) {
+                    state_.humus[static_cast<std::size_t>(hy) * state_.areaWidth + hx] = h.value("minerals", 0);
+                }
+            }
+        }
+        if (json.contains("plant_species")) {
+            state_.plantSpecies.clear();
+            for (const auto& archetype : json["plant_species"]) {
+                if (!archetype.is_object()) {
+                    continue;
+                }
+                std::vector<std::pair<std::string, float>> traits;
+                for (const auto& [name, value] : archetype.items()) {
+                    if (name != "species" && value.is_number()) {
+                        traits.emplace_back(name, value.get<float>());
+                    }
+                }
+                state_.plantSpecies.push_back(std::move(traits));
+            }
+        }
+
         if (json.contains("terrain")) {
             state_.generation.terrain = json["terrain"].get<goblins::TerrainConfig>();
         }

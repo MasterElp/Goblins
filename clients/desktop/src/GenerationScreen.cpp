@@ -25,7 +25,7 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
     const Color mutedColor{160, 160, 160, 255};
     const Color cursorColor{255, 220, 90, 255};
 
-    DrawText("World Generation - Stage 1: Soil & Water", 12, 10, 20, textColor);
+    DrawText("World Generation - Soil, Water & Grass", 12, 10, 20, textColor);
 
     const WorldState snapshot = network.snapshot();
 
@@ -82,9 +82,20 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
                 const float screenX = offsetX + x * tileSizeF;
                 const float screenY = offsetY + y * tileSizeF;
 
-                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
-                              TileColors::soil(snapshot.moisture[i], snapshot.rockiness[i], snapshot.compaction[i],
-                                                TileColors::mineralsFraction(snapshot.minerals[i])));
+                Color tileColor = TileColors::soil(snapshot.moisture[i], snapshot.rockiness[i],
+                                                    snapshot.compaction[i],
+                                                    TileColors::mineralsFraction(snapshot.minerals[i]));
+                // Трава и перегной — как на экране симуляции: сразу после
+                // генерации видно, куда какие виды вообще сели, а если
+                // запустить симуляцию отсюда (кнопка Start), видно и как
+                // они расселяются.
+                if (snapshot.humus[i] > 0) {
+                    tileColor = TileColors::humus(tileColor, snapshot.humus[i]);
+                }
+                if (snapshot.plantSpeciesAt[i] >= 0) {
+                    tileColor = TileColors::plant(tileColor, snapshot.plantSpeciesAt[i], snapshot.plantGrowth[i]);
+                }
+                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize, tileColor);
                 if (snapshot.waterDepth[i] > 0.0f) {
                     DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
                                   TileColors::water(snapshot.waterDepth[i]));
@@ -135,10 +146,15 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
             std::any_of(snapshot.waterSources.begin(), snapshot.waterSources.end(),
                         [&](const auto& s) { return s.first == hoverX && s.second == hoverY; });
         const std::string label =
-            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s%s", hoverX, hoverY,
+            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s%s%s%s", hoverX, hoverY,
                        snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi], snapshot.minerals[hi],
                        snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "",
-                       hoverIsSource ? "  [source]" : "");
+                       hoverIsSource ? "  [source]" : "",
+                       snapshot.plantSpeciesAt[hi] >= 0
+                           ? TextFormat("  grass sp%d %.0f%%", snapshot.plantSpeciesAt[hi],
+                                        snapshot.plantGrowth[hi] * 100.0f)
+                           : "",
+                       snapshot.humus[hi] > 0 ? TextFormat("  humus %d", snapshot.humus[hi]) : "");
         DrawText(label.c_str(), 12, screenH - 22, 16, cursorColor);
     }
 

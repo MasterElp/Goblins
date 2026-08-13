@@ -8,12 +8,17 @@
 #include <nlohmann/json.hpp>
 
 #include "core/components/HeightComponent.hpp"
+#include "core/components/HumusComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
+#include "core/components/PlantComponent.hpp"
+#include "core/components/PlantGenomeComponent.hpp"
+#include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
+#include "core/generation/PlantGenetics.hpp"
 #include "server/WorldSave.hpp"
 
 namespace goblins {
@@ -25,6 +30,15 @@ namespace {
 // массивах.
 float round3(float value) {
     return std::round(value * 1000.0f) / 1000.0f;
+}
+
+// Развитость растения — целые проценты, а не доля. Значение нужно клиенту
+// только чтобы выбрать насыщенность цвета тайла, точность тут не нужна, а
+// массив плотный (одно значение на тайл): в JSON число с плавающей точкой
+// печатается как double, то есть каждое значение занимает под два десятка
+// знаков вместо двух-трёх у целого процента.
+int growthPercent(float growth) {
+    return static_cast<int>(std::lround(std::clamp(growth, 0.0f, 1.0f) * 100.0f));
 }
 
 } // namespace
@@ -191,6 +205,8 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
             toSave.terrain = currentGenerationConfig_.terrain;
             toSave.boulder_count = currentGenerationConfig_.boulder_count;
             toSave.boulder_seed = currentGenerationConfig_.boulder_seed;
+            toSave.plants = currentGenerationConfig_.plants;
+            toSave.plant_seed = currentGenerationConfig_.plant_seed;
         }
         saveServerConfig(configPath_, toSave);
         std::cout << "Generation config saved to '" << configPath_ << "'.\n";
@@ -334,6 +350,53 @@ std::string NetworkServer::buildSnapshotMessage() const {
             waterSources.push_back({{"x", pos.x}, {"y", pos.y}});
         });
     message["water_sources"] = waterSources;
+
+    // Растения — плотные массивы, как почва, а не разреженный список, как
+    // вода: заросший луг занимает большую часть Области, и объект на
+    // каждое растение обошёлся бы дороже двух массивов. species = -1 —
+    // клетка пустая (растение — Entity, и его отсутствие тут выражается
+    // именно значением-заглушкой, потому что массив плотный).
+    std::vector<int> plantSpecies(cellCount, -1);
+    std::vector<int> plantGrowth(cellCount, 0);
+    world_.registry()
+        .view<const PositionComponent, const PlantComponent, const PlantGenomeComponent>()
+        .each([&](const PositionComponent& pos, const PlantComponent& plant, const PlantGenomeComponent& genome) {
+            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
+            plantSpecies[i] = genome.species;
+            plantGrowth[i] = growthPercent(plant.growth);
+        });
+    message["plants"]["species"] = plantSpecies;
+    message["plants"]["growth"] = plantGrowth;
+
+    // Перегной — наоборот, разреженно, как вода: он лежит только там, где
+    // недавно умерло растение, и на большей части карты его нет.
+    auto humus = nlohmann::json::array();
+    world_.registry()
+        .view<const PositionComponent, const HumusComponent>()
+        .each([&](const PositionComponent& pos, const HumusComponent& tileHumus) {
+            humus.push_back({{"x", pos.x}, {"y", pos.y}, {"minerals", tileHumus.minerals}});
+        });
+    message["humus"] = humus;
+
+    // Виды травы этого мира (их не больше kMaxGrassSpecies): клиенту
+    // нужны и цвет по индексу, и сами числа — чтобы можно было посмотреть,
+    // какая стратегия у травы под курсором. Поля генома перечисляет
+    // таблица черт, а не этот код: новая черта уедет клиенту сама.
+    auto speciesJson = nlohmann::json::array();
+    for (const auto& archetype :
+         world_.registry().get<const PlantSpeciesComponent>(world_.worldEntity()).archetypes) {
+        nlohmann::json record;
+        record["species"] = archetype.species;
+        for (const auto& trait : kGrassTraits) {
+            // Без округления, в отличие от плотных массивов выше: видов
+            // не больше двенадцати, на трафик это не влияет, а часть
+            // черт (расход влаги за тик) живёт в тысячных долях и от
+            // округления превратилась бы в ноль.
+            record[trait.name] = archetype.*trait.gene;
+        }
+        speciesJson.push_back(std::move(record));
+    }
+    message["plant_species"] = speciesJson;
 
     return message.dump();
 }

@@ -5,6 +5,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "config/Config.hpp"
 #include "core/GameLoop.hpp"
@@ -12,10 +13,17 @@
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/TimeComponent.hpp"
+#include "core/components/HumusComponent.hpp"
+#include "core/components/PlantComponent.hpp"
+#include "core/components/PlantGenomeComponent.hpp"
+#include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/generation/BoulderScatter.hpp"
+#include "core/generation/GrassSeeding.hpp"
+#include "core/generation/PlantGenetics.hpp"
 #include "core/generation/TerrainGenerator.hpp"
 #include "core/systems/HydrologySystem.hpp"
+#include "core/systems/PlantSystem.hpp"
 #include "core/systems/TimeSystem.hpp"
 #include "server/ConsoleHotkeyWatcher.hpp"
 #include "server/NetworkServer.hpp"
@@ -65,9 +73,20 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     return params;
 }
 
+// То же самое для растений: core::PlantParams — не JSON-структура, её
+// заполняет server (07_TechStack.md, п.6).
+goblins::PlantParams toPlantParams(const goblins::PlantConfig& config) {
+    goblins::PlantParams params;
+    params.grassSpecies = config.grass_species;
+    params.grassCoverage = config.grass_coverage;
+    params.mutationRate = config.mutation_rate;
+    params.humusDecayRate = config.humus_decay_rate;
+    return params;
+}
+
 // Генерация мира с нуля: полный сброс (World::reset — пустой registry,
-// свежая Область заданного размера, нулевой тик), затем почва/вода и
-// булыжники. Один и тот же путь и для нового мира из меню, и для
+// свежая Область заданного размера, нулевой тик), затем почва/вода,
+// булыжники и трава. Один и тот же путь и для нового мира из меню, и для
 // Regenerate на экране генерации — сгенерированный мир всегда начинается
 // с тика 0, каким бы ни был предыдущий.
 goblins::GenerationStats generateWorld(goblins::World& world, const goblins::AreaSize& area,
@@ -75,6 +94,11 @@ goblins::GenerationStats generateWorld(goblins::World& world, const goblins::Are
     world.reset(area.width, area.height);
     const auto stats = generateTerrain(world, request.terrain_seed, toTerrainParams(request.terrain));
     scatterBoulders(world, request.boulder_count, request.boulder_seed);
+    // Заселение растительностью — следующий этап генерации
+    // (02_CorePrinciples.md, п.5), и он именно последний: трава должна
+    // видеть уже готовые водоёмы и уже расставленные непроходимые
+    // объекты, чтобы не сесть на воду и не занять чужой тайл.
+    seedGrass(world, toPlantParams(request.plants), request.plant_seed);
     return stats;
 }
 
@@ -105,8 +129,50 @@ void printWorldStats(const goblins::World& world, int boulderCount) {
 
     std::cout << "Boulders placed: " << placedBoulders << " of " << boulderCount << "\n";
     std::cout << "Unique tiles: " << occupiedTiles.size()
-               << (occupiedTiles.size() == placedBoulders ? " -- impassability rule holds\n\n"
-                                                            : " -- ERROR: duplicate tiles found!\n\n");
+               << (occupiedTiles.size() == placedBoulders ? " -- impassability rule holds\n"
+                                                            : " -- ERROR: duplicate tiles found!\n");
+}
+
+// Виды травы этого мира и их численность — единственное место, где видно,
+// какие стратегии выпали при генерации и как они уживаются. Поля генома
+// перечисляются не руками, а обходом таблицы черт (kGrassTraits): новая
+// черта появится в выводе сама, как и в сохранении и в снапшоте.
+void printPlantStats(const goblins::World& world) {
+    const auto& archetypes =
+        world.registry().get<const goblins::PlantSpeciesComponent>(world.worldEntity()).archetypes;
+    if (archetypes.empty()) {
+        std::cout << "Grass species: none (plants disabled for this world)\n\n";
+        return;
+    }
+
+    std::vector<int> population(archetypes.size(), 0);
+    std::size_t plants = 0;
+    world.registry().view<const goblins::PlantGenomeComponent>().each(
+        [&](const goblins::PlantGenomeComponent& genome) {
+            ++plants;
+            if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < population.size()) {
+                ++population[static_cast<std::size_t>(genome.species)];
+            }
+        });
+
+    std::size_t humusTiles = 0;
+    long long humusMinerals = 0;
+    world.registry().view<const goblins::HumusComponent>().each([&](const goblins::HumusComponent& humus) {
+        ++humusTiles;
+        humusMinerals += humus.minerals;
+    });
+
+    std::cout << "Grass species: " << archetypes.size() << ", plants: " << plants << ", humus: " << humusTiles
+               << " tiles (" << humusMinerals << " minerals waiting to return)\n";
+    std::cout << std::fixed;
+    for (const auto& archetype : archetypes) {
+        std::cout << "  sp" << archetype.species << " n=" << population[static_cast<std::size_t>(archetype.species)];
+        for (const auto& trait : goblins::kGrassTraits) {
+            std::cout << " " << trait.name << "=" << std::setprecision(4) << archetype.*trait.gene;
+        }
+        std::cout << "\n";
+    }
+    std::cout << std::defaultfloat << "\n";
 }
 
 // Единственное место, где стадии generateTerrain видны снаружи core
@@ -181,6 +247,8 @@ int main(int argc, char** argv) {
     generationConfig.terrain = config.terrain;
     generationConfig.boulder_count = config.boulder_count;
     generationConfig.boulder_seed = config.boulder_seed;
+    generationConfig.plants = config.plants;
+    generationConfig.plant_seed = config.plant_seed;
     network.setCurrentGenerationConfig(generationConfig);
 
     if (!network.start()) {
@@ -202,6 +270,7 @@ int main(int argc, char** argv) {
 
     loop.addSystem(goblins::TimeSystem);
     loop.addSystem(goblins::HydrologySystem);
+    loop.addSystem(goblins::PlantSystem);
     loop.onTickComplete = [&](const goblins::World& w) {
         const auto& time = w.registry().get<const goblins::TimeComponent>(w.worldEntity());
         if (tickLoggingEnabled && time.tick % kTickLogInterval == 0) {
@@ -260,6 +329,7 @@ int main(int argc, char** argv) {
                 const auto genStats = generateWorld(world, config.area, request);
                 printGenerationStats(genStats);
                 printWorldStats(world, request.boulder_count);
+                printPlantStats(world);
 
                 goblins::WorldSaveInfo info;
                 std::string error;
@@ -292,6 +362,7 @@ int main(int argc, char** argv) {
                     std::cout << "World '" << info.name << "' loaded (tick " << info.tick << ", area "
                                << info.area_width << "x" << info.area_height << ").\n";
                     printWorldStats(world, generation.boulder_count);
+                    printPlantStats(world);
                     network.broadcastNotice("info", "World '" + info.name + "' loaded.");
                     worldReady = true;
                 } else {
@@ -372,6 +443,7 @@ int main(int argc, char** argv) {
 
             printGenerationStats(genStats);
             printWorldStats(world, request->boulder_count);
+            printPlantStats(world);
         }
 
         return config.tick_count < 0 || ticksRun++ < config.tick_count;

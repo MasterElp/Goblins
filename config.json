@@ -6,6 +6,13 @@
     "boulder_count": 16,
     "boulder_seed": 243030,
     "host": "127.0.0.1",
+    "plant_seed": 24680,
+    "plants": {
+        "grass_coverage": 0.06,
+        "grass_species": 5,
+        "humus_decay_rate": 0.02,
+        "mutation_rate": 0.06
+    },
     "port": 9002,
     "saves_dir": "saves",
     "terrain": {
