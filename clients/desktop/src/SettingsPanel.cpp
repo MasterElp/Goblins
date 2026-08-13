@@ -86,6 +86,15 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // истока большой стоячий перепад — тот самый "конус" у источника.
     ops.floatRow("Slope boost", edited.terrain.water_slope_boost, 0.0f, 20.0f);
 
+    ops.section("Erosion");
+    // Доля перенесённой воды, превращающаяся в вымытую породу. Порода не
+    // исчезает: ровно столько же оседает там, куда пришла вода.
+    // Каменистая и утрамбованная почва размывается заметно медленнее.
+    ops.floatRow("Erosion rate", edited.terrain.soil_erosion_rate, 0.0f, 0.5f);
+    // Потолок выемки относительно соседа — без него клетка под
+    // источником размывается без остановки в бездонную яму.
+    ops.floatRow("Max scour depth", edited.terrain.max_erosion_depth, 0.0f, 3.0f);
+
     ops.section("Water sources");
     ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
     // Оба — свойства мира, как порог минералов выше. precision=6 у

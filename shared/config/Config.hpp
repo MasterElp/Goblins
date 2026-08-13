@@ -111,6 +111,12 @@ struct TerrainConfig {
     // core::TerrainParams::waterFlowRate/waterSlopeBoost.
     float water_flow_rate = 0.3f;
     float water_slope_boost = 5.0f;
+
+    // Эрозия: скорость вымывания породы потоком и потолок выемки
+    // относительно соседа — тоже свойства мира, см.
+    // core::TerrainParams::soilErosionRate/maxErosionDepth.
+    float soil_erosion_rate = 0.05f;
+    float max_erosion_depth = 0.5f;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_frequency, rock_noise_frequency,
                                     compaction_noise_frequency, moisture_noise_frequency, minerals_noise_frequency,
@@ -120,7 +126,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_freq
                                     max_pond_size, pond_depth_scale, moisture_falloff, water_moisture_boost,
                                     rock_moisture_reduction, minerals_average, river_minerals,
                                     mineral_moisture_threshold, water_source_count, water_evaporation_rate,
-                                    water_source_strength, water_flow_rate, water_slope_boost)
+                                    water_source_strength, water_flow_rate, water_slope_boost,
+                                    soil_erosion_rate, max_erosion_depth)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";

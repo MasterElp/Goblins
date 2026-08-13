@@ -47,13 +47,6 @@ constexpr float kCompactionRockFloor = 0.6f;
 constexpr float kCompactionSoftenReach = 4.0f;
 constexpr float kCompactionSoftenRate = 0.02f;
 
-// Эрозия сопровождает перенос воды: источник теряет высоту, приёмник
-// получает ровно столько же (сохранение "материала", без источников из
-// ниоткуда) — масштабируется каменистостью (сопротивляется эрозии) и текущей
-// мягкостью почвы (что мягче — то быстрее размывается), давая петлю обратной
-// связи с размягчением из п.4.
-constexpr float kErosionRate = 0.05f;
-
 // Гистерезис появления/исчезания WaterComponent — без него тайл на границе
 // порога мерцал бы туда-сюда каждый тик.
 constexpr float kWaterAppearThreshold = 0.05f;
@@ -94,6 +87,8 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const float waterSourceStrength = worldProperties.waterSourceStrength;
     const float waterFlowRate = worldProperties.waterFlowRate;
     const float waterSlopeBoost = worldProperties.waterSlopeBoost;
+    const float soilErosionRate = worldProperties.soilErosionRate;
+    const float maxErosionDepth = worldProperties.maxErosionDepth;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -254,7 +249,28 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             inflowFlowSpeed[j] = flowSpeed[i];
         }
 
-        const float erosion = amount * kErosionRate * (1.0f - rockiness[i]) * (1.0f - compaction[i]);
+        // Эрозия: поток вымывает породу из клетки, откуда уходит вода, и
+        // ровно столько же откладывает там, куда она пришла. Обе правки
+        // используют одну и ту же величину erosion — почвы в мире не
+        // становится меньше, она только переносится ниже по течению и
+        // оседает там, где вода останавливается (в пруду, во впадине).
+        //
+        // Разная почва вымывается по-разному: каменистая и утрамбованная
+        // сопротивляются размыву, рыхлая уходит легко.
+        const float softness = (1.0f - rockiness[i]) * (1.0f - compaction[i]);
+
+        // Потолок выемки. Без него клетка под постоянным источником
+        // размывается каждый тик без остановки — высота уезжает в минус,
+        // и появляется бездонная яма, никак не связанная с рельефом
+        // вокруг. Ограничиваем глубину относительно соседа, с которым
+        // клетка обменивается водой: ниже, чем на maxErosionDepth под
+        // ним, размыть нельзя. Считаем от снимка (terrainHeight), а не от
+        // накопителя, чтобы результат не зависел от порядка обхода клеток
+        // — как и всё остальное в этом шаге.
+        const float erosionFloor = terrainHeight[j] - maxErosionDepth;
+        const float allowedErosion = std::max(0.0f, terrainHeight[i] - erosionFloor);
+        const float erosion = std::min(amount * soilErosionRate * softness, allowedErosion);
+
         nextTerrainHeight[i] -= erosion;
         nextTerrainHeight[j] += erosion;
     }

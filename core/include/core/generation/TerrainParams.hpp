@@ -100,6 +100,13 @@ struct TerrainParams {
     // при генерации, HydrologySystem только читает.
     float waterFlowRate = 0.3f;
     float waterSlopeBoost = 5.0f;
+
+    // Эрозия: скорость вымывания породы потоком и потолок выемки
+    // относительно соседа (см. WorldPropertiesComponent) — тоже свойства
+    // мира: выбираются здесь, при генерации, HydrologySystem только
+    // читает.
+    float soilErosionRate = 0.05f;
+    float maxErosionDepth = 0.5f;
 };
 
 } // namespace goblins
