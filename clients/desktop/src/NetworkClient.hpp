@@ -22,6 +22,9 @@ struct WorldState {
     std::uint64_t tick = 0;
     bool paused = false;
     std::vector<std::pair<int, int>> boulders;
+    // Истоки рек + "родники" (WaterSourceComponent) — тег без данных, как
+    // boulders.
+    std::vector<std::pair<int, int>> waterSources;
 
     // Почва — плоские массивы (row-major, x + y*areaWidth), одно значение
     // на тайл. Вода — так же; глубина 0 значит "воды нет" (сам компонент

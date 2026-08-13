@@ -16,6 +16,7 @@
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 
 namespace goblins {
@@ -649,6 +650,34 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
         }
     }
 
+    // --- 4b. Источники воды: исток каждой реки — автоматически, плюс
+    // waterSourceCount "родников" в случайных точках карты. Отмечаются
+    // здесь, ДО расчёта влажности ниже, — родник на сухой земле сразу
+    // получает небольшую глубину и участвует в distanceToWater наравне с
+    // любой другой водой, а не появляется только через десятки тиков
+    // накопления инфлоу (HydrologySystem). Сам постоянный инфлоу — уже не
+    // здесь, а в HydrologySystem каждый тик (генерация лишь помечает
+    // тайл, WaterSourceComponent).
+    std::vector<bool> isWaterSource(cellCount, false);
+    for (const auto& river : acceptedRivers) {
+        if (!river.centerline.empty()) {
+            const auto& head = river.centerline.front();
+            isWaterSource[index(head.x, head.y)] = true;
+        }
+    }
+    {
+        std::mt19937 sourceRng(seed + 20);
+        std::uniform_int_distribution<int> xDist(0, width - 1);
+        std::uniform_int_distribution<int> yDist(0, height - 1);
+        for (int n = 0; n < params.waterSourceCount; ++n) {
+            const std::size_t i = index(xDist(sourceRng), yDist(sourceRng));
+            isWaterSource[i] = true;
+            if (waterDepth[i] <= 0.0f) {
+                waterDepth[i] = params.riverDepth * 0.3f;
+            }
+        }
+    }
+
     // --- 5. Влажность: фоновый шум + затухание по расстоянию до воды ---
     // Multi-source BFS от всех водных клеток — стандартный distance
     // transform, даёт плавный градиент вместо ступенчатого.
@@ -717,6 +746,9 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             if (waterDepth[i] > 0.0f) {
                 world.registry().emplace<WaterComponent>(entity, WaterComponent{waterDepth[i], flowSpeed[i]});
             }
+            if (isWaterSource[i]) {
+                world.registry().emplace<WaterSourceComponent>(entity);
+            }
             world.area().place(entity, x, y, /*impassable=*/false);
         }
     }
@@ -727,8 +759,10 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // п.1a). WorldPropertiesComponent на World Entity уже существует
     // (создан в World::reset/конструкторе) — значения по умолчанию
     // просто перезаписываются выбором этой генерации.
-    world.registry().get<WorldPropertiesComponent>(world.worldEntity()).mineralMoistureThreshold =
-        params.mineralMoistureThreshold;
+    auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
+    worldProperties.mineralMoistureThreshold = params.mineralMoistureThreshold;
+    worldProperties.waterEvaporationRate = params.waterEvaporationRate;
+    worldProperties.waterSourceStrength = params.waterSourceStrength;
 
     stats.totalMs = elapsedMs(totalStart);
     return stats;

@@ -12,6 +12,7 @@
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "core/components/WaterSourceComponent.hpp"
 #include "server/WorldSave.hpp"
 
 namespace goblins {
@@ -307,6 +308,17 @@ std::string NetworkServer::buildSnapshotMessage() const {
             water.push_back({{"x", pos.x}, {"y", pos.y}, {"depth", round3(w.depth)}});
         });
     message["water"] = water;
+
+    // Источники — тоже разреженно, тег без данных (как boulders): их
+    // мало (river_count + water_source_count), плотный массив был бы
+    // избыточен.
+    auto waterSources = nlohmann::json::array();
+    world_.registry()
+        .view<const WaterSourceComponent, const PositionComponent>()
+        .each([&](auto /*entity*/, const PositionComponent& pos) {
+            waterSources.push_back({{"x", pos.x}, {"y", pos.y}});
+        });
+    message["water_sources"] = waterSources;
 
     return message.dump();
 }

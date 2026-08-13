@@ -21,7 +21,7 @@
         "moisture_falloff": 8.0,
         "moisture_noise_frequency": 0.029999999329447746,
         "noise_gain": 0.5,
-        "noise_lacunarity": 2.0,
+        "noise_lacunarity": 3.126760482788086,
         "noise_octaves": 4,
         "pond_depth_scale": 4.0,
         "river_count": 1,
@@ -33,7 +33,9 @@
         "rock_height_bump": 0.3499999940395355,
         "rock_moisture_reduction": 0.30000001192092896,
         "rock_noise_frequency": 0.05000000074505806,
-        "water_moisture_boost": 0.699999988079071
+        "water_evaporation_rate": 0.0016431923722848296,
+        "water_moisture_boost": 0.699999988079071,
+        "water_source_count": 4
     },
     "terrain_seed": 214923,
     "tick_count": -1,

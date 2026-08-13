@@ -9,6 +9,7 @@
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 
 namespace goblins {
@@ -80,10 +81,12 @@ void HydrologySystem(World& world, CommandQueue& commands) {
 
     auto index = [width](int x, int y) { return static_cast<std::size_t>(y) * width + x; };
 
-    // Свойство мира, выбранное один раз при генерации — System только
+    // Свойства мира, выбранные один раз при генерации — System только
     // читает, никогда не пишет (06_GameLoop.md, п.1a).
-    const float mineralMoistureThreshold =
-        world.registry().get<const WorldPropertiesComponent>(world.worldEntity()).mineralMoistureThreshold;
+    const auto& worldProperties = world.registry().get<const WorldPropertiesComponent>(world.worldEntity());
+    const float mineralMoistureThreshold = worldProperties.mineralMoistureThreshold;
+    const float waterEvaporationRate = worldProperties.waterEvaporationRate;
+    const float waterSourceStrength = worldProperties.waterSourceStrength;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -100,6 +103,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     std::vector<float> terrainHeight(cellCount, 0.0f);
     std::vector<float> waterDepth(cellCount, 0.0f);
     std::vector<float> flowSpeed(cellCount, 0.0f);
+    std::vector<bool> isWaterSource(cellCount, false);
 
     auto& registry = world.registry();
     auto view = registry.view<PositionComponent, SoilComponent, HeightComponent>();
@@ -123,6 +127,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             waterDepth[i] = water->depth;
             flowSpeed[i] = water->flowSpeed;
         }
+        isWaterSource[i] = registry.all_of<WaterSourceComponent>(entity);
     }
 
     // --- 2. Дистанция до воды: multi-source BFS (8-связность), заново
@@ -225,6 +230,25 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         const float erosion = amount * kErosionRate * (1.0f - rockiness[i]) * (1.0f - compaction[i]);
         nextTerrainHeight[i] -= erosion;
         nextTerrainHeight[j] += erosion;
+    }
+
+    // --- 5b. Испарение + источники: независимые правки поверх nextWaterDepth
+    // из течения выше — каждый тик всякая вода теряет waterEvaporationRate
+    // глубины, а источники (истоки рек, "родники") получают приток
+    // waterEvaporationRate * waterSourceStrength — свойства мира, обе
+    // читаются выше, не константы (06_GameLoop.md, п.1a). Испарение
+    // действует на каждую водную клетку карты (их могут быть тысячи), а
+    // источников — единицы, поэтому waterSourceStrength по умолчанию на
+    // порядок больше, чем можно было бы подумать "по одной клетке". Оба
+    // читают снимок (waterDepth/isWaterSource), не друг друга и не
+    // результат течения — порядок клеток не важен. ---
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        if (waterDepth[i] > 0.0f) {
+            nextWaterDepth[i] -= waterEvaporationRate;
+        }
+        if (isWaterSource[i]) {
+            nextWaterDepth[i] += waterEvaporationRate * waterSourceStrength;
+        }
     }
 
     // --- 6. Минералы: снимок -> для каждой клетки найти ОДНОГО (самого

@@ -5,9 +5,134 @@
 
 namespace {
 
-constexpr float kRowHeight = 36.0f;
-constexpr float kSectionGap = 10.0f;
-constexpr float kLabelWidth = 125.0f;
+// Строка стала заметно выше (было 36px, слайдер — 15px): на 4K/зумленных
+// экранах прежние слайдеры было тяжело зацепить мышью.
+constexpr float kRowHeight = 44.0f;
+constexpr float kSectionGap = 12.0f;
+
+// Единственное место, где перечислены все строки панели — и для отрисовки
+// (DrawOps), и для расчёта высоты контента (MeasureOps, см. ниже).
+// Раньше высота считалась через константы kParamRows/kSectionHeaders,
+// которые нужно было руками держать в синхроне со списком строк — при
+// любой правке они расходились и скролл либо обрезал последние
+// параметры, либо оставлял пустой хвост. Теперь высота — это ровно то,
+// что реально нарисовано: добавить параметр можно, добавив вызов сюда, и
+// больше нигде.
+template <typename Ops>
+void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
+    ops.section("Seeds");
+    ops.unsignedSeedRow("Terrain seed", edited.terrain_seed);
+    ops.unsignedSeedRow("Boulder seed", edited.boulder_seed);
+
+    ops.section("Boulders");
+    ops.intRow("Boulder count", edited.boulder_count, 0, 300);
+
+    ops.section("Noise frequency (smaller = bigger shapes)");
+    ops.floatRow("Height", edited.terrain.height_noise_frequency, 0.002f, 0.2f);
+    ops.floatRow("Rockiness", edited.terrain.rock_noise_frequency, 0.002f, 0.2f);
+    ops.floatRow("Compaction", edited.terrain.compaction_noise_frequency, 0.002f, 0.2f);
+    ops.floatRow("Moisture", edited.terrain.moisture_noise_frequency, 0.002f, 0.2f);
+    ops.floatRow("Minerals", edited.terrain.minerals_noise_frequency, 0.002f, 0.2f);
+
+    ops.section("Fractal noise shape");
+    ops.intRow("Octaves", edited.terrain.noise_octaves, 1, 8);
+    ops.floatRow("Lacunarity", edited.terrain.noise_lacunarity, 1.0f, 4.0f);
+    ops.floatRow("Gain", edited.terrain.noise_gain, 0.1f, 0.9f);
+
+    ops.section("Height bumps (keeps river off rock/packed ground)");
+    ops.floatRow("Rock bump", edited.terrain.rock_height_bump, 0.0f, 1.0f);
+    ops.floatRow("Compaction bump", edited.terrain.compaction_height_bump, 0.0f, 1.0f);
+
+    ops.section("River");
+    ops.intRow("Count", edited.terrain.river_count, 0, 20);
+    ops.floatRow("Width (tiles)", edited.terrain.river_width, 1.0f, 12.0f);
+    ops.floatRow("Sinuosity", edited.terrain.river_sinuosity, 0.0f, 1.0f);
+    ops.floatRow("Depth", edited.terrain.river_depth, 0.2f, 5.0f);
+    ops.floatRow("Max flow speed", edited.terrain.river_max_flow_speed, 0.1f, 10.0f);
+
+    ops.section("Ponds");
+    ops.floatRow("Min depth", edited.terrain.min_pond_depth, 0.0f, 0.5f);
+    ops.intRow("Min size (tiles)", edited.terrain.min_pond_size, 1, 200);
+    ops.intRow("Max size (0=none)", edited.terrain.max_pond_size, 0, 2000);
+    ops.floatRow("Depth scale", edited.terrain.pond_depth_scale, 0.5f, 10.0f);
+
+    ops.section("Moisture");
+    ops.floatRow("Falloff (tiles)", edited.terrain.moisture_falloff, 1.0f, 40.0f);
+    ops.floatRow("Water boost", edited.terrain.water_moisture_boost, 0.0f, 1.0f);
+    ops.floatRow("Rock reduction", edited.terrain.rock_moisture_reduction, 0.0f, 1.0f);
+
+    ops.section("Minerals");
+    ops.floatRow("Average", edited.terrain.minerals_average, 0.0f, 50.0f);
+    ops.intRow("River value", edited.terrain.river_minerals, 0, 50);
+    // Свойство мира (06_GameLoop.md, п.1a), не текущий параметр
+    // симуляции: выбирается здесь, при генерации, и во время самой
+    // симуляции HydrologySystem его больше не меняет.
+    ops.floatRow("Moisture threshold", edited.terrain.mineral_moisture_threshold, 0.0f, 1.0f);
+
+    ops.section("Water sources");
+    ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
+    // Оба — свойства мира (06_GameLoop.md, п.1a), как порог минералов
+    // выше. Испарение действует на КАЖДУЮ водную клетку карты (их могут
+    // быть тысячи на 100x100), а источников — единицы, поэтому сила
+    // источника по умолчанию на порядки больше единицы: она должна
+    // перекрыть испарение не только у себя, но и у всей воды, которую
+    // питает.
+    ops.floatRow("Evaporation rate", edited.terrain.water_evaporation_rate, 0.0f, 0.02f);
+    ops.floatRow("Source strength", edited.terrain.water_source_strength, 1.0f, 200.0f);
+}
+
+// Только считает высоту, ничего не рисует — используется до
+// GuiScrollPanel, чтобы задать ей настоящую высоту контента.
+struct MeasureOps {
+    float height = 0.0f;
+
+    void section(const char*) { height += kRowHeight + kSectionGap; }
+    void floatRow(const char*, float&, float, float) { height += kRowHeight; }
+    void intRow(const char*, int&, int, int) { height += kRowHeight; }
+    void unsignedSeedRow(const char*, unsigned&) { height += kRowHeight; }
+};
+
+// Рисует те же строки, что и MeasureOps считает — порядок и состав вызовов
+// в layoutParams общий для обоих, поэтому измеренная высота никогда не
+// расходится с нарисованной.
+struct DrawOps {
+    float x;
+    float y;
+    float rowWidth;
+
+    void section(const char* title) {
+        GuiLabel(Rectangle{x, y, rowWidth, kRowHeight}, title);
+        y += kRowHeight + kSectionGap;
+    }
+
+    void floatRow(const char* label, float& value, float lo, float hi) {
+        GuiLabel(Rectangle{x, y, rowWidth, 18}, TextFormat("%s: %.4f", label, value));
+        GuiSliderBar(Rectangle{x, y + 20, rowWidth, kRowHeight - 24}, nullptr, nullptr, &value, lo, hi);
+        y += kRowHeight;
+    }
+
+    void intRow(const char* label, int& value, int lo, int hi) {
+        float f = static_cast<float>(value);
+        GuiLabel(Rectangle{x, y, rowWidth, 18}, TextFormat("%s: %d", label, value));
+        GuiSliderBar(Rectangle{x, y + 20, rowWidth, kRowHeight - 24}, nullptr, nullptr, &f, static_cast<float>(lo),
+                     static_cast<float>(hi));
+        value = static_cast<int>(f + 0.5f);
+        y += kRowHeight;
+    }
+
+    void unsignedSeedRow(const char* label, unsigned& value) {
+        float f = static_cast<float>(value);
+        GuiLabel(Rectangle{x, y, rowWidth - 70, 18}, TextFormat("%s: %u", label, value));
+        bool randomPressed = GuiButton(Rectangle{x + rowWidth - 60, y - 2, 60, 22}, "Random");
+        GuiSliderBar(Rectangle{x, y + 20, rowWidth, kRowHeight - 24}, nullptr, nullptr, &f, 0.0f, 999999.0f);
+        if (randomPressed) {
+            value = static_cast<unsigned>(GetRandomValue(0, 999999));
+        } else {
+            value = static_cast<unsigned>(f + 0.5f);
+        }
+        y += kRowHeight;
+    }
+};
 
 } // namespace
 
@@ -27,14 +152,13 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     const Rectangle scrollBounds{bounds.x, bounds.y, bounds.width, bounds.height - kFooterHeight};
     const Rectangle footerBounds{bounds.x, bounds.y + bounds.height - kFooterHeight, bounds.width, kFooterHeight};
 
-    // Immediate-mode: сначала считаем, сколько всего строк контента, чтобы
-    // задать GuiScrollPanel настоящую высоту — иначе скролл не появится.
-    // 2 (seed) + 1 (boulder count) + 5 (freq) + 3 (fractal) + 2 (bumps) +
-    // 5 (river) + 4 (pond) + 3 (moisture) + 3 (minerals) = 28 строк с
-    // параметрами, плюс 8 заголовков секций.
-    constexpr int kParamRows = 28;
-    constexpr int kSectionHeaders = 8;
-    const float contentHeight = kParamRows * kRowHeight + kSectionHeaders * (kRowHeight + kSectionGap) + kSectionGap;
+    // Immediate-mode: сначала измеряем реальную высоту контента (тем же
+    // проходом по layoutParams, что и отрисовка), чтобы задать
+    // GuiScrollPanel настоящую высоту — иначе скролл не появится или
+    // обрежет строки.
+    MeasureOps measure;
+    layoutParams(measure, edited_);
+    const float contentHeight = measure.height + kSectionGap;
 
     static Rectangle view{};
     const Rectangle content{0, 0, scrollBounds.width - 18, contentHeight};
@@ -44,91 +168,8 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     BeginScissorMode(static_cast<int>(view.x), static_cast<int>(view.y), static_cast<int>(view.width),
                       static_cast<int>(view.height));
 
-    float y = scrollBounds.y + scroll_.y;
-    const float x = scrollBounds.x + scroll_.x + 8;
-    const float rowWidth = scrollBounds.width - 34;
-
-    auto section = [&](const char* title) {
-        GuiLabel(Rectangle{x, y, rowWidth, kRowHeight}, title);
-        y += kRowHeight + kSectionGap;
-    };
-
-    auto floatRow = [&](const char* label, float& value, float lo, float hi) {
-        GuiLabel(Rectangle{x, y, rowWidth, 16}, TextFormat("%s: %.4f", label, value));
-        GuiSliderBar(Rectangle{x, y + 17, rowWidth, kRowHeight - 21}, nullptr, nullptr, &value, lo, hi);
-        y += kRowHeight;
-    };
-
-    auto intRow = [&](const char* label, int& value, int lo, int hi) {
-        float f = static_cast<float>(value);
-        GuiLabel(Rectangle{x, y, rowWidth, 16}, TextFormat("%s: %d", label, value));
-        GuiSliderBar(Rectangle{x, y + 17, rowWidth, kRowHeight - 21}, nullptr, nullptr, &f, static_cast<float>(lo),
-                     static_cast<float>(hi));
-        value = static_cast<int>(f + 0.5f);
-        y += kRowHeight;
-    };
-
-    auto unsignedSeedRow = [&](const char* label, unsigned& value) {
-        float f = static_cast<float>(value);
-        GuiLabel(Rectangle{x, y, rowWidth - 70, 16}, TextFormat("%s: %u", label, value));
-        bool randomPressed = GuiButton(Rectangle{x + rowWidth - 60, y - 2, 60, 20}, "Random");
-        GuiSliderBar(Rectangle{x, y + 17, rowWidth, kRowHeight - 21}, nullptr, nullptr, &f, 0.0f, 999999.0f);
-        if (randomPressed) {
-            value = static_cast<unsigned>(GetRandomValue(0, 999999));
-        } else {
-            value = static_cast<unsigned>(f + 0.5f);
-        }
-        y += kRowHeight;
-    };
-
-    section("Seeds");
-    unsignedSeedRow("Terrain seed", edited_.terrain_seed);
-    unsignedSeedRow("Boulder seed", edited_.boulder_seed);
-
-    section("Boulders");
-    intRow("Boulder count", edited_.boulder_count, 0, 300);
-
-    section("Noise frequency (smaller = bigger shapes)");
-    floatRow("Height", edited_.terrain.height_noise_frequency, 0.002f, 0.2f);
-    floatRow("Rockiness", edited_.terrain.rock_noise_frequency, 0.002f, 0.2f);
-    floatRow("Compaction", edited_.terrain.compaction_noise_frequency, 0.002f, 0.2f);
-    floatRow("Moisture", edited_.terrain.moisture_noise_frequency, 0.002f, 0.2f);
-    floatRow("Minerals", edited_.terrain.minerals_noise_frequency, 0.002f, 0.2f);
-
-    section("Fractal noise shape");
-    intRow("Octaves", edited_.terrain.noise_octaves, 1, 8);
-    floatRow("Lacunarity", edited_.terrain.noise_lacunarity, 1.0f, 4.0f);
-    floatRow("Gain", edited_.terrain.noise_gain, 0.1f, 0.9f);
-
-    section("Height bumps (keeps river off rock/packed ground)");
-    floatRow("Rock bump", edited_.terrain.rock_height_bump, 0.0f, 1.0f);
-    floatRow("Compaction bump", edited_.terrain.compaction_height_bump, 0.0f, 1.0f);
-
-    section("River");
-    intRow("Count", edited_.terrain.river_count, 0, 20);
-    floatRow("Width (tiles)", edited_.terrain.river_width, 1.0f, 12.0f);
-    floatRow("Sinuosity", edited_.terrain.river_sinuosity, 0.0f, 1.0f);
-    floatRow("Depth", edited_.terrain.river_depth, 0.2f, 5.0f);
-    floatRow("Max flow speed", edited_.terrain.river_max_flow_speed, 0.1f, 10.0f);
-
-    section("Ponds");
-    floatRow("Min depth", edited_.terrain.min_pond_depth, 0.0f, 0.5f);
-    intRow("Min size (tiles)", edited_.terrain.min_pond_size, 1, 200);
-    intRow("Max size (0=none)", edited_.terrain.max_pond_size, 0, 2000);
-    floatRow("Depth scale", edited_.terrain.pond_depth_scale, 0.5f, 10.0f);
-
-    section("Moisture");
-    floatRow("Falloff (tiles)", edited_.terrain.moisture_falloff, 1.0f, 40.0f);
-    floatRow("Water boost", edited_.terrain.water_moisture_boost, 0.0f, 1.0f);
-    floatRow("Rock reduction", edited_.terrain.rock_moisture_reduction, 0.0f, 1.0f);
-
-    section("Minerals");
-    floatRow("Average", edited_.terrain.minerals_average, 0.0f, 50.0f);
-    intRow("River value", edited_.terrain.river_minerals, 0, 50);
-    // Свойство мира (06_GameLoop.md, п.1a), не текущий параметр
-    // симуляции: выбирается здесь, при генерации, и во время самой
-    // симуляции HydrologySystem его больше не меняет.
-    floatRow("Moisture threshold", edited_.terrain.mineral_moisture_threshold, 0.0f, 1.0f);
+    DrawOps draw{scrollBounds.x + scroll_.x + 8, scrollBounds.y + scroll_.y, scrollBounds.width - 34};
+    layoutParams(draw, edited_);
 
     EndScissorMode();
 

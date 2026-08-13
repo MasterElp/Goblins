@@ -68,16 +68,23 @@ struct GenerationStats {
 //      же фиксированное riverMinerals. Дальнейшее движение минералов
 //      между тайлами по правилу песочной кучи — не здесь, а в
 //      HydrologySystem (каждый тик, а не один раз при генерации).
+//   6b. Источники воды (WaterSourceComponent) — исток каждой реки
+//      автоматически, плюс waterSourceCount "родников" в случайных
+//      точках карты (родник на сухой земле сразу получает небольшую
+//      стартовую глубину, чтобы участвовать в расчёте влажности ниже).
+//      Постоянная подпитка этих тайлов и испарение воды со всех
+//      водных тайлов — тоже не здесь, а в HydrologySystem каждый тик.
 //   7. Свойства мира (WorldPropertiesComponent на World Entity,
 //      06_GameLoop.md, п.1a) — выбираются здесь один раз (например,
-//      mineralMoistureThreshold) и дальше не меняются System-ами.
+//      mineralMoistureThreshold, waterEvaporationRate) и дальше не
+//      меняются System-ами.
 //
 // Все числовые пороги и коэффициенты — в params (TerrainParams.hpp), ни
 // одного зашитого значения внутри .cpp.
 //
 // Создаёт один терраформирующий Entity на тайл: PositionComponent +
-// SoilComponent + HeightComponent, и WaterComponent — там, где есть река или
-// пруд.
+// SoilComponent + HeightComponent, и WaterComponent/WaterSourceComponent —
+// там, где есть река/пруд/родник.
 //
 // Возвращает статистику вызова (GenerationStats) — вызывающая сторона
 // (server) печатает её в консоль как единственный источник диагностики:

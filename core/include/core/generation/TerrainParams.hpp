@@ -70,6 +70,20 @@ struct TerrainParams {
     // один раз и записывает на World Entity, дальше HydrologySystem
     // только читает, никогда не меняет (06_GameLoop.md, п.1a).
     float mineralMoistureThreshold = 0.5f;
+
+    // Источники воды (WaterSourceComponent, см. TerrainGenerator.cpp):
+    // помимо истока каждой сгенерированной реки (получает источник
+    // автоматически, по одному на реку), это ещё waterSourceCount
+    // "родников" в случайных точках карты. waterEvaporationRate и
+    // waterSourceStrength — тоже свойства мира (как mineralMoistureThreshold
+    // выше): выбираются здесь, при генерации, и HydrologySystem их
+    // только читает. Маленький waterEvaporationRate и большой
+    // waterSourceStrength по умолчанию — испарение действует на каждую
+    // водную клетку карты (их могут быть тысячи), а источников всегда
+    // единицы, поэтому баланс просит именно такую асимметрию.
+    int waterSourceCount = 3;
+    float waterEvaporationRate = 0.002f;
+    float waterSourceStrength = 40.0f;
 };
 
 } // namespace goblins

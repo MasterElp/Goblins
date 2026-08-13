@@ -174,6 +174,20 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
                           boulderColor);
         }
 
+        // Источники воды — тег без данных (истоки рек + "родники"),
+        // отмечены кольцом поверх воды, как булыжники отмечены заливкой:
+        // это не переключаемый слой почвы, а факт наличия/отсутствия.
+        for (const auto& source : snapshot.waterSources) {
+            const float screenX = static_cast<float>(source.first) * tileSizeF - viewX;
+            const float screenY = static_cast<float>(source.second) * tileSizeF - viewY + kHudHeight;
+            if (screenX + tileSize < 0 || screenX > viewportW || screenY + tileSize < kHudHeight ||
+                screenY > viewportH + kHudHeight) {
+                continue;
+            }
+            DrawCircleLines(static_cast<int>(screenX + tileSizeF / 2.0f), static_cast<int>(screenY + tileSizeF / 2.0f),
+                             std::max(2.0f, tileSizeF * 0.35f), Color{130, 210, 255, 255});
+        }
+
         if (hasHoverTile) {
             const float screenX = static_cast<float>(hoverX) * tileSizeF - viewX;
             const float screenY = static_cast<float>(hoverY) * tileSizeF - viewY + kHudHeight;
@@ -230,10 +244,14 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     // экране генерации: в верхней полосе их теснят имя мира и кнопки.
     if (hasHoverTile) {
         const std::size_t hi = static_cast<std::size_t>(hoverY) * snapshot.areaWidth + hoverX;
+        const bool hoverIsSource =
+            std::any_of(snapshot.waterSources.begin(), snapshot.waterSources.end(),
+                        [&](const auto& s) { return s.first == hoverX && s.second == hoverY; });
         const std::string tileLabel =
-            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s", hoverX, hoverY,
+            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s%s", hoverX, hoverY,
                        snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi], snapshot.minerals[hi],
-                       snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "");
+                       snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "",
+                       hoverIsSource ? "  [source]" : "");
         const int labelWidth = MeasureText(tileLabel.c_str(), 16);
         DrawText(tileLabel.c_str(), screenW - labelWidth - 12, screenH - 24, 16, cursorColor);
     }

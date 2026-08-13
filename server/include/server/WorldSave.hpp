@@ -31,9 +31,12 @@ namespace goblins {
 //                   "soil": {"moisture","rockiness","compaction","minerals"},
 //                   "height": H,
 //                   "water": {"depth","flow_speed"},
+//                   "water_source": true,
 //                   "impassable": true,
 //                   "time": {"tick": N},
-//                   "world_properties": {"mineral_moisture_threshold": T}}, ... ]}
+//                   "world_properties": {"mineral_moisture_threshold": T,
+//                                         "water_evaporation_rate": R,
+//                                         "water_source_strength": S}}, ... ]}
 //
 // "soil.minerals" (SoilComponent.minerals, целое число) — как и "height",
 // добавлено без смены версии: у старых файлов без этого поля минералы
@@ -42,8 +45,14 @@ namespace goblins {
 // "world_properties" (WorldPropertiesComponent, живёт на том же World
 // Entity, что и "time" — 06_GameLoop.md, п.1a) — свойства мира, выбранные
 // один раз при генерации и не меняющиеся во время симуляции. У старых
-// файлов без этого поля используется значение по умолчанию
-// (mineral_moisture_threshold = 0.5), World::reset выставляет его сам.
+// файлов без этого поля (или без отдельных полей внутри него) действуют
+// значения по умолчанию (mineral_moisture_threshold = 0.5,
+// water_evaporation_rate = 0.002, water_source_strength = 40) —
+// World::reset выставляет их сам.
+//
+// "water_source" (WaterSourceComponent) — тег, как "impassable": сам
+// факт наличия и есть данные, отсутствие поля у старых файлов означает
+// "не источник" (02_CorePrinciples.md, п.3).
 //
 // "height" (HeightComponent) добавлено без смены версии формата: старые
 // файлы без этого поля читаются как есть (высота считается 0 — плоский

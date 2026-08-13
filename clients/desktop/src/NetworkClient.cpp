@@ -101,6 +101,13 @@ void NetworkClient::handleMessage(const std::string& payload) {
             state_.boulders.emplace_back(b["x"].get<int>(), b["y"].get<int>());
         }
 
+        state_.waterSources.clear();
+        if (json.contains("water_sources")) {
+            for (const auto& s : json["water_sources"]) {
+                state_.waterSources.emplace_back(s["x"].get<int>(), s["y"].get<int>());
+            }
+        }
+
         const std::size_t cellCount = static_cast<std::size_t>(state_.areaWidth) * state_.areaHeight;
         state_.moisture.assign(cellCount, 0.0f);
         state_.rockiness.assign(cellCount, 0.0f);

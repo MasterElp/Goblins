@@ -51,6 +51,9 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.mineralsAverage = config.minerals_average;
     params.riverMinerals = config.river_minerals;
     params.mineralMoistureThreshold = config.mineral_moisture_threshold;
+    params.waterSourceCount = config.water_source_count;
+    params.waterEvaporationRate = config.water_evaporation_rate;
+    params.waterSourceStrength = config.water_source_strength;
     return params;
 }
 

@@ -17,6 +17,7 @@
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "platform/ExecutablePath.hpp"
 
@@ -64,6 +65,8 @@ struct ParsedEntity {
     bool hasWater = false;
     WaterComponent water{};
     bool impassable = false;
+    // Тег, как impassable — сам факт наличия и есть данные.
+    bool waterSource = false;
     // World Entity — это Entity с TimeComponent и WorldPropertiesComponent
     // (06_GameLoop.md, п.1/п.1a). При загрузке он не создаётся заново:
     // World::reset уже создал его (со значениями по умолчанию для
@@ -85,7 +88,9 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["time"] = {{"tick", time->tick}};
         }
         if (const auto* worldProperties = registry.try_get<WorldPropertiesComponent>(entity)) {
-            record["world_properties"] = {{"mineral_moisture_threshold", worldProperties->mineralMoistureThreshold}};
+            record["world_properties"] = {{"mineral_moisture_threshold", worldProperties->mineralMoistureThreshold},
+                                          {"water_evaporation_rate", worldProperties->waterEvaporationRate},
+                                          {"water_source_strength", worldProperties->waterSourceStrength}};
         }
         if (const auto* position = registry.try_get<PositionComponent>(entity)) {
             record["position"] = {{"x", position->x}, {"y", position->y}};
@@ -107,6 +112,9 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // возможности, поэтому "impassable": false не пишется вообще).
         if (registry.all_of<ImpassableComponent>(entity)) {
             record["impassable"] = true;
+        }
+        if (registry.all_of<WaterSourceComponent>(entity)) {
+            record["water_source"] = true;
         }
 
         entities.push_back(std::move(record));
@@ -142,6 +150,10 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.hasWorldProperties = true;
             parsed.worldProperties.mineralMoistureThreshold =
                 record["world_properties"].value("mineral_moisture_threshold", 0.5f);
+            parsed.worldProperties.waterEvaporationRate =
+                record["world_properties"].value("water_evaporation_rate", 0.002f);
+            parsed.worldProperties.waterSourceStrength =
+                record["world_properties"].value("water_source_strength", 40.0f);
         }
         if (record.contains("position")) {
             parsed.hasPosition = true;
@@ -168,11 +180,12 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.water.flowSpeed = record["water"].value("flow_speed", 0.0f);
         }
         parsed.impassable = record.value("impassable", false);
+        parsed.waterSource = record.value("water_source", false);
 
         // Позиция — единственное, чем Entity привязан к тайлу; без неё
         // Area не знает, куда его положить, а непроходимость становится
         // бессмысленной (04_WorldModel.md, п.4).
-        if (!parsed.hasPosition && (parsed.hasSoil || parsed.hasWater || parsed.impassable)) {
+        if (!parsed.hasPosition && (parsed.hasSoil || parsed.hasWater || parsed.impassable || parsed.waterSource)) {
             outError = "entity has world components but no position";
             return false;
         }
@@ -452,6 +465,9 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         }
         if (parsed.impassable) {
             world.registry().emplace<ImpassableComponent>(entity);
+        }
+        if (parsed.waterSource) {
+            world.registry().emplace<WaterSourceComponent>(entity);
         }
         if (parsed.hasPosition) {
             // Индекс размещения Area в файле не хранится — он

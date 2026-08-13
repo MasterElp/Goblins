@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 
 #include <raygui.h>
 #include <raylib.h>
@@ -16,6 +18,12 @@ constexpr float kTopBarHeight = 40.0f;
 } // namespace
 
 AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
+    // Диалог ввода имени при сохранении — тот же паттерн, что и на экране
+    // симуляции (SimulationScreen): буфер предзаполняется именем текущего
+    // мира, пока диалог открыт.
+    static bool showSaveDialog = false;
+    static char saveNameBuffer[64] = "";
+
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
 
@@ -27,17 +35,21 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
 
     DrawText("World Generation - Stage 1: Soil & Water", 12, 10, 20, textColor);
 
+    const WorldState snapshot = network.snapshot();
+
     // Сохранить то, что сейчас на экране, как отдельный мир: только что
     // сгенерированный мир всегда стоит на нулевом тике, поэтому в списке
     // миров он появится ровно в том состоянии, в каком его видно здесь.
-    if (GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 240, 6, 120, 28}, "Save as world")) {
-        network.sendSaveWorld();
+    if (showSaveDialog) GuiLock();
+    const bool savePressed =
+        GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 240, 6, 120, 28}, "Save as world");
+    if (savePressed) {
+        std::snprintf(saveNameBuffer, sizeof(saveNameBuffer), "%s", snapshot.currentWorld.c_str());
+        showSaveDialog = true;
     }
-    if (GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 110, 6, 100, 28}, "Back (Esc)")) {
-        return AppScreen::MainMenu;
-    }
-
-    const WorldState snapshot = network.snapshot();
+    const bool backPressed =
+        GuiButton(Rectangle{static_cast<float>(screenW) - kPanelWidth - 110, 6, 100, 28}, "Back (Esc)");
+    if (showSaveDialog) GuiUnlock();
     if (snapshot.hasGeneration) {
         panel.loadFrom(snapshot.generation);
     }
@@ -99,6 +111,16 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
                           Color{70, 66, 62, 255});
         }
 
+        // Источники воды — тег без данных (истоки рек + "родники"),
+        // отмечены кольцом поверх воды, как булыжники отмечены заливкой:
+        // это не переключаемый слой почвы, а факт наличия/отсутствия.
+        for (const auto& source : snapshot.waterSources) {
+            const float screenX = offsetX + source.first * tileSizeF;
+            const float screenY = offsetY + source.second * tileSizeF;
+            DrawCircleLines(static_cast<int>(screenX + tileSizeF / 2.0f), static_cast<int>(screenY + tileSizeF / 2.0f),
+                             std::max(2.0f, tileSizeF * 0.35f), Color{130, 210, 255, 255});
+        }
+
         const Vector2 mouse = GetMousePosition();
         if (mouse.x >= offsetX && mouse.x < offsetX + mapPixelW && mouse.y >= offsetY && mouse.y < offsetY + mapPixelH) {
             hoverX = static_cast<int>((mouse.x - offsetX) / tileSizeF);
@@ -118,10 +140,14 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
 
     if (hasHoverTile) {
         const std::size_t hi = static_cast<std::size_t>(hoverY) * snapshot.areaWidth + hoverX;
+        const bool hoverIsSource =
+            std::any_of(snapshot.waterSources.begin(), snapshot.waterSources.end(),
+                        [&](const auto& s) { return s.first == hoverX && s.second == hoverY; });
         const std::string label =
-            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s", hoverX, hoverY,
+            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s%s", hoverX, hoverY,
                        snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi], snapshot.minerals[hi],
-                       snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "");
+                       snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "",
+                       hoverIsSource ? "  [source]" : "");
         DrawText(label.c_str(), 12, screenH - 22, 16, cursorColor);
     }
 
@@ -136,16 +162,55 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
     bool saveRequested = false;
     const Rectangle panelBounds{static_cast<float>(screenW) - kPanelWidth, 0, kPanelWidth,
                                  static_cast<float>(screenH)};
-    if (panel.draw(panelBounds, regenerateRequest, saveRequested)) {
+    if (showSaveDialog) GuiLock();
+    const bool regeneratePressed = panel.draw(panelBounds, regenerateRequest, saveRequested);
+    if (showSaveDialog) GuiUnlock();
+    if (regeneratePressed) {
         network.sendRegenerate(regenerateRequest);
     }
     if (saveRequested) {
         network.sendSaveGenerationConfig();
     }
 
-    if (IsKeyPressed(KEY_ESCAPE)) {
+    // Esc, открывший диалог сохранения, не должен в тот же кадр его же и
+    // закрыть — поэтому это if/else, а не независимые if с одним и тем же
+    // нажатием (см. тот же паттерн в SimulationScreen).
+    const bool escapePressed = IsKeyPressed(KEY_ESCAPE);
+    if (showSaveDialog) {
+        if (escapePressed) {
+            showSaveDialog = false;
+        }
+    } else if (backPressed || escapePressed) {
         return AppScreen::MainMenu;
     }
+
+    if (showSaveDialog) {
+        DrawRectangle(0, 0, screenW, screenH, Color{0, 0, 0, 150});
+
+        const int boxW = 380;
+        const int boxH = 130;
+        const int boxX = screenW / 2 - boxW / 2;
+        const int boxY = screenH / 2 - boxH / 2;
+        DrawRectangle(boxX, boxY, boxW, boxH, Color{18, 18, 20, 255});
+        DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
+        DrawText("Save world as:", boxX + 20, boxY + 16, 18, textColor);
+
+        GuiTextBox(Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 44, 340, 28}, saveNameBuffer,
+                   sizeof(saveNameBuffer), true);
+
+        const bool confirmSave = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 84, 160, 30}, "Save");
+        const bool cancelSave = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 200, static_cast<float>(boxY) + 84, 160, 30}, "Cancel (Esc)");
+
+        if (confirmSave || (IsKeyPressed(KEY_ENTER) && std::strlen(saveNameBuffer) > 0)) {
+            network.sendSaveWorld(saveNameBuffer);
+            showSaveDialog = false;
+        } else if (cancelSave) {
+            showSaveDialog = false;
+        }
+    }
+
     return AppScreen::WorldGeneration;
 }
 
