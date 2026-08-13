@@ -49,6 +49,10 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     ops.floatRow("Sinuosity", edited.terrain.river_sinuosity, 0.0f, 1.0f);
     ops.floatRow("Depth", edited.terrain.river_depth, 0.2f, 5.0f);
     ops.floatRow("Max flow speed", edited.terrain.river_max_flow_speed, 0.1f, 10.0f);
+    // Минимальное падение дна на тайл пути. На нуле русло просто
+    // повторяет рельеф со всеми буграми — вода стоит в локальных ямах
+    // вместо того, чтобы течь по руслу.
+    ops.floatRow("Bed slope (per tile)", edited.terrain.river_bed_slope, 0.0f, 0.05f);
 
     ops.section("Ponds");
     ops.floatRow("Min depth", edited.terrain.min_pond_depth, 0.0f, 0.5f);
@@ -76,6 +80,11 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // приток от источника расходится по руслу, а не скапливается рядом с
     // истоком).
     ops.floatRow("Flow rate", edited.terrain.water_flow_rate, 0.0f, 1.0f);
+    // Добавка к скорости за уклон: чем круче склон, тем быстрее по нему
+    // течёт. С одной лишь Flow rate скорость всюду одинаковая, и чтобы
+    // протолкнуть приток дальше по руслу, воде приходится копить у
+    // истока большой стоячий перепад — тот самый "конус" у источника.
+    ops.floatRow("Slope boost", edited.terrain.water_slope_boost, 0.0f, 20.0f);
 
     ops.section("Water sources");
     ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);

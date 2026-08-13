@@ -66,6 +66,11 @@ struct TerrainConfig {
     // случайная скорость до этого предела (см. TerrainGenerator.cpp).
     float river_max_flow_speed = 1.0f;
 
+    // Минимальный уклон дна русла (на тайл пути) — без него русло просто
+    // повторяет рельеф со всеми его буграми, и вода стоит в локальных
+    // ямах вместо того, чтобы течь; см. core::TerrainParams::riverBedSlope.
+    float river_bed_slope = 0.01f;
+
     float min_pond_depth = 0.01f;
     int min_pond_size = 1;
     int max_pond_size = 0;
@@ -102,18 +107,20 @@ struct TerrainConfig {
     float water_source_strength = 0.05f;
 
     // Доля разницы уровней поверхности, перетекающая к самому низкому
-    // соседу за тик — см. core::TerrainParams::waterFlowRate.
+    // соседу за тик (на ровном месте), и добавка за уклон — см.
+    // core::TerrainParams::waterFlowRate/waterSlopeBoost.
     float water_flow_rate = 0.3f;
+    float water_slope_boost = 5.0f;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_frequency, rock_noise_frequency,
                                     compaction_noise_frequency, moisture_noise_frequency, minerals_noise_frequency,
                                     noise_octaves, noise_lacunarity, noise_gain, rock_height_bump,
                                     compaction_height_bump, river_count, river_width, river_sinuosity, river_depth,
-                                    river_max_flow_speed, min_pond_depth, min_pond_size, max_pond_size,
-                                    pond_depth_scale, moisture_falloff, water_moisture_boost,
+                                    river_max_flow_speed, river_bed_slope, min_pond_depth, min_pond_size,
+                                    max_pond_size, pond_depth_scale, moisture_falloff, water_moisture_boost,
                                     rock_moisture_reduction, minerals_average, river_minerals,
                                     mineral_moisture_threshold, water_source_count, water_evaporation_rate,
-                                    water_source_strength, water_flow_rate)
+                                    water_source_strength, water_flow_rate, water_slope_boost)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";

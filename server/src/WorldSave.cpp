@@ -91,7 +91,8 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["world_properties"] = {{"mineral_moisture_threshold", worldProperties->mineralMoistureThreshold},
                                           {"water_evaporation_rate", worldProperties->waterEvaporationRate},
                                           {"water_source_strength", worldProperties->waterSourceStrength},
-                                          {"water_flow_rate", worldProperties->waterFlowRate}};
+                                          {"water_flow_rate", worldProperties->waterFlowRate},
+                                          {"water_slope_boost", worldProperties->waterSlopeBoost}};
         }
         if (const auto* position = registry.try_get<PositionComponent>(entity)) {
             record["position"] = {{"x", position->x}, {"y", position->y}};
@@ -157,6 +158,8 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("water_source_strength", 0.05f);
             parsed.worldProperties.waterFlowRate =
                 record["world_properties"].value("water_flow_rate", 0.3f);
+            parsed.worldProperties.waterSlopeBoost =
+                record["world_properties"].value("water_slope_boost", 5.0f);
         }
         if (record.contains("position")) {
             parsed.hasPosition = true;

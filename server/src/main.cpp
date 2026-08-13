@@ -41,6 +41,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.riverSinuosity = config.river_sinuosity;
     params.riverDepth = config.river_depth;
     params.riverMaxFlowSpeed = config.river_max_flow_speed;
+    params.riverBedSlope = config.river_bed_slope;
     params.minPondDepth = config.min_pond_depth;
     params.minPondSize = config.min_pond_size;
     params.maxPondSize = config.max_pond_size;
@@ -55,6 +56,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.waterEvaporationRate = config.water_evaporation_rate;
     params.waterSourceStrength = config.water_source_strength;
     params.waterFlowRate = config.water_flow_rate;
+    params.waterSlopeBoost = config.water_slope_boost;
     return params;
 }
 

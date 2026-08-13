@@ -19,6 +19,16 @@ namespace {
 constexpr int kDx8[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
 constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 
+// Расстояние до соседа по каждому из восьми направлений. Нужно там, где
+// считается именно УКЛОН (падение уровня на единицу расстояния), а не
+// просто разница высот: по диагонали до соседа дальше в sqrt(2) раз, и
+// без этой поправки диагональные направления выигрывают конкуренцию за
+// сток чаще, чем должны — вода расползается характерным квадратом
+// вместо круга. Для BFS-дистанции до воды и для минералов (там всё
+// решает не уклон, а сам факт соседства) поправка не нужна.
+constexpr float kDiagonal = 1.41421356f;
+constexpr float kDist8[8] = {kDiagonal, 1.0f, kDiagonal, 1.0f, 1.0f, kDiagonal, 1.0f, kDiagonal};
+
 // Влажность: та же форма, что и в TerrainGenerator.cpp (waterBoost по
 // расстоянию до воды, ослабление каменистостью), но здесь это не разовый
 // расчёт, а цель, к которой влажность медленно (kMoistureAdaptRate за тик)
@@ -83,6 +93,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const float waterEvaporationRate = worldProperties.waterEvaporationRate;
     const float waterSourceStrength = worldProperties.waterSourceStrength;
     const float waterFlowRate = worldProperties.waterFlowRate;
+    const float waterSlopeBoost = worldProperties.waterSlopeBoost;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -191,7 +202,12 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         const int y = static_cast<int>(i) / width;
         const float surface = terrainHeight[i] + waterDepth[i];
 
+        // Направление стока — по самому КРУТОМУ спуску (падение уровня,
+        // делённое на расстояние), а не просто по самому низкому соседу:
+        // иначе диагональный сосед с тем же падением выигрывает наравне с
+        // ортогональным, хотя он дальше, и вода расползается квадратом.
         int bestNeighbor = -1;
+        float bestSlope = 0.0f;
         float bestSurface = surface;
         for (int dir = 0; dir < 8; ++dir) {
             const int nx = x + kDx8[dir];
@@ -201,7 +217,13 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             }
             const std::size_t ni = index(nx, ny);
             const float neighborSurface = terrainHeight[ni] + waterDepth[ni];
-            if (neighborSurface < bestSurface) {
+            const float drop = surface - neighborSurface;
+            if (drop <= 0.0f) {
+                continue;
+            }
+            const float slope = drop / kDist8[dir];
+            if (slope > bestSlope) {
+                bestSlope = slope;
                 bestSurface = neighborSurface;
                 bestNeighbor = static_cast<int>(ni);
             }
@@ -212,7 +234,16 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
         const std::size_t j = static_cast<std::size_t>(bestNeighbor);
         const float diff = surface - bestSurface;
-        const float amount = std::min(waterDepth[i], diff * 0.5f) * waterFlowRate;
+        // Чем круче склон, тем быстрее по нему течёт. С постоянной
+        // скоростью, чтобы протолкнуть дальше постоянный приток, воде
+        // приходилось копить у истока большой стоячий перепад (скорость
+        // ограничена, значит нужен большой diff) — отсюда и "конус"
+        // вокруг источника. Потолок 1.0 и множитель 0.5 ниже сохраняют
+        // устойчивость: за тик уровни в паре в худшем случае ровно
+        // сравняются, но не перехлестнутся, то есть колебаний
+        // "туда-обратно" не возникает.
+        const float rate = std::min(1.0f, waterFlowRate + bestSlope * waterSlopeBoost);
+        const float amount = std::min(waterDepth[i], diff * 0.5f) * rate;
         if (amount <= 0.0f) {
             continue;
         }

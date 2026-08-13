@@ -520,6 +520,31 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             elevation[static_cast<std::size_t>(idx)] -= riverCarveDepth * cell.falloff;
         }
     }
+
+    // Профиль дна: вырезанное выше русло — это траншея постоянной глубины
+    // в шумном рельефе, то есть она наследует все его подъёмы и спуски.
+    // Вода в такой траншее стекает в ближайший локальный минимум и стоит
+    // там: "вниз по руслу" просто не существует. Поэтому вдоль
+    // центральной линии (исток -> устье) дно дополнительно продавливается
+    // до монотонно убывающего профиля — минимум на riverBedSlope за тайл.
+    // min() с текущим рельефом: где рельеф и так падает круче, берём его
+    // (это нижняя граница уклона, а не жёсткая линейка), а бугры срезаем.
+    //
+    // Порядок обхода = порядок размещения рек, а втекающая река всегда
+    // размещалась позже целевой — поэтому к моменту её обработки дно
+    // целевой реки в точке слияния уже понижено, и min() сажает устье
+    // притока ровно на него, без ступеньки в стыке.
+    for (const auto& river : acceptedRivers) {
+        if (river.centerline.empty()) {
+            continue;
+        }
+        float bedLevel = elevation[index(river.centerline.front().x, river.centerline.front().y)];
+        for (std::size_t s = 1; s < river.centerline.size(); ++s) {
+            const std::size_t idx = index(river.centerline[s].x, river.centerline[s].y);
+            bedLevel = std::min(elevation[idx], bedLevel - params.riverBedSlope);
+            elevation[idx] = bedLevel;
+        }
+    }
     stats.riverMs = elapsedMs(riverStageStart); // путь+карвинг вместе — единая "стадия рек" для диагностики
 
     // --- 2. Priority-Flood (Barnes et al., 2014): заполнение впадин ---
@@ -764,6 +789,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     worldProperties.waterEvaporationRate = params.waterEvaporationRate;
     worldProperties.waterSourceStrength = params.waterSourceStrength;
     worldProperties.waterFlowRate = params.waterFlowRate;
+    worldProperties.waterSlopeBoost = params.waterSlopeBoost;
 
     stats.totalMs = elapsedMs(totalStart);
     return stats;
