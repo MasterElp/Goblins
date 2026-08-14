@@ -140,6 +140,7 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           {"water_slope_boost", worldProperties->waterSlopeBoost},
                                           {"soil_erosion_rate", worldProperties->soilErosionRate},
                                           {"max_erosion_depth", worldProperties->maxErosionDepth},
+                                          {"erosion_spread_rate", worldProperties->erosionSpreadRate},
                                           {"edge_drain_rate", worldProperties->edgeDrainRate},
                                           {"plant_mutation_rate", worldProperties->plantMutationRate},
                                           {"humus_decay_rate", worldProperties->humusDecayRate},
@@ -236,6 +237,8 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("soil_erosion_rate", 0.05f);
             parsed.worldProperties.maxErosionDepth =
                 record["world_properties"].value("max_erosion_depth", 0.5f);
+            parsed.worldProperties.erosionSpreadRate =
+                record["world_properties"].value("erosion_spread_rate", 0.05f);
             parsed.worldProperties.edgeDrainRate =
                 record["world_properties"].value("edge_drain_rate", 0.01f);
             parsed.worldProperties.plantMutationRate =

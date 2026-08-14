@@ -113,6 +113,9 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // Потолок выемки относительно соседа — без него клетка под
     // источником размывается без остановки в бездонную яму.
     ops.floatRow("Max scour depth", edited.terrain.max_erosion_depth, 0.0f, 3.0f);
+    // Доля основного размыва, заодно достающаяся соседям клетки-истока —
+    // берег осыпается вместе с руслом, а не остаётся резкой стенкой.
+    ops.floatRow("Erosion spread", edited.terrain.erosion_spread_rate, 0.0f, 0.3f);
 
     ops.section("Map edges");
     // Доля глубины, стекающая "за карту" у тайлов на самой границе —

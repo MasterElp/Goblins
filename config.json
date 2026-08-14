@@ -8,10 +8,10 @@
     "host": "127.0.0.1",
     "plant_seed": 24680,
     "plants": {
-        "grass_coverage": 0.06,
+        "grass_coverage": 0.05999999865889549,
         "grass_species": 5,
-        "humus_decay_rate": 0.02,
-        "mutation_rate": 0.06
+        "humus_decay_rate": 0.019999999552965164,
+        "mutation_rate": 0.05999999865889549
     },
     "port": 9002,
     "saves_dir": "saves",
@@ -19,6 +19,7 @@
         "compaction_height_bump": 0.26760563254356384,
         "compaction_noise_frequency": 0.03999999910593033,
         "edge_drain_rate": 0.009999999776482582,
+        "erosion_spread_rate": 0.05000000074505806,
         "height_noise_frequency": 0.029422534629702568,
         "max_erosion_depth": 0.5,
         "max_pond_size": 0,
@@ -42,7 +43,7 @@
         "river_width": 6.913145542144775,
         "rock_height_bump": 0.4671361446380615,
         "rock_moisture_reduction": 0.4671361446380615,
-        "rock_noise_frequency": 0.05000000074505806,
+        "rock_noise_frequency": 0.10378873348236084,
         "soil_erosion_rate": 0.05000000074505806,
         "water_evaporation_rate": 0.0006032864330336452,
         "water_flow_rate": 0.30000001192092896,

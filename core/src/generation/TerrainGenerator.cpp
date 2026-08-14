@@ -530,6 +530,16 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // min() с текущим рельефом: где рельеф и так падает круче, берём его
     // (это нижняя граница уклона, а не жёсткая линейка), а бугры срезаем.
     //
+    // Применяется не только к самому центральному пикселю пути, а ко всей
+    // ширине русла в этой точке (тот же диск радиуса halfWidth, что и при
+    // штамповке в stampSegment) — иначе вне центральной линии дно
+    // оставалось бы на исходном шумном рельефе (там carve выше — это
+    // riverCarveDepth * falloff, falloff у берега меньше 1, то есть
+    // вырезано меньше), и HydrologySystem, выбирая направление стока по
+    // дну у речных тайлов, натыкался бы там на локальные бугры/ямы,
+    // никак не связанные с течением реки: вода скапливалась в таких
+    // карманах и никуда не текла.
+    //
     // Порядок обхода = порядок размещения рек, а втекающая река всегда
     // размещалась позже целевой — поэтому к моменту её обработки дно
     // целевой реки в точке слияния уже понижено, и min() сажает устье
@@ -539,10 +549,28 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             continue;
         }
         float bedLevel = elevation[index(river.centerline.front().x, river.centerline.front().y)];
-        for (std::size_t s = 1; s < river.centerline.size(); ++s) {
-            const std::size_t idx = index(river.centerline[s].x, river.centerline[s].y);
-            bedLevel = std::min(elevation[idx], bedLevel - params.riverBedSlope);
-            elevation[idx] = bedLevel;
+        for (std::size_t s = 0; s < river.centerline.size(); ++s) {
+            const RiverPathSample& sample = river.centerline[s];
+            if (s > 0) {
+                const std::size_t centerIdx = index(sample.x, sample.y);
+                bedLevel = std::min(elevation[centerIdx], bedLevel - params.riverBedSlope);
+            }
+            const int r = std::max(1, static_cast<int>(std::ceil(sample.halfWidth)));
+            for (int dy = -r; dy <= r; ++dy) {
+                for (int dx = -r; dx <= r; ++dx) {
+                    const int nx = sample.x + dx;
+                    const int ny = sample.y + dy;
+                    if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+                        continue;
+                    }
+                    const float d = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+                    if (d > sample.halfWidth) {
+                        continue;
+                    }
+                    const std::size_t idx = index(nx, ny);
+                    elevation[idx] = std::min(elevation[idx], bedLevel);
+                }
+            }
         }
     }
     stats.riverMs = elapsedMs(riverStageStart); // путь+карвинг вместе — единая "стадия рек" для диагностики
@@ -653,6 +681,14 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const std::size_t i = static_cast<std::size_t>(idx);
             const float pondDepth = filled[i] - elevation[i];
             waterDepth[i] = std::max(waterDepth[i], pondDepth * params.pondDepthScale);
+            // Дно опускается вместе с глубиной, а не остаётся на исходном
+            // уровне рельефа: без этого pondDepthScale > 1 просто поднимал
+            // бы поверхность воды выше естественной точки перелива filled
+            // (пруд как будто раздувается сам из себя). Опускаем дно так,
+            // чтобы поверхность (elevation + waterDepth) осталась на
+            // filled — котловина настоящая, а не вода поверх
+            // невыкопанного рельефа.
+            elevation[i] = filled[i] - waterDepth[i];
         }
     }
     stats.pondMs = elapsedMs(pondStart);
@@ -792,6 +828,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     worldProperties.waterSlopeBoost = params.waterSlopeBoost;
     worldProperties.soilErosionRate = params.soilErosionRate;
     worldProperties.maxErosionDepth = params.maxErosionDepth;
+    worldProperties.erosionSpreadRate = params.erosionSpreadRate;
     worldProperties.edgeDrainRate = params.edgeDrainRate;
 
     stats.totalMs = elapsedMs(totalStart);

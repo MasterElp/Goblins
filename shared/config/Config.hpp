@@ -118,6 +118,10 @@ struct TerrainConfig {
     float soil_erosion_rate = 0.05f;
     float max_erosion_depth = 0.5f;
 
+    // Доля основного размыва, заодно достающаяся соседям клетки-истока —
+    // тоже свойство мира, см. core::TerrainParams::erosionSpreadRate.
+    float erosion_spread_rate = 0.05f;
+
     // Доля глубины, стекающая за край карты за тик у тайлов на самой
     // границе Области — тоже свойство мира, см.
     // core::TerrainParams::edgeDrainRate.
@@ -132,7 +136,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_freq
                                     rock_moisture_reduction, minerals_average, river_minerals,
                                     mineral_moisture_threshold, water_source_count, water_evaporation_rate,
                                     water_source_strength, water_flow_rate, water_slope_boost,
-                                    soil_erosion_rate, max_erosion_depth, edge_drain_rate)
+                                    soil_erosion_rate, max_erosion_depth, erosion_spread_rate, edge_drain_rate)
 
 // Зеркало core::PlantParams (core/generation/PlantParams.hpp) — по той же
 // причине, что и TerrainConfig выше: core не знает о JSON, поэтому

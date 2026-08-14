@@ -45,6 +45,7 @@ namespace goblins {
 //                                         "water_slope_boost": B,
 //                                         "soil_erosion_rate": E,
 //                                         "max_erosion_depth": D,
+//                                         "erosion_spread_rate": SP,
 //                                         "edge_drain_rate": G,
 //                                         "plant_mutation_rate": M,
 //                                         "humus_decay_rate": H,
@@ -61,9 +62,10 @@ namespace goblins {
 // файлов без этого поля (или без отдельных полей внутри него) действуют
 // значения по умолчанию (mineral_moisture_threshold = 0.5,
 // water_evaporation_rate = 0.00004, water_source_strength = 0.05,
-// water_flow_rate = 0.3, water_slope_boost = 5, soil_erosion_rate = 0.05,
-// max_erosion_depth = 0.5, edge_drain_rate = 0.01) — World::reset
-// выставляет их сам.
+// water_flow_rate = 0.3, water_slope_boost = 5,
+// soil_erosion_rate = 0.05,
+// max_erosion_depth = 0.5, erosion_spread_rate = 0.05,
+// edge_drain_rate = 0.01) — World::reset выставляет их сам.
 //
 // "water_source" (WaterSourceComponent) — тег, как "impassable": сам
 // факт наличия и есть данные, отсутствие поля у старых файлов означает

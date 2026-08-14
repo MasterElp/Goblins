@@ -89,6 +89,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const float waterSlopeBoost = worldProperties.waterSlopeBoost;
     const float soilErosionRate = worldProperties.soilErosionRate;
     const float maxErosionDepth = worldProperties.maxErosionDepth;
+    const float erosionSpreadRate = worldProperties.erosionSpreadRate;
     const float edgeDrainRate = worldProperties.edgeDrainRate;
 
     // --- 1. Снимок текущего состояния ---
@@ -198,13 +199,20 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         const int y = static_cast<int>(i) / width;
         const float surface = terrainHeight[i] + waterDepth[i];
 
-        // Направление стока — по самому КРУТОМУ спуску (падение уровня,
-        // делённое на расстояние), а не просто по самому низкому соседу:
-        // иначе диагональный сосед с тем же падением выигрывает наравне с
-        // ортогональным, хотя он дальше, и вода расползается квадратом.
+        // Направление стока — по самому КРУТОМУ спуску ПОВЕРХНОСТИ (высота
+        // + вода), делённому на расстояние до соседа (а не просто по
+        // самому низкому соседу): иначе диагональный сосед с тем же
+        // падением выигрывает наравне с ортогональным, хотя он дальше, и
+        // вода расползается квадратом. Одно и то же правило для любой
+        // воды — и реки, и пруда: "река" не отдельное понятие для
+        // симуляции, это просто вода в клетке с ненулевой
+        // WaterComponent.flowSpeed (только для отображения/сохранения, на
+        // само течение не влияет). Простой закон мира: вода перетекает в
+        // соседа, который ниже и менее заполнен — оба условия и есть
+        // "поверхность ниже".
         int bestNeighbor = -1;
         float bestSlope = 0.0f;
-        float bestSurface = surface;
+        float bestNeighborSurface = surface;
         for (int dir = 0; dir < 8; ++dir) {
             const int nx = x + kDx8[dir];
             const int ny = y + kDy8[dir];
@@ -220,7 +228,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             const float slope = drop / kDist8[dir];
             if (slope > bestSlope) {
                 bestSlope = slope;
-                bestSurface = neighborSurface;
+                bestNeighborSurface = neighborSurface;
                 bestNeighbor = static_cast<int>(ni);
             }
         }
@@ -229,7 +237,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             continue;
         }
         const std::size_t j = static_cast<std::size_t>(bestNeighbor);
-        const float diff = surface - bestSurface;
+        const float diff = surface - bestNeighborSurface;
         // Чем круче склон, тем быстрее по нему течёт. С постоянной
         // скоростью, чтобы протолкнуть дальше постоянный приток, воде
         // приходилось копить у истока большой стоячий перепад (скорость
@@ -274,6 +282,35 @@ void HydrologySystem(World& world, CommandQueue& commands) {
 
         nextTerrainHeight[i] -= erosion;
         nextTerrainHeight[j] += erosion;
+
+        // Небольшой размыв соседей клетки-истока — берег осыпается вместе
+        // с руслом, а не остаётся резкой стенкой ровно по границе потока.
+        // Вымытое оседает там же, где и основной erosion (в j), поэтому
+        // баланс породы по-прежнему точный — просто у выемки теперь два
+        // источника вместо одного. Потолок — тот же maxErosionDepth
+        // относительно j, что и у самой клетки i.
+        if (erosionSpreadRate > 0.0f) {
+            for (int dir2 = 0; dir2 < 8; ++dir2) {
+                const int nx2 = x + kDx8[dir2];
+                const int ny2 = y + kDy8[dir2];
+                if (nx2 < 0 || nx2 >= width || ny2 < 0 || ny2 >= height) {
+                    continue;
+                }
+                const std::size_t k = index(nx2, ny2);
+                if (k == j) {
+                    continue;
+                }
+                const float neighborSoftness = (1.0f - rockiness[k]) * (1.0f - compaction[k]);
+                const float neighborAllowed = std::max(0.0f, terrainHeight[k] - erosionFloor);
+                const float spreadErosion =
+                    std::min(erosion * erosionSpreadRate * neighborSoftness, neighborAllowed);
+                if (spreadErosion <= 0.0f) {
+                    continue;
+                }
+                nextTerrainHeight[k] -= spreadErosion;
+                nextTerrainHeight[j] += spreadErosion;
+            }
+        }
     }
 
     // --- 5b. Испарение + источники: независимые правки поверх nextWaterDepth

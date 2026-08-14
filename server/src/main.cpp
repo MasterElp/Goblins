@@ -69,6 +69,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.waterSlopeBoost = config.water_slope_boost;
     params.soilErosionRate = config.soil_erosion_rate;
     params.maxErosionDepth = config.max_erosion_depth;
+    params.erosionSpreadRate = config.erosion_spread_rate;
     params.edgeDrainRate = config.edge_drain_rate;
     return params;
 }
