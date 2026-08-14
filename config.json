@@ -15,6 +15,8 @@
     },
     "port": 9002,
     "saves_dir": "saves",
+    "snapshot_backlog_bytes": 1048576,
+    "snapshot_interval_ms": 100,
     "terrain": {
         "compaction_height_bump": 0.26760563254356384,
         "compaction_noise_frequency": 0.03999999910593033,

@@ -16,6 +16,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../shared ${CMAKE_CURRENT_BINARY
 add_executable(client
     src/main.cpp
     src/NetworkClient.cpp
+    src/MapTexture.cpp
     src/SettingsPanel.cpp
     src/MainMenuScreen.cpp
     src/SettingsScreen.cpp

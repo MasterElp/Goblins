@@ -92,7 +92,8 @@ AppScreen draw(NetworkClient& network) {
         pendingDelete.clear();
     }
 
-    const WorldState snapshot = network.snapshot();
+    const auto statePtr = network.snapshot();
+    const WorldState& snapshot = *statePtr;
 
     if (!snapshot.connected) {
         DrawText("Connecting to server...", 30, screenH / 2 - 10, 20, mutedColor);

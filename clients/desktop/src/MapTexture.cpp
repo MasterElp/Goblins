@@ -1,0 +1,83 @@
+#include "MapTexture.hpp"
+
+#include <algorithm>
+
+#include "TileColors.hpp"
+
+namespace MapTexture {
+
+void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
+    const std::size_t cellCount = static_cast<std::size_t>(state.areaWidth) * state.areaHeight;
+    pixels_.assign(cellCount, Color{0, 0, 0, 255});
+
+    // Диапазон высот текущей карты — для нормализации в
+    // TileColors::applyHeightShading. У HeightComponent.height нет
+    // фиксированного диапазона (зависит от параметров генерации),
+    // поэтому min/max считаются заново на каждую пересборку, а не
+    // берутся константой.
+    float minHeight = 0.0f;
+    float heightRange = 0.0f;
+    if (layers.height && !state.height.empty()) {
+        const auto [minIt, maxIt] = std::minmax_element(state.height.begin(), state.height.end());
+        minHeight = *minIt;
+        heightRange = *maxIt - *minIt;
+    }
+
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        Color color = TileColors::soil(layers.moisture ? state.moisture[i] : 0.0f,
+                                       layers.rockiness ? state.rockiness[i] : 0.0f,
+                                       layers.compaction ? state.compaction[i] : 0.0f,
+                                       layers.minerals ? TileColors::mineralsFraction(state.minerals[i]) : 0.0f);
+        if (layers.height && heightRange > 0.0f) {
+            color = TileColors::applyHeightShading(color, (state.height[i] - minHeight) / heightRange);
+        }
+        // Перегной — под травой: на клетке может быть и то, и другое
+        // (семя охотно прорастает там, где перегной возвращает минералы в
+        // почву), и тогда сверху видна именно трава.
+        if (layers.plants && state.humus[i] > 0) {
+            color = TileColors::humus(color, state.humus[i]);
+        }
+        if (layers.plants && state.plantSpeciesAt[i] >= 0) {
+            color = TileColors::plant(color, state.plantSpeciesAt[i], state.plantGrowth[i]);
+        }
+        // Вода — не полупрозрачный слой поверх, а готовый цвет тайла
+        // (TileColors::water непрозрачен), поэтому просто заменяет
+        // предыдущий.
+        if (layers.moisture && state.waterDepth[i] > 0.0f) {
+            color = TileColors::water(state.waterDepth[i]);
+        }
+        pixels_[i] = color;
+    }
+}
+
+const Texture2D& Cache::texture(const WorldState& state, const Layers& layers) {
+    const bool sizeMatches = loaded_ && builtWidth_ == state.areaWidth && builtHeight_ == state.areaHeight;
+    if (sizeMatches && builtVersion_ == state.version && builtLayers_ == layers) {
+        return texture_;
+    }
+
+    rebuildPixels(state, layers);
+    builtVersion_ = state.version;
+    builtLayers_ = layers;
+
+    if (sizeMatches) {
+        UpdateTexture(texture_, pixels_.data());
+        return texture_;
+    }
+
+    if (loaded_) {
+        UnloadTexture(texture_);
+        loaded_ = false;
+    }
+    const Image image{pixels_.data(), state.areaWidth, state.areaHeight, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    texture_ = LoadTextureFromImage(image);
+    // Тайл — это тексель, растянутый до размера тайла на экране:
+    // сглаживание размыло бы границы тайлов в кашу.
+    SetTextureFilter(texture_, TEXTURE_FILTER_POINT);
+    loaded_ = true;
+    builtWidth_ = state.areaWidth;
+    builtHeight_ = state.areaHeight;
+    return texture_;
+}
+
+} // namespace MapTexture

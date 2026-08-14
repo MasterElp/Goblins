@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -17,6 +18,12 @@
 // "Генерация мира" и "Симуляция": обе показывают один и тот же мир,
 // просто по-разному его отображают.
 struct WorldState {
+    // Номер версии состояния: растёт на каждое применённое сообщение
+    // сервера. По нему потребители, для которых пересчёт дорог (карта в
+    // текстуре, см. MapTexture), понимают, что состояние действительно
+    // новое, а не тот же самый снимок, отданный на следующем кадре.
+    std::uint64_t version = 0;
+
     int areaWidth = 0;
     int areaHeight = 0;
     std::uint64_t tick = 0;
@@ -101,7 +108,14 @@ public:
     void connect(const std::string& host, int port);
     void disconnect();
 
-    WorldState snapshot() const;
+    // Текущее состояние мира — разделяемым указателем на неизменяемый
+    // снимок, а не копией. Копия состояния — это десяток векторов по
+    // числу тайлов Области; экраны запрашивают его каждый кадр (60 раз в
+    // секунду), а меняется оно только с приходом сообщения сервера (в
+    // разы реже). Поэтому копия делается один раз, при разборе
+    // сообщения, а экраны получают указатель на готовый снимок; тот, что
+    // они держат, у них из-под рук не изменится. Никогда не nullptr.
+    std::shared_ptr<const WorldState> snapshot() const;
 
     void sendTogglePause();
     void sendRegenerate(const goblins::RegenerationRequest& request);
@@ -125,8 +139,22 @@ public:
 
 private:
     void handleMessage(const std::string& payload);
+    // Опубликовать working_ как новый неизменяемый снимок. Единственное
+    // место, где состояние копируется.
+    void publishState();
 
     ix::WebSocket webSocket_;
+
+    // Рабочая копия — её трогает только сетевой поток IXWebSocket
+    // (единственный, откуда приходят сообщения), поэтому она без
+    // мьютекса. Дельта по-другому и не применилась бы: она описывает
+    // изменения относительно уже накопленного состояния, а не заменяет
+    // его целиком.
+    WorldState working_;
+    // Множитель для целочисленных слоёв протокола ("scale" из
+    // world_init): сервер шлёт доли тысячными долями целых.
+    float milliScale_ = 0.001f;
+
     mutable std::mutex mutex_;
-    WorldState state_;
+    std::shared_ptr<const WorldState> published_ = std::make_shared<const WorldState>();
 };

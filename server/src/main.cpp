@@ -277,12 +277,16 @@ int main(int argc, char** argv) {
         if (tickLoggingEnabled && time.tick % kTickLogInterval == 0) {
             std::cout << "Tick #" << time.tick << std::endl;
         }
-        // Полный снапшот на каждый тик, а не только номер: HydrologySystem
+        // Изменения мира — клиенту после каждого тика: HydrologySystem
         // непрерывно меняет почву/воду, и клиент должен видеть это
         // постепенное изменение вживую, а не только после регенерации.
-        // Троттлинг вывода в консоль на снапшоты не влияет — это разные
-        // потребители одних и тех же данных.
-        network.broadcastSnapshot();
+        // Реально отправлено будет не каждый тик, а не чаще
+        // snapshot_interval_ms и только то, что изменилось (см.
+        // NetworkServer::publish) — рассылать быстрее, чем клиент
+        // способен принимать, значит показывать ему прошлое. Троттлинг
+        // вывода в консоль тут ни при чём — это разные потребители одних
+        // и тех же данных.
+        network.publish();
     };
 
     // Неблокирующий опрос горячей клавиши Ctrl+L прямо из консоли сервера
@@ -294,6 +298,13 @@ int main(int argc, char** argv) {
     // существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int ticksRun = 0;
     loop.run([&]() {
+        // Рассылка не только после тика, но и на каждой итерации цикла:
+        // на паузе тиков нет вовсе, а подключившийся в этот момент
+        // клиент должен получить мир, а не ждать, пока симуляцию
+        // запустят. Само сообщение уйдёт, только если есть что
+        // отправлять (см. NetworkServer::publish).
+        network.publish();
+
         if (hotkeys.ctrlLPressed()) {
             tickLoggingEnabled = !tickLoggingEnabled;
             std::cout << "Tick console output " << (tickLoggingEnabled ? "enabled" : "disabled")
@@ -374,7 +385,10 @@ int main(int argc, char** argv) {
                 }
             }
 
-            network.broadcastSnapshot();
+            // Мир создан заново (сгенерирован или загружен) — то, что
+            // клиент видел до этого, не может служить основой для дельт.
+            network.requestFullResync();
+            network.publish(/*force=*/true);
             network.broadcastWorldList();
 
             if (worldReady && network.pauseCommandCount() == pauseCommands) {
@@ -439,7 +453,9 @@ int main(int argc, char** argv) {
             // безымянный, и сохранение заведёт ему новый файл, а не
             // перезапишет чужой.
             network.setCurrentWorldName("");
-            network.broadcastSnapshot();
+            // Карта другая целиком — дельте от прошлой не на что лечь.
+            network.requestFullResync();
+            network.publish(/*force=*/true);
             network.broadcastWorldList();
 
             printGenerationStats(genStats);

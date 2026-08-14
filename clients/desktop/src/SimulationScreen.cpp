@@ -10,6 +10,7 @@
 #include <raygui.h>
 #include <raylib.h>
 
+#include "MapTexture.hpp"
 #include "TileColors.hpp"
 
 namespace SimulationScreen {
@@ -40,6 +41,9 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     // мир ещё не сохранён).
     static bool showSaveDialog = false;
     static char saveNameBuffer[64] = "";
+    // Карта в текстуре — тоже состояние экрана: пересобирается только
+    // когда пришло новое состояние мира или переключён слой.
+    static MapTexture::Cache mapCache;
 
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
@@ -116,20 +120,11 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         }
     }
 
-    const WorldState snapshot = network.snapshot();
-
-    // Диапазон высот текущей карты — для нормализации в
-    // TileColors::applyHeightShading. У HeightComponent.height нет
-    // фиксированного диапазона (зависит от параметров генерации), поэтому
-    // min/max считаются заново на каждый снапшот, а не берутся константой.
-    float minHeight = 0.0f;
-    float maxHeight = 0.0f;
-    if (showHeight && !snapshot.height.empty()) {
-        const auto [minIt, maxIt] = std::minmax_element(snapshot.height.begin(), snapshot.height.end());
-        minHeight = *minIt;
-        maxHeight = *maxIt;
-    }
-    const float heightRange = maxHeight - minHeight;
+    // Состояние мира — разделяемым указателем на неизменяемый снимок:
+    // копировать десяток массивов по числу тайлов каждый кадр незачем,
+    // меняются они только с приходом сообщения сервера.
+    const auto statePtr = network.snapshot();
+    const WorldState& snapshot = *statePtr;
 
     if (snapshot.areaWidth > 0) {
         const float maxX = std::max(0.0f, static_cast<float>(snapshot.areaWidth) * tileSizeF - viewportW);
@@ -162,48 +157,24 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     } else {
         BeginScissorMode(0, kHudHeight, viewportW, viewportH);
 
-        const int firstTileX = std::max(0, static_cast<int>(viewX / tileSizeF));
-        const int firstTileY = std::max(0, static_cast<int>(viewY / tileSizeF));
-        const int lastTileX =
-            std::min(snapshot.areaWidth - 1, firstTileX + static_cast<int>(viewportW / tileSizeF) + 1);
-        const int lastTileY =
-            std::min(snapshot.areaHeight - 1, firstTileY + static_cast<int>(viewportH / tileSizeF) + 1);
-
-        for (int ty = firstTileY; ty <= lastTileY; ++ty) {
-            for (int tx = firstTileX; tx <= lastTileX; ++tx) {
-                const std::size_t i = static_cast<std::size_t>(ty) * snapshot.areaWidth + tx;
-                const float screenX = static_cast<float>(tx) * tileSizeF - viewX;
-                const float screenY = static_cast<float>(ty) * tileSizeF - viewY + kHudHeight;
-
-                Color tileColor =
-                    TileColors::soil(showMoisture ? snapshot.moisture[i] : 0.0f,
-                                      showRockiness ? snapshot.rockiness[i] : 0.0f,
-                                      showCompaction ? snapshot.compaction[i] : 0.0f,
-                                      showMinerals ? TileColors::mineralsFraction(snapshot.minerals[i]) : 0.0f);
-                if (showHeight && heightRange > 0.0f) {
-                    tileColor = TileColors::applyHeightShading(tileColor, (snapshot.height[i] - minHeight) / heightRange);
-                }
-                // Перегной — под травой: на клетке может быть и то, и
-                // другое (семя охотно прорастает там, где перегной
-                // возвращает минералы в почву), и тогда сверху видна
-                // именно трава.
-                if (showPlants && snapshot.humus[i] > 0) {
-                    tileColor = TileColors::humus(tileColor, snapshot.humus[i]);
-                }
-                if (showPlants && snapshot.plantSpeciesAt[i] >= 0) {
-                    tileColor = TileColors::plant(tileColor, snapshot.plantSpeciesAt[i], snapshot.plantGrowth[i]);
-                }
-                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize, tileColor);
-                // Вода делит выключатель с влажностью (KEY_THREE) — вода
-                // на тайле и есть источник его влажности, отдельный
-                // флаг только запутывал бы (видно воду при погашенном
-                // слое влажности).
-                if (showMoisture && snapshot.waterDepth[i] > 0.0f) {
-                    DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
-                                  TileColors::water(snapshot.waterDepth[i]));
-                }
-            }
-        }
+        // Карта — одна текстура (тексель на тайл), пересобирается только
+        // при новом состоянии мира или смене набора слоёв; за кадр это
+        // один вызов отрисовки вместо тысяч прямоугольников, а отсечение
+        // невидимой части делает сам ножничный режим.
+        MapTexture::Layers layers;
+        layers.rockiness = showRockiness;
+        layers.compaction = showCompaction;
+        layers.moisture = showMoisture;
+        layers.minerals = showMinerals;
+        layers.height = showHeight;
+        layers.plants = showPlants;
+        const Texture2D& mapTexture = mapCache.texture(snapshot, layers);
+        DrawTexturePro(mapTexture,
+                       Rectangle{0, 0, static_cast<float>(snapshot.areaWidth),
+                                 static_cast<float>(snapshot.areaHeight)},
+                       Rectangle{-viewX, kHudHeight - viewY, static_cast<float>(snapshot.areaWidth) * tileSizeF,
+                                 static_cast<float>(snapshot.areaHeight) * tileSizeF},
+                       Vector2{0, 0}, 0.0f, WHITE);
 
         for (const auto& boulder : snapshot.boulders) {
             const float screenX = static_cast<float>(boulder.first) * tileSizeF - viewX;

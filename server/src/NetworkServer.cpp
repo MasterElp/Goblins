@@ -1,5 +1,6 @@
 #include "server/NetworkServer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -25,23 +26,57 @@ namespace goblins {
 
 namespace {
 
-// Округление до 3 знаков — почве не нужна точность double-текста в JSON,
-// а на карте 100x100 экономит заметную часть трафика на трёх плотных
-// массивах.
-float round3(float value) {
-    return std::round(value * 1000.0f) / 1000.0f;
+// Делитель для слоёв, которые на сервере хранятся долями (влажность,
+// плотность, каменистость, глубина воды, высота). По сети они уходят
+// целыми в тысячных долях: в JSON число с плавающей точкой печатается
+// как double — два десятка знаков на значение, — а массив тут плотный,
+// на всю Область. Тысячных хватает: клиент по этим числам выбирает
+// оттенок тайла.
+constexpr int kMilliScale = 1000;
+
+int encodeMilli(float value) {
+    return static_cast<int>(std::lround(static_cast<double>(value) * kMilliScale));
 }
 
-// Развитость растения — целые проценты, а не доля. Значение нужно клиенту
-// только чтобы выбрать насыщенность цвета тайла, точность тут не нужна, а
-// массив плотный (одно значение на тайл): в JSON число с плавающей точкой
-// печатается как double, то есть каждое значение занимает под два десятка
-// знаков вместо двух-трёх у целого процента.
+// Развитость растения — целые проценты, а не доля: значение нужно
+// клиенту только чтобы выбрать насыщенность цвета тайла.
 int growthPercent(float growth) {
     return static_cast<int>(std::lround(std::clamp(growth, 0.0f, 1.0f) * 100.0f));
 }
 
+// Дельта одного слоя — плоский массив пар "индекс тайла, новое
+// значение". Пустой, если слой не изменился вовсе; вызывающая сторона
+// такой слой в сообщение не кладёт.
+nlohmann::json changedCells(const std::vector<int>& previous, const std::vector<int>& current) {
+    auto pairs = nlohmann::json::array();
+    const std::size_t count = std::min(previous.size(), current.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        if (previous[i] != current[i]) {
+            pairs.push_back(i);
+            pairs.push_back(current[i]);
+        }
+    }
+    return pairs;
+}
+
 } // namespace
+
+void NetworkServer::LayerSnapshot::resize(int w, int h) {
+    width = w;
+    height = h;
+    const std::size_t count = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    moisture.assign(count, 0);
+    compaction.assign(count, 0);
+    minerals.assign(count, 0);
+    terrainHeight.assign(count, 0);
+    water.assign(count, 0);
+    humus.assign(count, 0);
+    growth.assign(count, 0);
+    rockiness.assign(count, 0);
+    // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
+    // массиве выражается значением-заглушкой.
+    species.assign(count, -1);
+}
 
 NetworkServer::NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused,
                               ServerConfig baseConfig, std::string configPath,
@@ -53,11 +88,15 @@ NetworkServer::NetworkServer(const World& world, const std::string& host, int po
                ix::WebSocket& webSocket,
                const ix::WebSocketMessagePtr& msg) {
             if (msg->type == ix::WebSocketMessageType::Open) {
-                // Новый клиент сразу получает полный снапшот мира —
-                // ему ещё не известны накопленные изменения — и список
-                // сохранённых миров: с него начинается главное меню.
-                webSocket.send(buildSnapshotMessage());
+                // Список миров — только чтение каталога сохранений, его
+                // можно отдать прямо здесь. А вот состояние мира —
+                // нельзя: этот колбэк выполняется на потоке IXWebSocket,
+                // и чтение ECS registry параллельно с идущим тиком было
+                // бы гонкой. Поэтому только помечаем, что нужен полный
+                // ресинк, — его соберёт и разошлёт поток GameLoop
+                // (publish), как и всё остальное состояние мира.
                 webSocket.send(buildWorldListMessage());
+                requestFullResync();
             } else if (msg->type == ix::WebSocketMessageType::Message) {
                 handleClientMessage(msg->str);
             }
@@ -80,8 +119,237 @@ void NetworkServer::stop() {
     server_.stop();
 }
 
-void NetworkServer::broadcastSnapshot() {
-    broadcastToAll(buildSnapshotMessage());
+void NetworkServer::requestFullResync() {
+    needsFullResync_.store(true);
+}
+
+void NetworkServer::publish(bool force) {
+    if (server_.getClients().empty()) {
+        // Мир существует независимо от наблюдателя (02_CorePrinciples.md,
+        // п.1) и продолжает тикать — но сериализовать его сейчас некому,
+        // а это самая дорогая часть тика. Точка отсчёта для дельт при
+        // этом протухает, поэтому следующий подключившийся клиент
+        // получит полный world_init (его же запрашивает и колбэк Open).
+        sentValid_ = false;
+        return;
+    }
+
+    bool full = needsFullResync_.load() || !sentValid_;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!full && !force) {
+        const std::chrono::milliseconds interval(std::max(0, baseConfig_.snapshot_interval_ms));
+        if (now - lastPublish_ < interval) {
+            return;
+        }
+    }
+
+    // Клиент не разгрёб предыдущее — новое ему сейчас не нужно. Точка
+    // отсчёта не сдвигается, так что пропущенные изменения войдут в
+    // следующую дельту; полный ресинк, если он был запрошен, останется
+    // запрошенным и уйдёт, когда очередь разгребётся.
+    if (clientsAreBehind()) {
+        return;
+    }
+
+    captureLayers(current_);
+    if (sent_.width != current_.width || sent_.height != current_.height) {
+        // Размер Области сменился (загружен мир другого размера) —
+        // дельта на такое состояние лечь не может.
+        full = true;
+    }
+
+    std::string payload;
+    if (full) {
+        payload = buildInitMessage(current_);
+    } else {
+        payload = buildDeltaMessage(sent_, current_);
+        if (payload.empty()) {
+            lastPublish_ = now;
+            return;
+        }
+    }
+
+    broadcastToAll(payload);
+
+    std::swap(sent_, current_);
+    sentValid_ = true;
+    sentTick_ = world_.registry().get<const TimeComponent>(world_.worldEntity()).tick;
+    sentPaused_ = paused_.load();
+    lastPublish_ = now;
+    if (full) {
+        // Снимаем флаг только теперь, когда world_init действительно
+        // отправлен: иначе следующая дельта легла бы клиенту на пустое
+        // место.
+        needsFullResync_.store(false);
+    }
+}
+
+bool NetworkServer::clientsAreBehind() {
+    const int threshold = baseConfig_.snapshot_backlog_bytes;
+    if (threshold <= 0) {
+        return false;
+    }
+    for (const auto& client : server_.getClients()) {
+        if (client->bufferedAmount() > static_cast<std::size_t>(threshold)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void NetworkServer::captureLayers(LayerSnapshot& out) const {
+    const int width = world_.area().width();
+    out.resize(width, world_.area().height());
+
+    const auto& registry = world_.registry();
+
+    registry.view<const PositionComponent, const SoilComponent>().each(
+        [&](const PositionComponent& pos, const SoilComponent& soil) {
+            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
+            out.moisture[i] = encodeMilli(soil.moisture);
+            out.rockiness[i] = encodeMilli(soil.rockiness);
+            out.compaction[i] = encodeMilli(soil.compaction);
+            out.minerals[i] = soil.minerals;
+        });
+
+    // Высота рельефа (HeightComponent всегда идёт в паре с
+    // SoilComponent на террейн-Entity, см. WorldSave.hpp) — нужна
+    // клиенту для необязательного слоя-рельефа; единиц измерения не
+    // несёт, клиент нормализует по min/max текущей карты.
+    registry.view<const PositionComponent, const HeightComponent>().each(
+        [&](const PositionComponent& pos, const HeightComponent& h) {
+            out.terrainHeight[static_cast<std::size_t>(pos.y) * width + pos.x] = encodeMilli(h.height);
+        });
+
+    // Вода и перегной на сервере разреженны (нет компонента = нет
+    // возможности, 02_CorePrinciples.md, п.3), но по сети идут плотными
+    // массивами, как и почва: ноль значит "нет". Так дельта одинаково
+    // выражает и появление воды, и её уход.
+    registry.view<const PositionComponent, const WaterComponent>().each(
+        [&](const PositionComponent& pos, const WaterComponent& w) {
+            out.water[static_cast<std::size_t>(pos.y) * width + pos.x] = encodeMilli(w.depth);
+        });
+
+    registry.view<const PositionComponent, const HumusComponent>().each(
+        [&](const PositionComponent& pos, const HumusComponent& tileHumus) {
+            out.humus[static_cast<std::size_t>(pos.y) * width + pos.x] = tileHumus.minerals;
+        });
+
+    registry.view<const PositionComponent, const PlantComponent, const PlantGenomeComponent>().each(
+        [&](const PositionComponent& pos, const PlantComponent& plant, const PlantGenomeComponent& genome) {
+            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
+            out.species[i] = genome.species;
+            out.growth[i] = growthPercent(plant.growth);
+        });
+}
+
+std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
+    nlohmann::json message;
+    message["type"] = "world_init";
+    message["area"]["width"] = layers.width;
+    message["area"]["height"] = layers.height;
+    message["scale"] = kMilliScale;
+    message["paused"] = paused_.load();
+    message["tick"] = world_.registry().get<const TimeComponent>(world_.worldEntity()).tick;
+
+    {
+        std::lock_guard<std::mutex> lock(generationConfigMutex_);
+        message["world"] = currentWorldName_;
+        message["terrain_seed"] = currentGenerationConfig_.terrain_seed;
+        message["terrain"] = currentGenerationConfig_.terrain;
+        message["boulder_count"] = currentGenerationConfig_.boulder_count;
+        message["boulder_seed"] = currentGenerationConfig_.boulder_seed;
+    }
+
+    // Булыжники и источники — разреженно, тегом без данных: их немного
+    // (boulder_count + river_count + water_source_count), плотный массив
+    // на всю Область был бы избыточен. Меняются только генерацией,
+    // поэтому в дельты не входят.
+    auto boulders = nlohmann::json::array();
+    world_.registry()
+        .view<const ImpassableComponent, const PositionComponent>()
+        .each([&](auto /*entity*/, const PositionComponent& pos) {
+            boulders.push_back({{"x", pos.x}, {"y", pos.y}});
+        });
+    message["boulders"] = boulders;
+
+    auto waterSources = nlohmann::json::array();
+    world_.registry()
+        .view<const WaterSourceComponent, const PositionComponent>()
+        .each([&](auto /*entity*/, const PositionComponent& pos) {
+            waterSources.push_back({{"x", pos.x}, {"y", pos.y}});
+        });
+    message["water_sources"] = waterSources;
+
+    // Виды травы этого мира (их не больше kMaxGrassSpecies): клиенту
+    // нужны и цвет по индексу, и сами числа — чтобы можно было
+    // посмотреть, какая стратегия у травы под курсором. Поля генома
+    // перечисляет таблица черт, а не этот код: новая черта уедет клиенту
+    // сама. Без округления, в отличие от плотных массивов: видов не
+    // больше двенадцати, на трафик это не влияет, а часть черт (расход
+    // влаги за тик) живёт в тысячных долях и от округления превратилась
+    // бы в ноль.
+    auto speciesJson = nlohmann::json::array();
+    for (const auto& archetype :
+         world_.registry().get<const PlantSpeciesComponent>(world_.worldEntity()).archetypes) {
+        nlohmann::json record;
+        record["species"] = archetype.species;
+        for (const auto& trait : kGrassTraits) {
+            record[trait.name] = archetype.*trait.gene;
+        }
+        speciesJson.push_back(std::move(record));
+    }
+    message["plant_species"] = speciesJson;
+
+    message["layers"]["rockiness"] = layers.rockiness;
+    message["layers"]["moisture"] = layers.moisture;
+    message["layers"]["compaction"] = layers.compaction;
+    message["layers"]["minerals"] = layers.minerals;
+    message["layers"]["height"] = layers.terrainHeight;
+    message["layers"]["water"] = layers.water;
+    message["layers"]["humus"] = layers.humus;
+    message["layers"]["species"] = layers.species;
+    message["layers"]["growth"] = layers.growth;
+
+    return message.dump();
+}
+
+std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, const LayerSnapshot& current) const {
+    nlohmann::json message;
+    bool anyChange = false;
+
+    // Каменистость сюда не входит: её меняет только генерация, а она
+    // рассылает новый world_init.
+    const std::pair<const char*, std::pair<const std::vector<int>*, const std::vector<int>*>> layers[] = {
+        {"moisture", {&previous.moisture, &current.moisture}},
+        {"compaction", {&previous.compaction, &current.compaction}},
+        {"minerals", {&previous.minerals, &current.minerals}},
+        {"height", {&previous.terrainHeight, &current.terrainHeight}},
+        {"water", {&previous.water, &current.water}},
+        {"humus", {&previous.humus, &current.humus}},
+        {"species", {&previous.species, &current.species}},
+        {"growth", {&previous.growth, &current.growth}},
+    };
+    for (const auto& [name, arrays] : layers) {
+        auto pairs = changedCells(*arrays.first, *arrays.second);
+        if (!pairs.empty()) {
+            anyChange = true;
+            message[name] = std::move(pairs);
+        }
+    }
+
+    const auto tick = world_.registry().get<const TimeComponent>(world_.worldEntity()).tick;
+    const bool paused = paused_.load();
+    if (!anyChange && tick == sentTick_ && paused == sentPaused_) {
+        // Не изменилось вообще ничего (обычное дело на паузе) — молчим.
+        return {};
+    }
+
+    message["type"] = "world_delta";
+    message["tick"] = tick;
+    message["paused"] = paused;
+    return message.dump();
 }
 
 void NetworkServer::setCurrentGenerationConfig(const RegenerationRequest& config) {
@@ -260,145 +528,6 @@ void NetworkServer::broadcastToAll(const std::string& payload) {
     for (const auto& client : server_.getClients()) {
         client->send(payload);
     }
-}
-
-std::string NetworkServer::buildSnapshotMessage() const {
-    nlohmann::json message;
-    message["type"] = "world_snapshot";
-
-    const int width = world_.area().width();
-    const int height = world_.area().height();
-    message["area"]["width"] = width;
-    message["area"]["height"] = height;
-    message["paused"] = paused_.load();
-
-    const auto& time = world_.registry().get<const TimeComponent>(world_.worldEntity());
-    message["tick"] = time.tick;
-
-    {
-        std::lock_guard<std::mutex> lock(generationConfigMutex_);
-        message["world"] = currentWorldName_;
-        message["terrain_seed"] = currentGenerationConfig_.terrain_seed;
-        message["terrain"] = currentGenerationConfig_.terrain;
-        message["boulder_count"] = currentGenerationConfig_.boulder_count;
-        message["boulder_seed"] = currentGenerationConfig_.boulder_seed;
-    }
-
-    auto boulders = nlohmann::json::array();
-    world_.registry()
-        .view<const ImpassableComponent, const PositionComponent>()
-        .each([&](auto /*entity*/, const PositionComponent& pos) {
-            boulders.push_back({{"x", pos.x}, {"y", pos.y}});
-        });
-    message["boulders"] = boulders;
-
-    // Почва — плоские массивы по всей Области (row-major), компактнее,
-    // чем объект на тайл при 10000+ тайлах.
-    const std::size_t cellCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-    std::vector<float> moisture(cellCount, 0.0f);
-    std::vector<float> rockiness(cellCount, 0.0f);
-    std::vector<float> compaction(cellCount, 0.0f);
-    std::vector<int> minerals(cellCount, 0);
-
-    world_.registry()
-        .view<const PositionComponent, const SoilComponent>()
-        .each([&](const PositionComponent& pos, const SoilComponent& soil) {
-            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
-            moisture[i] = round3(soil.moisture);
-            rockiness[i] = round3(soil.rockiness);
-            compaction[i] = round3(soil.compaction);
-            minerals[i] = soil.minerals;
-        });
-
-    message["soil"]["moisture"] = moisture;
-    message["soil"]["rockiness"] = rockiness;
-    message["soil"]["compaction"] = compaction;
-    message["soil"]["minerals"] = minerals;
-
-    // Высота рельефа — плоский массив, как почва (HeightComponent всегда
-    // идёт в паре с SoilComponent на террейн-Entity, см. WorldSave.hpp).
-    // Нужна клиенту для необязательного слоя-рельефа (затемнение низин,
-    // высветление возвышенностей) — само число единиц измерения не несёт,
-    // клиент нормализует по min/max текущей карты.
-    std::vector<float> heightValues(cellCount, 0.0f);
-    world_.registry()
-        .view<const PositionComponent, const HeightComponent>()
-        .each([&](const PositionComponent& pos, const HeightComponent& h) {
-            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
-            heightValues[i] = round3(h.height);
-        });
-    message["height"] = heightValues;
-
-    // Вода — только тайлы, где она реально есть (03_CorePrinciples.md,
-    // п.3: отсутствие компонента = отсутствие возможности); в разреженном
-    // виде дешевле, чем ещё один плотный массив на всю Область.
-    auto water = nlohmann::json::array();
-    world_.registry()
-        .view<const PositionComponent, const WaterComponent>()
-        .each([&](const PositionComponent& pos, const WaterComponent& w) {
-            water.push_back({{"x", pos.x}, {"y", pos.y}, {"depth", round3(w.depth)}});
-        });
-    message["water"] = water;
-
-    // Источники — тоже разреженно, тег без данных (как boulders): их
-    // мало (river_count + water_source_count), плотный массив был бы
-    // избыточен.
-    auto waterSources = nlohmann::json::array();
-    world_.registry()
-        .view<const WaterSourceComponent, const PositionComponent>()
-        .each([&](auto /*entity*/, const PositionComponent& pos) {
-            waterSources.push_back({{"x", pos.x}, {"y", pos.y}});
-        });
-    message["water_sources"] = waterSources;
-
-    // Растения — плотные массивы, как почва, а не разреженный список, как
-    // вода: заросший луг занимает большую часть Области, и объект на
-    // каждое растение обошёлся бы дороже двух массивов. species = -1 —
-    // клетка пустая (растение — Entity, и его отсутствие тут выражается
-    // именно значением-заглушкой, потому что массив плотный).
-    std::vector<int> plantSpecies(cellCount, -1);
-    std::vector<int> plantGrowth(cellCount, 0);
-    world_.registry()
-        .view<const PositionComponent, const PlantComponent, const PlantGenomeComponent>()
-        .each([&](const PositionComponent& pos, const PlantComponent& plant, const PlantGenomeComponent& genome) {
-            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
-            plantSpecies[i] = genome.species;
-            plantGrowth[i] = growthPercent(plant.growth);
-        });
-    message["plants"]["species"] = plantSpecies;
-    message["plants"]["growth"] = plantGrowth;
-
-    // Перегной — наоборот, разреженно, как вода: он лежит только там, где
-    // недавно умерло растение, и на большей части карты его нет.
-    auto humus = nlohmann::json::array();
-    world_.registry()
-        .view<const PositionComponent, const HumusComponent>()
-        .each([&](const PositionComponent& pos, const HumusComponent& tileHumus) {
-            humus.push_back({{"x", pos.x}, {"y", pos.y}, {"minerals", tileHumus.minerals}});
-        });
-    message["humus"] = humus;
-
-    // Виды травы этого мира (их не больше kMaxGrassSpecies): клиенту
-    // нужны и цвет по индексу, и сами числа — чтобы можно было посмотреть,
-    // какая стратегия у травы под курсором. Поля генома перечисляет
-    // таблица черт, а не этот код: новая черта уедет клиенту сама.
-    auto speciesJson = nlohmann::json::array();
-    for (const auto& archetype :
-         world_.registry().get<const PlantSpeciesComponent>(world_.worldEntity()).archetypes) {
-        nlohmann::json record;
-        record["species"] = archetype.species;
-        for (const auto& trait : kGrassTraits) {
-            // Без округления, в отличие от плотных массивов выше: видов
-            // не больше двенадцати, на трафик это не влияет, а часть
-            // черт (расход влаги за тик) живёт в тысячных долях и от
-            // округления превратилась бы в ноль.
-            record[trait.name] = archetype.*trait.gene;
-        }
-        speciesJson.push_back(std::move(record));
-    }
-    message["plant_species"] = speciesJson;
-
-    return message.dump();
 }
 
 } // namespace goblins

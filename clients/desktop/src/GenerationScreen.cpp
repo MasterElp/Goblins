@@ -6,6 +6,7 @@
 #include <raygui.h>
 #include <raylib.h>
 
+#include "MapTexture.hpp"
 #include "TileColors.hpp"
 
 namespace GenerationScreen {
@@ -16,6 +17,10 @@ constexpr float kTopBarHeight = 40.0f;
 } // namespace
 
 AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
+    // Карта в текстуре — состояние экрана между кадрами: пересобирается
+    // только когда пришло новое состояние мира (регенерация или тик).
+    static MapTexture::Cache mapCache;
+
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
 
@@ -27,7 +32,11 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
 
     DrawText("World Generation - Soil, Water & Grass", 12, 10, 20, textColor);
 
-    const WorldState snapshot = network.snapshot();
+    // Разделяемый указатель на неизменяемый снимок, а не копия: копировать
+    // массивы по числу тайлов каждый кадр незачем — меняются они только с
+    // приходом сообщения сервера.
+    const auto statePtr = network.snapshot();
+    const WorldState& snapshot = *statePtr;
 
     // Пуск/остановка симуляции прямо здесь: подбор параметров генерации
     // точнее, когда HydrologySystem не размывает только что
@@ -76,32 +85,22 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
         BeginScissorMode(static_cast<int>(mapAreaX), static_cast<int>(mapAreaY), static_cast<int>(mapAreaW),
                           static_cast<int>(mapAreaH));
 
-        for (int y = 0; y < snapshot.areaHeight; ++y) {
-            for (int x = 0; x < snapshot.areaWidth; ++x) {
-                const std::size_t i = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
-                const float screenX = offsetX + x * tileSizeF;
-                const float screenY = offsetY + y * tileSizeF;
-
-                Color tileColor = TileColors::soil(snapshot.moisture[i], snapshot.rockiness[i],
-                                                    snapshot.compaction[i],
-                                                    TileColors::mineralsFraction(snapshot.minerals[i]));
-                // Трава и перегной — как на экране симуляции: сразу после
-                // генерации видно, куда какие виды вообще сели, а если
-                // запустить симуляцию отсюда (кнопка Start), видно и как
-                // они расселяются.
-                if (snapshot.humus[i] > 0) {
-                    tileColor = TileColors::humus(tileColor, snapshot.humus[i]);
-                }
-                if (snapshot.plantSpeciesAt[i] >= 0) {
-                    tileColor = TileColors::plant(tileColor, snapshot.plantSpeciesAt[i], snapshot.plantGrowth[i]);
-                }
-                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize, tileColor);
-                if (snapshot.waterDepth[i] > 0.0f) {
-                    DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize,
-                                  TileColors::water(snapshot.waterDepth[i]));
-                }
-            }
-        }
+        // Карта — одна текстура (тексель на тайл), пересобирается только
+        // при новом состоянии мира; вся карта тут видна целиком, и
+        // рисовать её потайлово значило бы десять тысяч вызовов на кадр
+        // при неподвижной картинке. Трава и перегной — как на экране
+        // симуляции: сразу после генерации видно, куда какие виды вообще
+        // сели, а если запустить симуляцию отсюда (кнопка Start), видно и
+        // как они расселяются. Рельефного шейдинга здесь нет (на экране
+        // симуляции это отдельный слой [5]) — при подборе параметров
+        // генерации важны сами значения почвы, а не объём карты.
+        MapTexture::Layers layers;
+        layers.height = false;
+        const Texture2D& mapTexture = mapCache.texture(snapshot, layers);
+        DrawTexturePro(mapTexture,
+                       Rectangle{0, 0, static_cast<float>(snapshot.areaWidth),
+                                 static_cast<float>(snapshot.areaHeight)},
+                       Rectangle{offsetX, offsetY, mapPixelW, mapPixelH}, Vector2{0, 0}, 0.0f, WHITE);
 
         for (const auto& boulder : snapshot.boulders) {
             const float screenX = offsetX + boulder.first * tileSizeF;
@@ -170,6 +169,12 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
     }
 
     if (backPressed || IsKeyPressed(KEY_ESCAPE)) {
+        // Мир мог быть запущен прямо отсюда (кнопка Start) — уходя в
+        // меню, останавливаем его, как это делает экран симуляции по
+        // "Back". Иначе сервер продолжал бы тикать мир, за которым уже
+        // никто не наблюдает: паузой управляет сервер, и сам он о выходе
+        // клиента с экрана не узнает.
+        network.sendStopSimulation();
         return AppScreen::MainMenu;
     }
     return AppScreen::WorldGeneration;

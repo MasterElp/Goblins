@@ -183,13 +183,27 @@ struct ServerConfig {
     // независимо от наблюдателя, 02_CorePrinciples.md, п.1).
     int tick_count = -1;
 
+    // Как часто состояние мира уходит клиентам. Это не тот же интервал,
+    // что tick_interval_ms: мир может тикать чаще, чем имеет смысл
+    // рисовать, и тогда рассылка каждый тик только копит очередь в
+    // сокете — клиент показывал бы прошлое (тик продолжал бы расти уже
+    // после паузы). Ноль — рассылать на каждом тике.
+    int snapshot_interval_ms = 100;
+    // Порог невыбранной очереди отправки (байт) у клиента, при котором
+    // очередная рассылка пропускается: клиент не успевает принимать, и
+    // копить для него данные бессмысленно. Изменения не теряются —
+    // следующая дельта считается от последнего реально отправленного
+    // состояния и включит в себя пропущенное.
+    int snapshot_backlog_bytes = 1048576;
+
     // Каталог сохранённых миров (по одному JSON-файлу на мир, см.
     // server/WorldSave.hpp). Относительный путь разрешается относительно
     // каталога исполняемого файла сервера, а не рабочей директории.
     std::string saves_dir = "saves";
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, terrain_seed, terrain, boulder_count,
-                                    boulder_seed, plants, plant_seed, tick_interval_ms, tick_count, saves_dir)
+                                    boulder_seed, plants, plant_seed, tick_interval_ms, tick_count,
+                                    snapshot_interval_ms, snapshot_backlog_bytes, saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
 // сети (протокол "regenerate", см. NetworkServer.hpp) без пересоздания
