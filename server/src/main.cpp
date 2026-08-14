@@ -319,10 +319,14 @@ int main(int argc, char** argv) {
             bool worldReady = false;
 
             if (start->worldName.empty()) {
-                // Новый мир. Сразу после генерации он сохраняется — так
-                // состояние "мир как он сгенерирован", с нулевым тиком,
-                // существует на диске всегда, даже если игрок ни разу не
-                // нажмёт "Save world".
+                // Новый мир. На диск НЕ пишется автоматически — только
+                // играбельное состояние в памяти, с нулевым тиком, пока
+                // игрок явно не нажмёт "Save world". Раньше мир сохранялся
+                // сразу же, и в списке миров плодились файлы с нулевым
+                // тиком от каждого запуска "New world" (включая те, что
+                // затем перегенерировали или так и не сыграли ни тика) —
+                // список превращался в мусор, который приходилось чистить
+                // руками.
                 const auto request = network.currentGenerationConfig();
                 // std::flush — эта строка обязана попасть в консоль ДО
                 // generateTerrain, даже если он зависнет (см. комментарий
@@ -335,21 +339,7 @@ int main(int argc, char** argv) {
                 printWorldStats(world, request.boulder_count);
                 printPlantStats(world);
 
-                goblins::WorldSaveInfo info;
-                std::string error;
-                const auto name = goblins::makeUniqueWorldName(savesDirectory);
-                if (goblins::saveWorld(world, request, name, savesDirectory, info, error)) {
-                    network.setCurrentWorldName(info.name);
-                    std::cout << "New world saved as '" << info.name << "' (tick " << info.tick << ").\n";
-                    network.broadcastNotice("info", "New world '" + info.name + "' created.");
-                } else {
-                    // Мир сгенерирован и полностью играбелен — не
-                    // сохранился только файл. Это не повод не запускать
-                    // симуляцию, но игрок должен об этом узнать.
-                    network.setCurrentWorldName("");
-                    std::cerr << "Could not save the new world: " << error << "\n";
-                    network.broadcastNotice("error", "World generated, but not saved: " + error);
-                }
+                network.setCurrentWorldName("");
                 worldReady = true;
             } else {
                 std::cout << "Loading world '" << start->worldName << "'...\n" << std::flush;
