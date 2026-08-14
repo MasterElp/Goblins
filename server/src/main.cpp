@@ -60,6 +60,9 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.mineralsAverage = config.minerals_average;
     params.waterSourceCount = config.water_source_count;
     params.waterSourceStrength = config.water_source_strength;
+    params.waterEvaporationRate = config.water_evaporation_rate;
+    params.rainIntervalTicks = config.rain_interval_ticks;
+    params.rainAmount = config.rain_amount;
     params.waterFlowRate = config.water_flow_rate;
     params.soilErosionRate = config.soil_erosion_rate;
     params.maxErosionDepth = config.max_erosion_depth;

@@ -75,6 +75,12 @@ struct TerrainConfig {
     int water_source_count = 3;
     float water_source_strength = 0.05f;
 
+    // Отток воды и дожди — вторая половина баланса воды, см.
+    // core::TerrainParams::waterEvaporationRate.
+    float water_evaporation_rate = 0.0002f;
+    int rain_interval_ticks = 400;
+    float rain_amount = 0.05f;
+
     // Доля разницы уровней поверхности, перетекающая к самому низкому
     // соседу за тик на ровном месте — тоже свойство мира, см.
     // core::TerrainParams::waterFlowRate.
@@ -88,7 +94,8 @@ struct TerrainConfig {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, noise_frequency, noise_octaves, hardness_height_bump,
                                     river_count, river_width, river_sinuosity, river_depth, pond_depth,
-                                    minerals_average, water_source_count, water_source_strength, water_flow_rate,
+                                    minerals_average, water_source_count, water_source_strength,
+                                    water_evaporation_rate, rain_interval_ticks, rain_amount, water_flow_rate,
                                     soil_erosion_rate, max_erosion_depth)
 
 // Зеркало core::PlantParams (core/generation/PlantParams.hpp) — по той же

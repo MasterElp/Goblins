@@ -7,29 +7,32 @@
     "host": "127.0.0.1",
     "plants": {
         "grass_coverage": 0.05999999865889549,
-        "grass_species": 5,
+        "grass_species": 3,
         "humus_decay_rate": 0.019999999552965164,
-        "mutation_rate": 0.05999999865889549
+        "mutation_rate": 0.15140844881534576
     },
     "port": 9002,
     "saves_dir": "saves",
-    "seed": 362821,
+    "seed": 959080,
     "snapshot_interval_ms": 100,
     "terrain": {
         "hardness_height_bump": 0.6000000238418579,
-        "max_erosion_depth": 0.922535240650177,
+        "max_erosion_depth": 1.5281691551208496,
         "minerals_average": 20.657276153564453,
         "noise_frequency": 0.019999999552965164,
         "noise_octaves": 4,
-        "pond_depth": 3.133802652359009,
+        "pond_depth": 2.2300469875335693,
+        "rain_amount": 0.007746479008346796,
+        "rain_interval_ticks": 400,
         "river_count": 2,
-        "river_depth": 1.4169014692306519,
+        "river_depth": 1.0450705289840698,
         "river_sinuosity": 0.23004694283008575,
         "river_width": 6.913145542144775,
-        "soil_erosion_rate": 0.12206573039293289,
-        "water_flow_rate": 0.5704225301742554,
+        "soil_erosion_rate": 0.22652582824230194,
+        "water_evaporation_rate": 0.0014084507711231709,
+        "water_flow_rate": 0.8497652411460876,
         "water_source_count": 6,
-        "water_source_strength": 0.30516430735588074
+        "water_source_strength": 0.9530516266822815
     },
     "tick_interval_ms": 200
 }

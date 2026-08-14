@@ -118,7 +118,10 @@ void PlantSystem(World& world, CommandQueue& commands) {
     // перебирать список Entity клетки.
     const entt::entity kNullEntity = entt::null;
     std::vector<entt::entity> terrain(cellCount, kNullEntity);
-    std::vector<unsigned char> flooded(cellCount, 0);
+    // Глубина воды, а не флаг "вода есть": переносимая глубина у каждого
+    // вида своя (PlantGenomeComponent::waterTolerance), поэтому решение
+    // "тонет или нет" принимается для каждого растения отдельно, ниже.
+    std::vector<float> waterAt(cellCount, 0.0f);
     std::vector<unsigned char> occupied(cellCount, 0);
 
     for (const auto entity : registry.view<PositionComponent, SoilComponent>()) {
@@ -128,7 +131,9 @@ void PlantSystem(World& world, CommandQueue& commands) {
         }
         const std::size_t i = index(position.x, position.y);
         terrain[i] = entity;
-        flooded[i] = registry.all_of<WaterComponent>(entity) ? 1 : 0;
+        if (const auto* water = registry.try_get<const WaterComponent>(entity)) {
+            waterAt[i] = water->depth;
+        }
     }
 
     for (const auto entity : registry.view<PlantComponent, PositionComponent>()) {
@@ -159,9 +164,13 @@ void PlantSystem(World& world, CommandQueue& commands) {
         auto& soil = registry.get<SoilComponent>(terrain[i]);
 
         const float size = kMinSizeShare + (1.0f - kMinSizeShare) * plant.growth;
-        // Затопленная клетка не "плохая", а непригодная: трава на воде не
-        // растёт вообще (пригодность 0), дальше её добьёт kDrownStress.
-        const float fit = flooded[i] != 0 ? 0.0f : habitatFit(genome, soil);
+        // Тонет растение или нет, решает не факт наличия воды, а её
+        // глубина против переносимой этим геномом (water_tolerance).
+        // Мокрая земля и мелкая лужа после дождя росту не мешают вовсе;
+        // настоящее затопление — клетка непригодна (пригодность 0), и
+        // дальше растение добьёт kDrownStress.
+        const bool drowning = waterAt[i] > genome.waterTolerance;
+        const float fit = drowning ? 0.0f : habitatFit(genome, soil);
 
         // Влага: сколько удалось выпить из своей клетки (из сухой почвы
         // нечего брать — забор пропорционален её влажности), столько и
@@ -205,7 +214,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         const float ceiling = std::min(1.0f, std::max(plant.growth, mineralCeiling));
         plant.growth = std::clamp(plant.growth + genome.growthRate * vitality, 0.0f, ceiling);
 
-        if (flooded[i] != 0) {
+        if (drowning) {
             plant.stress += kDrownStress;
         } else if (vitality < kVitalityFloor) {
             plant.stress += kStressGain * (1.0f - vitality / kVitalityFloor);
@@ -289,7 +298,10 @@ void PlantSystem(World& world, CommandQueue& commands) {
                 continue;
             }
             const std::size_t j = index(nx, ny);
-            if (occupied[j] != 0 || flooded[j] != 0 || terrain[j] == entt::null || world.area().isBlocked(nx, ny)) {
+            // Переносимость воды берём у потомка: сеять есть смысл туда,
+            // где сможет жить именно он, а его геном уже помутирован.
+            if (occupied[j] != 0 || waterAt[j] > child.waterTolerance || terrain[j] == entt::null ||
+                world.area().isBlocked(nx, ny)) {
                 continue;
             }
             const auto& targetSoil = registry.get<const SoilComponent>(terrain[j]);

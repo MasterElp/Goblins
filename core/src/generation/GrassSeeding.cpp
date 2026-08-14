@@ -96,16 +96,22 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         const int x = static_cast<int>(randomUnit(state) * static_cast<float>(width)) % width;
         const int y = static_cast<int>(randomUnit(state) * static_cast<float>(height)) % height;
 
-        // Трава не растёт на воде и не делит тайл с непроходимым объектом
-        // (04_WorldModel.md, п.4), и на одной клетке не может быть двух
-        // растений.
+        // Трава не делит тайл с непроходимым объектом (04_WorldModel.md,
+        // п.4), и на одной клетке не может быть двух растений.
         if (world.area().isBlocked(x, y) || hasPlant(world, x, y)) {
             continue;
         }
         const auto terrain = terrainEntityAt(world, x, y);
-        if (terrain == entt::null || world.registry().all_of<WaterComponent>(terrain)) {
+        if (terrain == entt::null) {
             continue;
         }
+        // Слишком глубокая вода — но "слишком" у каждого генома своё
+        // (water_tolerance), поэтому саму глубину берём здесь, а сравнение
+        // делаем ниже, когда геном семени уже выбран. Тот же закон, что и
+        // у PlantSystem: тонет не тот, под кем есть вода, а тот, под кем
+        // её больше, чем он переносит.
+        const auto* water = world.registry().try_get<const WaterComponent>(terrain);
+        const float waterDepth = water != nullptr ? water->depth : 0.0f;
 
         const std::size_t speciesIndex =
             static_cast<std::size_t>(randomUnit(state) * static_cast<float>(species.size())) % species.size();
@@ -117,6 +123,10 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         // появляется через поколения.
         const PlantGenomeComponent genome =
             mutateGenome(archetype, archetype, params.mutationRate, mixSeed(state, static_cast<std::uint64_t>(planted)));
+
+        if (waterDepth > genome.waterTolerance) {
+            continue; // этот вид тут утонет
+        }
 
         auto& soil = world.registry().get<SoilComponent>(terrain);
         if (habitatFit(genome, soil) < kSeedingMinFit) {

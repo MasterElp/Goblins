@@ -65,6 +65,17 @@ struct TerrainParams {
     int waterSourceCount = 3;
     float waterSourceStrength = 0.05f;
 
+    // Отток воды и дожди — тоже свойства мира (см.
+    // WorldPropertiesComponent): вместе с waterSourceStrength они образуют
+    // баланс воды, и настраиваться должны все вместе, иначе настраиваемый
+    // приток при неизменяемом оттоке заливает карту целиком.
+    // rainIntervalTicks — раз во сколько тиков начинается дождь (0 —
+    // дождей нет), rainAmount — глубина одной капли. Дождь идёт несколько
+    // тиков и роняет капли в случайные точки, а не заливает карту разом.
+    float waterEvaporationRate = 0.0002f;
+    int rainIntervalTicks = 400;
+    float rainAmount = 0.05f;
+
     // Доля разницы уровней поверхности, перетекающая к самому низкому
     // соседу за тик на ровном месте (на склоне к ней добавляется уклон,
     // см. WorldPropertiesComponent) — тоже свойство мира.

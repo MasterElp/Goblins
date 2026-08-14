@@ -96,6 +96,21 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // соседу за тик на ровном месте (на склоне ядро добавляет уклон).
     ops.floatRow("Flow rate", edited.terrain.water_flow_rate, 0.0f, 1.0f);
 
+    ops.section("Water balance");
+    // Вторая половина баланса воды. Испарение снимает эту глубину с КАЖДОЙ
+    // водной клетки за тик, а источники дают свою силу на весь мир — то
+    // есть равновесное число водных клеток равно примерно
+    // (число источников * Source strength + дождь) / Evaporation. Слишком
+    // маленькое испарение при заметном притоке = карта, залитая целиком.
+    ops.floatRow("Evaporation (per tick)", edited.terrain.water_evaporation_rate, 0.0f, 0.005f, 5);
+    // Дождь: раз во сколько тиков он начинается и какой глубины каждая
+    // капля. Дождь идёт несколько тиков и роняет капли в случайные точки
+    // (форма — закон, см. kRainDurationTicks/kRainDropsPerTick), поэтому
+    // за раз намокает лишь малая часть карты. Ноль в интервале — дождей в
+    // этом мире нет.
+    ops.intRow("Rain every (ticks)", edited.terrain.rain_interval_ticks, 0, 2000);
+    ops.floatRow("Rain drop depth", edited.terrain.rain_amount, 0.0f, 0.3f, 4);
+
     ops.section("Erosion");
     // Доля перенесённой воды, превращающаяся в вымытую породу. Порода не
     // исчезает: ровно столько же оседает там, куда пришла вода.

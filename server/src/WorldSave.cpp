@@ -134,6 +134,9 @@ nlohmann::json buildEntitiesJson(const World& world) {
         }
         if (const auto* worldProperties = registry.try_get<WorldPropertiesComponent>(entity)) {
             record["world_properties"] = {{"water_source_strength", worldProperties->waterSourceStrength},
+                                          {"water_evaporation_rate", worldProperties->waterEvaporationRate},
+                                          {"rain_interval_ticks", worldProperties->rainIntervalTicks},
+                                          {"rain_amount", worldProperties->rainAmount},
                                           {"water_flow_rate", worldProperties->waterFlowRate},
                                           {"soil_erosion_rate", worldProperties->soilErosionRate},
                                           {"max_erosion_depth", worldProperties->maxErosionDepth},
@@ -220,6 +223,15 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.hasWorldProperties = true;
             parsed.worldProperties.waterSourceStrength =
                 record["world_properties"].value("water_source_strength", 0.05f);
+            // Умолчания — как в WorldPropertiesComponent: у мира,
+            // сохранённого до появления этих полей, будут они, а не нули
+            // (нулевое испарение при работающих источниках залило бы такой
+            // мир целиком).
+            parsed.worldProperties.waterEvaporationRate =
+                record["world_properties"].value("water_evaporation_rate", 0.0002f);
+            parsed.worldProperties.rainIntervalTicks =
+                record["world_properties"].value("rain_interval_ticks", 400);
+            parsed.worldProperties.rainAmount = record["world_properties"].value("rain_amount", 0.05f);
             parsed.worldProperties.waterFlowRate =
                 record["world_properties"].value("water_flow_rate", 0.3f);
             parsed.worldProperties.soilErosionRate =

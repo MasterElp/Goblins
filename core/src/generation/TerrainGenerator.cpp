@@ -100,19 +100,36 @@ constexpr float kDepthNoiseFrequency = 1.0f / 8.0f;
 constexpr float kDepthNoiseAmplitude = 0.35f;
 constexpr float kDepthMinMul = 0.6f;
 constexpr float kDepthMaxMul = 1.4f;
-constexpr float kRiverCarveMultiplier = 2.0f; // запас карвинга над riverDepth (перекрывает rock/compaction bumps)
 constexpr int kRiverAttemptMultiplier = 100;  // maxAttempts = riverCount * 100, как в BoulderScatter
 constexpr float kMergeProbability = 0.5f;     // при столкновении с уже принятой рекой — шанс слиться, а не отклонить путь
 constexpr float kMergeMarginFraction = 0.15f; // не сливаемся у самого истока целевой реки (первые 15% её длины)
 
-// Минимальный уклон дна русла: на сколько дно ГАРАНТИРОВАННО понижается
-// на каждый тайл пути от истока к устью. Без него русло — просто траншея
-// постоянной глубины, вырезанная в шумном рельефе: она наследует все его
-// бугры и ямы, вода из истока стекает в ближайший локальный минимум
-// внутри траншеи и стоит там, потому что "вниз по руслу" физически не
-// существует. Не параметр: это условие того, что река вообще течёт, а не
-// ручка внешнего вида.
-constexpr float kRiverBedSlope = 0.01f;
+// Минимальный уклон русла: на сколько уровень воды ГАРАНТИРОВАННО
+// понижается на каждый сэмпл пути от истока к устью. Без него русло —
+// просто траншея постоянной глубины, вырезанная в шумном рельефе: она
+// наследует все его бугры и ямы, вода из истока стекает в ближайший
+// локальный минимум внутри траншеи и стоит там, потому что "вниз по
+// руслу" физически не существует. Не параметр: это условие того, что река
+// вообще течёт, а не ручка внешнего вида.
+//
+// Уклон прямо задаёт скорость течения: в HydrologySystem доля переноса
+// равна waterFlowRate + уклон * kWaterSlopeBoost. При 0.01 вклад уклона
+// был 0.05 — на фоне waterFlowRate почти незаметный, и река еле ползла.
+constexpr float kRiverBedSlope = 0.03f;
+
+// Берег: насколько уровень воды в русле идёт НИЖЕ окрестной земли.
+//
+// Без запаса поверхность реки вставала вровень с землёй (профиль начинался
+// прямо с elevation истока), то есть русло было налито до краёв и берегов
+// не имело вовсе. Любой соседний тайл, где земля хоть немного ниже, тут же
+// становился кандидатом на сток: вода уходила вбок с первого же тика,
+// вместо того чтобы идти по руслу. У истока росло мокрое пятно, а русло
+// ниже сохло — при том, что само оно было построено правильно.
+//
+// Не параметр: это условие того, что русло вообще является руслом, а не
+// полосой разлива. Величина — заметно больше типичного перепада уровня
+// между соседними клетками потока, иначе запаса не хватает.
+constexpr float kRiverFreeboard = 0.25f;
 
 // Минимальная глубина впадины, чтобы считаться прудом. Порог "это вообще
 // впадина, а не численный шум Priority-Flood", а не настройка вида карты
@@ -148,6 +165,7 @@ struct RiverPathSample {
 struct RiverCell {
     float falloff;  // 1 в центре русла, 0 на границе ширины (в этой точке)
     float depthMul; // множитель глубины ячейки, унаследованный от сэмпла с максимальным falloff
+    int sampleIndex; // тот же сэмпл: по нему берётся уровень поверхности воды в этой точке русла
 };
 
 struct River {
@@ -341,10 +359,11 @@ void stampSegment(const std::vector<RiverPathSample>& samples, std::size_t fromI
                 const int idx = ny * width + nx;
                 auto it = footprint.find(idx);
                 if (it == footprint.end()) {
-                    footprint.emplace(idx, RiverCell{f, sample.depthMul});
+                    footprint.emplace(idx, RiverCell{f, sample.depthMul, static_cast<int>(si)});
                 } else if (f > it->second.falloff) {
                     it->second.falloff = f;
                     it->second.depthMul = sample.depthMul;
+                    it->second.sampleIndex = static_cast<int>(si);
                 }
             }
         }
@@ -550,63 +569,60 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
         stats.riverAttemptsMax = maxAttempts;
     }
 
-    const float riverCarveDepth = params.riverDepth * kRiverCarveMultiplier;
-    for (const auto& river : acceptedRivers) {
-        for (const auto& [idx, cell] : river.footprint) {
-            elevation[static_cast<std::size_t>(idx)] -= riverCarveDepth * cell.falloff;
-        }
-    }
-
-    // Профиль дна: вырезанное выше русло — это траншея постоянной глубины
-    // в шумном рельефе, то есть она наследует все его подъёмы и спуски.
-    // Вода в такой траншее стекает в ближайший локальный минимум и стоит
-    // там: "вниз по руслу" просто не существует. Поэтому вдоль
-    // центральной линии (исток -> устье) дно дополнительно продавливается
-    // до монотонно убывающего профиля — минимум на kRiverBedSlope за тайл.
-    // min() с текущим рельефом: где рельеф и так падает круче, берём его
-    // (это нижняя граница уклона, а не жёсткая линейка), а бугры срезаем.
+    // Профиль реки: сначала УРОВЕНЬ ПОВЕРХНОСТИ воды вдоль центральной
+    // линии, потом дно как "поверхность минус глубина" — тот же приём и по
+    // той же причине, что и у прудов ниже (elevation = filled - waterDepth).
     //
-    // Применяется не только к самому центральному пикселю пути, а ко всей
-    // ширине русла в этой точке (тот же диск радиуса halfWidth, что и при
-    // штамповке в stampSegment) — иначе вне центральной линии дно
-    // оставалось бы на исходном шумном рельефе (там carve выше — это
-    // riverCarveDepth * falloff, falloff у берега меньше 1, то есть
-    // вырезано меньше), и HydrologySystem, выбирая направление стока по
-    // дну у речных тайлов, натыкался бы там на локальные бугры/ямы,
-    // никак не связанные с течением реки: вода скапливалась в таких
-    // карманах и никуда не текла.
+    // Раньше было наоборот: дно выравнивалось ПЛОСКО по всей ширине русла,
+    // а глубина воды бралась куполом (riverDepth * falloff, где falloff = 1
+    // в центре и 0 у берега). Плоское дно плюс купол глубины дают КУПОЛ
+    // ПОВЕРХНОСТИ: посреди русла вода стояла выше, чем у берегов, и
+    // HydrologySystem на первом же тике расплёскивал её вбок — отсюда рябь
+    // поперёк реки и "глубокий тайл рядом с мелким". Поперёк русла ровной
+    // обязана быть ПОВЕРХНОСТЬ, а неровным — дно.
     //
-    // Порядок обхода = порядок размещения рек, а втекающая река всегда
-    // размещалась позже целевой — поэтому к моменту её обработки дно
-    // целевой реки в точке слияния уже понижено, и min() сажает устье
-    // притока ровно на него, без ступеньки в стыке.
+    // Уровень поверхности монотонно убывает от истока к устью: минимум
+    // kRiverBedSlope за сэмпл. Без этого русло — просто траншея в шумном
+    // рельефе, она наследует все его подъёмы и спуски, вода стекает в
+    // ближайший локальный минимум внутри траншеи и стоит там, потому что
+    // "вниз по руслу" физически не существует.
+    //
+    // min() с рельефом — поверхность реки не может оказаться выше земли, а
+    // где земля падает круче, там падает и река (это нижняя граница
+    // уклона, а не жёсткая линейка). min() с riverSurface — "садимся" на
+    // уже размещённую реку: порядок обхода = порядок размещения, а
+    // втекающая река всегда размещалась позже целевой, поэтому её устье
+    // приходит ровно на поверхность целевой, без ступеньки в стыке.
+    //
+    // Отдельного "запаса карвинга" (прежний kRiverCarveMultiplier) больше
+    // не нужно: elevation = min(elevation, surface - depth) срезает любой
+    // бугор рельефа до дна русла по построению, поднятиям от каменистости
+    // и утрамбованности просто негде проступить.
+    std::vector<float> riverSurface(cellCount, std::numeric_limits<float>::infinity());
+    std::vector<float> surfaceProfile;
     for (const auto& river : acceptedRivers) {
         if (river.centerline.empty()) {
             continue;
         }
-        float bedLevel = elevation[index(river.centerline.front().x, river.centerline.front().y)];
+        surfaceProfile.assign(river.centerline.size(), 0.0f);
         for (std::size_t s = 0; s < river.centerline.size(); ++s) {
-            const RiverPathSample& sample = river.centerline[s];
-            if (s > 0) {
-                const std::size_t centerIdx = index(sample.x, sample.y);
-                bedLevel = std::min(elevation[centerIdx], bedLevel - kRiverBedSlope);
-            }
-            const int r = std::max(1, static_cast<int>(std::ceil(sample.halfWidth)));
-            for (int dy = -r; dy <= r; ++dy) {
-                for (int dx = -r; dx <= r; ++dx) {
-                    const int nx = sample.x + dx;
-                    const int ny = sample.y + dy;
-                    if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
-                        continue;
-                    }
-                    const float d = std::sqrt(static_cast<float>(dx * dx + dy * dy));
-                    if (d > sample.halfWidth) {
-                        continue;
-                    }
-                    const std::size_t idx = index(nx, ny);
-                    elevation[idx] = std::min(elevation[idx], bedLevel);
-                }
-            }
+            const std::size_t centerIdx = index(river.centerline[s].x, river.centerline[s].y);
+            // Земля минус запас на берег — вода нигде не стоит вровень с
+            // окрестностью. min() с riverSurface оставляет слияние точным:
+            // приток садится ровно на поверхность целевой реки, а не на
+            // берег ниже неё.
+            const float ceiling =
+                std::min(elevation[centerIdx] - kRiverFreeboard, riverSurface[centerIdx]);
+            surfaceProfile[s] = s == 0 ? ceiling : std::min(ceiling, surfaceProfile[s - 1] - kRiverBedSlope);
+        }
+        for (const auto& [idx, cell] : river.footprint) {
+            const std::size_t i = static_cast<std::size_t>(idx);
+            const float surface = surfaceProfile[static_cast<std::size_t>(cell.sampleIndex)];
+            // Глубина у берега стремится к нулю, в середине — к
+            // params.riverDepth: это форма ДНА под ровной поверхностью.
+            const float depth = params.riverDepth * cell.falloff * cell.depthMul;
+            elevation[i] = std::min(elevation[i], surface - depth);
+            riverSurface[i] = std::min(riverSurface[i], surface);
         }
     }
     stats.riverMs = elapsedMs(riverStageStart); // путь+карвинг вместе — единая "стадия рек" для диагностики
@@ -737,17 +753,23 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     stats.pondMs = elapsedMs(pondStart);
 
     // --- 4. Реки: глубина воды по вырезанным руслам ---
+    // Глубина — не самостоятельное число, а разница между уровнем
+    // поверхности реки (посчитан выше) и дном: дно уже опущено ровно так,
+    // чтобы эта разница дала нужный профиль, а поверхность поперёк русла
+    // осталась ровной. Если пруд или другая река опустили дно ещё ниже,
+    // глубина здесь просто получится больше — поверхность от этого не
+    // поднимется.
+    //
     // После прудов — на пересечении реки с прудом глубина берётся как max
-    // (как и для двух прудов выше). depthMul — шум глубины вдоль русла
-    // (buildPathSamples). Отдельного признака "здесь река" тайл не
-    // получает: для симуляции реки и пруда не существует как разных
+    // (как и для двух прудов выше). Отдельного признака "здесь река" тайл
+    // не получает: для симуляции реки и пруда не существует как разных
     // вещей, вода везде течёт по одному закону — уклону поверхности
     // (HydrologySystem).
-    for (const auto& river : acceptedRivers) {
-        for (const auto& [idx, cell] : river.footprint) {
-            const std::size_t i = static_cast<std::size_t>(idx);
-            waterDepth[i] = std::max(waterDepth[i], params.riverDepth * cell.falloff * cell.depthMul);
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        if (std::isinf(riverSurface[i])) {
+            continue;
         }
+        waterDepth[i] = std::max(waterDepth[i], std::max(0.0f, riverSurface[i] - elevation[i]));
     }
 
     // --- 4b. Источники воды: исток каждой реки — автоматически, плюс
@@ -854,6 +876,9 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // просто перезаписываются выбором этой генерации.
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.waterSourceStrength = params.waterSourceStrength;
+    worldProperties.waterEvaporationRate = params.waterEvaporationRate;
+    worldProperties.rainIntervalTicks = params.rainIntervalTicks;
+    worldProperties.rainAmount = params.rainAmount;
     worldProperties.waterFlowRate = params.waterFlowRate;
     worldProperties.soilErosionRate = params.soilErosionRate;
     worldProperties.maxErosionDepth = params.maxErosionDepth;
@@ -888,11 +913,11 @@ void appendTerrainConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kDepthNoiseAmplitude", kDepthNoiseAmplitude});
     out.push_back({g, "kDepthMinMul", kDepthMinMul});
     out.push_back({g, "kDepthMaxMul", kDepthMaxMul});
-    out.push_back({g, "kRiverCarveMultiplier", kRiverCarveMultiplier});
     out.push_back({g, "kRiverAttemptMultiplier", static_cast<float>(kRiverAttemptMultiplier)});
     out.push_back({g, "kMergeProbability", kMergeProbability});
     out.push_back({g, "kMergeMarginFraction", kMergeMarginFraction});
     out.push_back({g, "kRiverBedSlope", kRiverBedSlope});
+    out.push_back({g, "kRiverFreeboard", kRiverFreeboard});
     out.push_back({g, "kMinPondDepth", kMinPondDepth});
     out.push_back({g, "kRiverStageDeadlineMs", static_cast<float>(kRiverStageDeadlineMs)});
     out.push_back({g, "kMaxRiverPathSamples", static_cast<float>(kMaxRiverPathSamples)});
