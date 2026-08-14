@@ -36,9 +36,9 @@ RowClick worldRow(Rectangle bounds, const goblins::WorldSaveInfo& world, bool is
 
     DrawText(world.name.c_str(), static_cast<int>(bounds.x) + 12, static_cast<int>(bounds.y) + 8, 20,
              isCurrent ? currentColor : textColor);
-    DrawText(TextFormat("tick %llu   %dx%d   terrain seed %u   saved %s",
+    DrawText(TextFormat("tick %llu   %dx%d   seed %u   saved %s",
                         static_cast<unsigned long long>(world.tick), world.area_width, world.area_height,
-                        world.terrain_seed, world.saved_at.c_str()),
+                        world.seed, world.saved_at.c_str()),
              static_cast<int>(bounds.x) + 12, static_cast<int>(bounds.y) + 34, 14, mutedColor);
 
     const char* action = world.tick == 0 ? "Play (as generated)" : "Continue";

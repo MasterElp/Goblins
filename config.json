@@ -4,9 +4,7 @@
         "width": 100
     },
     "boulder_count": 16,
-    "boulder_seed": 243030,
     "host": "127.0.0.1",
-    "plant_seed": 51136,
     "plants": {
         "grass_coverage": 0.05999999865889549,
         "grass_species": 5,
@@ -15,6 +13,7 @@
     },
     "port": 9002,
     "saves_dir": "saves",
+    "seed": 362821,
     "snapshot_interval_ms": 100,
     "terrain": {
         "hardness_height_bump": 0.6000000238418579,
@@ -22,7 +21,7 @@
         "minerals_average": 20.657276153564453,
         "noise_frequency": 0.019999999552965164,
         "noise_octaves": 4,
-        "pond_depth": 1.7253520488739014,
+        "pond_depth": 3.133802652359009,
         "river_count": 2,
         "river_depth": 1.4169014692306519,
         "river_sinuosity": 0.23004694283008575,
@@ -32,6 +31,5 @@
         "water_source_count": 6,
         "water_source_strength": 0.30516430735588074
     },
-    "terrain_seed": 518779,
     "tick_interval_ms": 200
 }

@@ -444,8 +444,7 @@ bool saveWorld(const World& world, const RegenerationRequest& generation, const 
     info.tick = world.registry().get<const TimeComponent>(world.worldEntity()).tick;
     info.area_width = world.area().width();
     info.area_height = world.area().height();
-    info.terrain_seed = generation.terrain_seed;
-    info.boulder_seed = generation.boulder_seed;
+    info.seed = generation.seed;
     // Мир создаётся один раз, а сохраняется многократно — момент
     // создания переносится из предыдущей версии файла, если она есть.
     info.created_at = readCreatedAt(path).value_or(now);

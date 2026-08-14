@@ -34,10 +34,11 @@ template <typename Ops>
 void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     ops.group("GENERATION -- applied on Regenerate");
 
-    ops.section("Seeds");
-    ops.unsignedSeedRow("Terrain seed", edited.terrain_seed);
-    ops.unsignedSeedRow("Boulder seed", edited.boulder_seed);
-    ops.unsignedSeedRow("Plant seed", edited.plant_seed);
+    ops.section("Seed");
+    // Один seed на весь мир — не три отдельных (террейн/булыжники/трава):
+    // внутри генерации он расходится по стадиям сам (server/main.cpp), а
+    // крутить снаружи три числа ради "получить другой мир" только путало.
+    ops.unsignedSeedRow("World seed", edited.seed);
 
     ops.section("Terrain shape");
     // Масштаб рельефа: меньше — крупнее формы. Частоты остальных слоёв

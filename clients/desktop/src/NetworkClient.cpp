@@ -215,13 +215,11 @@ void NetworkClient::handleMessage(const std::string& payload) {
         if (json.contains("terrain")) {
             working_.generation.terrain = json["terrain"].get<goblins::TerrainConfig>();
         }
-        working_.generation.terrain_seed = json.value("terrain_seed", working_.generation.terrain_seed);
+        working_.generation.seed = json.value("seed", working_.generation.seed);
         working_.generation.boulder_count = json.value("boulder_count", working_.generation.boulder_count);
-        working_.generation.boulder_seed = json.value("boulder_seed", working_.generation.boulder_seed);
         if (json.contains("plants")) {
             working_.generation.plants = json["plants"].get<goblins::PlantConfig>();
         }
-        working_.generation.plant_seed = json.value("plant_seed", working_.generation.plant_seed);
         working_.hasGeneration = true;
 
         // Константы ядра — никогда не меняются, но приходят с каждым

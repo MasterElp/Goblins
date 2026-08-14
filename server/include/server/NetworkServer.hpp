@@ -37,7 +37,7 @@ struct SaveWorldRequest {
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 12):
+// Протокол (версия 13):
 //   Состояние мира уходит клиенту двумя разными сообщениями, потому что
 //   оно состоит из двух разных по природе частей. Полный world_init —
 //   всё, включая то, что между регенерациями не меняется вообще
@@ -54,11 +54,14 @@ struct SaveWorldRequest {
 //     {"type": "world_init", "area": {"width", "height"}, "tick": N,
 //      "paused": bool, "world": "имя текущего мира или пустая строка",
 //      "scale": 1000,  -- делитель для целочисленных слоёв (см. ниже)
-//      "terrain_seed": N, "terrain": {...},
-//      "boulder_count": N, "boulder_seed": N,
-//      "plants": {...}, "plant_seed": N,  -- вместе с terrain/*_seed это
-//              полный RegenerationRequest: панель настроек клиента строится
-//              из этого сообщения целиком, без вкомпилированных умолчаний
+//      "seed": N, "terrain": {...},
+//      "boulder_count": N,
+//      "plants": {...},  -- вместе с seed/terrain/boulder_count это полный
+//              RegenerationRequest: панель настроек клиента строится из
+//              этого сообщения целиком, без вкомпилированных умолчаний.
+//              Один seed на весь мир, а не три (terrain/boulder/plant) —
+//              внутри генерации он расходится по стадиям со смещением
+//              (server/main.cpp, kBoulderSeedOffset/kPlantSeedOffset)
 //      "constants": [{"group", "name", "value"}, ...],  -- числа, зашитые
 //              в законы мира (core/Diagnostics.hpp): не настраиваются и
 //              никогда не меняются, клиент показывает их только для

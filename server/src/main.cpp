@@ -32,6 +32,18 @@
 
 namespace {
 
+// Один seed на весь мир (RegenerationRequest::seed) расходится по стадиям
+// генерации со смещением на константу — так террейн, булыжники и трава не
+// получают буквально одно и то же число (иначе разные миры с "непохожими"
+// seed'ами террейна могли бы давать подозрительно похожую расстановку
+// камней или травы, если seed различался только в младших битах). Само
+// смещение никакого смысла не несёт, кроме "не совпадать" — держим его
+// подальше от внутренних смещений generateTerrain (seed, seed+1, seed+2,
+// seed+4, seed+10, seed+20), чтобы разные стадии генерации точно не
+// столкнулись на одном и том же числе.
+constexpr unsigned kBoulderSeedOffset = 1000;
+constexpr unsigned kPlantSeedOffset = 2000;
+
 // core не знает о JSON/конфигурации (07_TechStack.md, п.6), поэтому
 // именно server переносит значения из ServerConfig::TerrainConfig в
 // core::TerrainParams перед вызовом generateTerrain.
@@ -73,13 +85,13 @@ goblins::PlantParams toPlantParams(const goblins::PlantConfig& config) {
 goblins::GenerationStats generateWorld(goblins::World& world, const goblins::AreaSize& area,
                                         const goblins::RegenerationRequest& request) {
     world.reset(area.width, area.height);
-    const auto stats = generateTerrain(world, request.terrain_seed, toTerrainParams(request.terrain));
-    scatterBoulders(world, request.boulder_count, request.boulder_seed);
+    const auto stats = generateTerrain(world, request.seed, toTerrainParams(request.terrain));
+    scatterBoulders(world, request.boulder_count, request.seed + kBoulderSeedOffset);
     // Заселение растительностью — следующий этап генерации
     // (02_CorePrinciples.md, п.5), и он именно последний: трава должна
     // видеть уже готовые водоёмы и уже расставленные непроходимые
     // объекты, чтобы не сесть на воду и не занять чужой тайл.
-    seedGrass(world, toPlantParams(request.plants), request.plant_seed);
+    seedGrass(world, toPlantParams(request.plants), request.seed + kPlantSeedOffset);
     return stats;
 }
 
@@ -229,12 +241,10 @@ int main(int argc, char** argv) {
     goblins::NetworkServer network(world, config.host, config.port, loop.paused, config, configPath, savesDirectory);
 
     goblins::RegenerationRequest generationConfig;
-    generationConfig.terrain_seed = config.terrain_seed;
+    generationConfig.seed = config.seed;
     generationConfig.terrain = config.terrain;
     generationConfig.boulder_count = config.boulder_count;
-    generationConfig.boulder_seed = config.boulder_seed;
     generationConfig.plants = config.plants;
-    generationConfig.plant_seed = config.plant_seed;
     network.setCurrentGenerationConfig(generationConfig);
 
     if (!network.start()) {
@@ -319,9 +329,7 @@ int main(int argc, char** argv) {
                 // у printGenerationStats); без явного flush "\n" не
                 // гарантирует сброс буфера, если stdout не line-buffered
                 // (например, при перенаправлении в файл).
-                std::cout << "Creating a new world (terrain_seed=" << request.terrain_seed
-                           << ", boulder_seed=" << request.boulder_seed << ")...\n"
-                           << std::flush;
+                std::cout << "Creating a new world (seed=" << request.seed << ")...\n" << std::flush;
                 const auto genStats = generateWorld(world, config.area, request);
                 printGenerationStats(genStats);
                 printWorldStats(world, request.boulder_count);
@@ -426,9 +434,7 @@ int main(int argc, char** argv) {
             // зависнет (см. GenerationStats::riverTimedOut), эта строка с
             // параметрами запроса всё равно попадёт в консоль и укажет,
             // что именно регенерировалось перед зависанием.
-            std::cout << "Regenerating (terrain_seed=" << request->terrain_seed
-                       << ", boulder_seed=" << request->boulder_seed << ")...\n"
-                       << std::flush;
+            std::cout << "Regenerating (seed=" << request->seed << ")...\n" << std::flush;
             const auto genStats = generateWorld(world, config.area, *request);
 
             network.setCurrentGenerationConfig(*request);

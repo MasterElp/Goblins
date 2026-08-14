@@ -31,15 +31,14 @@ struct WorldSaveInfo {
     int area_width = 0;
     int area_height = 0;
 
-    unsigned terrain_seed = 0;
-    unsigned boulder_seed = 0;
+    unsigned seed = 0;
 
     // UTC, ISO-8601. created_at — момент первого сохранения мира (то
     // есть его генерации), saved_at — момент последней записи файла.
     std::string created_at;
     std::string saved_at;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(WorldSaveInfo, name, tick, area_width, area_height, terrain_seed, boulder_seed,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(WorldSaveInfo, name, tick, area_width, area_height, seed,
                                     created_at, saved_at)
 
 } // namespace goblins

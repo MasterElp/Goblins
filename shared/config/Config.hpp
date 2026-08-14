@@ -122,14 +122,21 @@ struct ServerConfig {
 
     AreaSize area{};
 
-    unsigned terrain_seed = 54321;
+    // Один seed на весь мир: террейн, булыжники и растения раньше крутили
+    // независимые seed'ы, но это давало три ползунка, которые меняли одно
+    // и то же — "другой мир" — и запутывали (какой из трёх крутить, чтобы
+    // получить другую карту?). Внутри генерации каждая стадия по-прежнему
+    // получает свой собственный поток случайности — не буквально это
+    // число, а с постоянным смещением от него (см. kBoulderSeedOffset и
+    // kPlantSeedOffset в server/main.cpp, и seed/seed+1/seed+2/seed+10/
+    // seed+20 внутри generateTerrain) — иначе одинаковый seed давал бы
+    // подозрительно похожие узоры камней и травы у разных миров.
+    unsigned seed = 54321;
     TerrainConfig terrain{};
 
     int boulder_count = 40;
-    unsigned boulder_seed = 12345;
 
     PlantConfig plants{};
-    unsigned plant_seed = 24680;
 
     // Целевой интервал тика. Сколько тиков выполнить — не настройка:
     // мир существует независимо от наблюдателя и тикает, пока сервер жив
@@ -150,8 +157,8 @@ struct ServerConfig {
     // каталога исполняемого файла сервера, а не рабочей директории.
     std::string saves_dir = "saves";
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, terrain_seed, terrain, boulder_count,
-                                    boulder_seed, plants, plant_seed, tick_interval_ms, snapshot_interval_ms,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, seed, terrain, boulder_count,
+                                    plants, tick_interval_ms, snapshot_interval_ms,
                                     saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
@@ -161,20 +168,24 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, 
 // террейн и булыжники — да, это просто новый набор Entity на том же
 // Area.
 struct RegenerationRequest {
-    unsigned terrain_seed = 54321;
+    unsigned seed = 54321;
     TerrainConfig terrain{};
     int boulder_count = 40;
-    unsigned boulder_seed = 12345;
     PlantConfig plants{};
-    unsigned plant_seed = 24680;
 };
 // ..._WITH_DEFAULT, а не строгий вариант, — по той же причине, что и у
 // структур конфигурации выше: этот запрос лежит внутри каждого файла
 // сохранённого мира ("generation"), и со строгим разбором добавление
 // любого нового поля (например, растений) делало бы все ранее
 // сохранённые миры нечитаемыми целиком.
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, terrain_seed, terrain, boulder_count,
-                                    boulder_seed, plants, plant_seed)
+//
+// terrain_seed/boulder_seed/plant_seed из старых файлов сохранений здесь
+// не читаются намеренно: у мира, сгенерированного до объединения seed'ов,
+// они всё равно втроём не сойдутся обратно в одно число — WITH_DEFAULT
+// в этом случае подставит seed=54321, и старый мир на диске (сами Entity,
+// не "generation") от этого не пострадает, только надпись "чем
+// сгенерирован" в панели будет неточной для таких файлов.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, seed, terrain, boulder_count, plants)
 
 struct ClientConfig {
     std::string host = "127.0.0.1";

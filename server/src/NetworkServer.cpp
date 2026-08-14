@@ -261,17 +261,15 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
     {
         std::lock_guard<std::mutex> lock(generationConfigMutex_);
         message["world"] = currentWorldName_;
-        message["terrain_seed"] = currentGenerationConfig_.terrain_seed;
+        message["seed"] = currentGenerationConfig_.seed;
         message["terrain"] = currentGenerationConfig_.terrain;
         message["boulder_count"] = currentGenerationConfig_.boulder_count;
-        message["boulder_seed"] = currentGenerationConfig_.boulder_seed;
         // Растения — на тех же правах, что и террейн с булыжниками: панель
         // настроек клиента строится из этого сообщения целиком. Без них
         // клиент показывал бы (и отправлял обратно по "Regenerate") свои
         // вкомпилированные умолчания, молча затирая настройки растений с
         // сервера.
         message["plants"] = currentGenerationConfig_.plants;
-        message["plant_seed"] = currentGenerationConfig_.plant_seed;
     }
 
     // Константы законов мира (core/Diagnostics.hpp) — только для показа.
@@ -512,12 +510,10 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
         }
 
         ServerConfig toSave = baseConfig_;
-        toSave.terrain_seed = toWrite.terrain_seed;
+        toSave.seed = toWrite.seed;
         toSave.terrain = toWrite.terrain;
         toSave.boulder_count = toWrite.boulder_count;
-        toSave.boulder_seed = toWrite.boulder_seed;
         toSave.plants = toWrite.plants;
-        toSave.plant_seed = toWrite.plant_seed;
         saveServerConfig(configPath_, toSave);
         std::cout << "Generation config saved to '" << configPath_ << "'.\n";
         broadcastNotice("info", "Generation values saved to config.");
