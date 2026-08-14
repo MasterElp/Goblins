@@ -63,7 +63,12 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     float tileSizeF = static_cast<float>(config.tile_size) * zoom;
 
     const float dt = GetFrameTime();
-    const float scrollSpeedPx = static_cast<float>(config.scroll_step) * tileSizeF;
+    // Прокрутка — в тайлах в секунду, поэтому от зума скорость не зависит:
+    // на любом масштабе карта проезжает мимо одинаково. Не настройка —
+    // темп прокрутки подбирается один раз на ощупь и от мира к миру не
+    // меняется.
+    constexpr float kScrollTilesPerSecond = 5.0f;
+    const float scrollSpeedPx = kScrollTilesPerSecond * tileSizeF;
 
     // Пока открыт диалог подтверждения выхода или диалог сохранения, мир
     // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —

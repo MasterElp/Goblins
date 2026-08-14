@@ -30,7 +30,7 @@ namespace goblins {
 //    "entities": [ {"position": {"x","y"},
 //                   "soil": {"moisture","rockiness","compaction","minerals"},
 //                   "height": H,
-//                   "water": {"depth","flow_speed"},
+//                   "water": {"depth"},
 //                   "water_source": true,
 //                   "humus": {"minerals","pending"},
 //                   "impassable": true,

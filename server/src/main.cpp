@@ -36,41 +36,20 @@ namespace {
 // core::TerrainParams перед вызовом generateTerrain.
 goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     goblins::TerrainParams params;
-    params.heightNoiseFrequency = config.height_noise_frequency;
-    params.rockNoiseFrequency = config.rock_noise_frequency;
-    params.compactionNoiseFrequency = config.compaction_noise_frequency;
-    params.moistureNoiseFrequency = config.moisture_noise_frequency;
-    params.mineralsNoiseFrequency = config.minerals_noise_frequency;
+    params.noiseFrequency = config.noise_frequency;
     params.noiseOctaves = config.noise_octaves;
-    params.noiseLacunarity = config.noise_lacunarity;
-    params.noiseGain = config.noise_gain;
-    params.rockHeightBump = config.rock_height_bump;
-    params.compactionHeightBump = config.compaction_height_bump;
+    params.hardnessHeightBump = config.hardness_height_bump;
     params.riverCount = config.river_count;
     params.riverWidth = config.river_width;
     params.riverSinuosity = config.river_sinuosity;
     params.riverDepth = config.river_depth;
-    params.riverMaxFlowSpeed = config.river_max_flow_speed;
-    params.riverBedSlope = config.river_bed_slope;
-    params.minPondDepth = config.min_pond_depth;
-    params.minPondSize = config.min_pond_size;
-    params.maxPondSize = config.max_pond_size;
     params.pondDepth = config.pond_depth;
-    params.moistureFalloff = config.moisture_falloff;
-    params.waterMoistureBoost = config.water_moisture_boost;
-    params.rockMoistureReduction = config.rock_moisture_reduction;
     params.mineralsAverage = config.minerals_average;
-    params.riverMinerals = config.river_minerals;
-    params.mineralMoistureThreshold = config.mineral_moisture_threshold;
     params.waterSourceCount = config.water_source_count;
-    params.waterEvaporationRate = config.water_evaporation_rate;
     params.waterSourceStrength = config.water_source_strength;
     params.waterFlowRate = config.water_flow_rate;
-    params.waterSlopeBoost = config.water_slope_boost;
     params.soilErosionRate = config.soil_erosion_rate;
     params.maxErosionDepth = config.max_erosion_depth;
-    params.erosionSpreadRate = config.erosion_spread_rate;
-    params.edgeDrainRate = config.edge_drain_rate;
     return params;
 }
 
@@ -294,9 +273,8 @@ int main(int argc, char** argv) {
     // него нет).
     goblins::ConsoleHotkeyWatcher hotkeys;
 
-    // Отрицательный tick_count в конфигурации — тикать бесконечно (мир
-    // существует независимо от наблюдателя, 02_CorePrinciples.md, п.1).
-    int ticksRun = 0;
+    // Цикл не заканчивается сам: мир существует независимо от наблюдателя
+    // и тикает, пока жив сервер (02_CorePrinciples.md, п.1).
     loop.run([&]() {
         // Рассылка не только после тика, но и на каждой итерации цикла:
         // на паузе тиков нет вовсе, а подключившийся в этот момент
@@ -463,7 +441,7 @@ int main(int argc, char** argv) {
             printPlantStats(world);
         }
 
-        return config.tick_count < 0 || ticksRun++ < config.tick_count;
+        return true;
     });
 
     std::cout << "Simulation stopped.\n";

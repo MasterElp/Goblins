@@ -37,101 +37,61 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // Стартовая заселённость, а не итоговая: дальше трава расселяется
     // сама и занимает всё, что ей подходит.
     ops.floatRow("Initial coverage", edited.plants.grass_coverage, 0.0f, 0.4f, 3);
-    // Свойства мира (06_GameLoop.md, п.1a), как и порог минералов выше:
-    // выбираются при генерации, во время симуляции не меняются.
-    // Мутация — доля вложения черты, а не доля значения гена (у всех
-    // черт вложение живёт в одном диапазоне, поэтому настройка одна на
-    // весь геном).
+    // Свойства мира (06_GameLoop.md, п.1a): выбираются при генерации, во
+    // время симуляции не меняются. Мутация — доля вложения черты, а не
+    // доля значения гена (у всех черт вложение живёт в одном диапазоне,
+    // поэтому настройка одна на весь геном).
     ops.floatRow("Mutation rate", edited.plants.mutation_rate, 0.0f, 0.3f, 3);
     // Сколько крупиц минералов перегной возвращает в почву за тик.
     ops.floatRow("Humus decay (per tick)", edited.plants.humus_decay_rate, 0.001f, 0.2f, 3);
 
-    ops.section("Noise frequency (smaller = bigger shapes)");
-    ops.floatRow("Height", edited.terrain.height_noise_frequency, 0.002f, 0.2f);
-    ops.floatRow("Rockiness", edited.terrain.rock_noise_frequency, 0.002f, 0.2f);
-    ops.floatRow("Compaction", edited.terrain.compaction_noise_frequency, 0.002f, 0.2f);
-    ops.floatRow("Moisture", edited.terrain.moisture_noise_frequency, 0.002f, 0.2f);
-    ops.floatRow("Minerals", edited.terrain.minerals_noise_frequency, 0.002f, 0.2f);
-
-    ops.section("Fractal noise shape");
-    ops.intRow("Octaves", edited.terrain.noise_octaves, 1, 8);
-    ops.floatRow("Lacunarity", edited.terrain.noise_lacunarity, 1.0f, 4.0f);
-    ops.floatRow("Gain", edited.terrain.noise_gain, 0.1f, 0.9f);
-
-    ops.section("Height bumps (keeps river off rock/packed ground)");
-    ops.floatRow("Rock bump", edited.terrain.rock_height_bump, 0.0f, 1.0f);
-    ops.floatRow("Compaction bump", edited.terrain.compaction_height_bump, 0.0f, 1.0f);
+    ops.section("Terrain shape");
+    // Масштаб рельефа: меньше — крупнее формы. Частоты остальных слоёв
+    // (каменистость, утрамбованность, минералы) — кратные от неё, ядро
+    // считает их само.
+    ops.floatRow("Scale (smaller = bigger shapes)", edited.terrain.noise_frequency, 0.002f, 0.2f);
+    ops.intRow("Octaves (detail layers)", edited.terrain.noise_octaves, 1, 8);
+    // Насколько твёрдая земля (камень + утрамбовка) поднимает рельеф —
+    // вода такие участки огибает, без ручных исключений "здесь реки быть
+    // не может".
+    ops.floatRow("Hard ground bump", edited.terrain.hardness_height_bump, 0.0f, 1.5f);
 
     ops.section("River");
     ops.intRow("Count", edited.terrain.river_count, 0, 20);
     ops.floatRow("Width (tiles)", edited.terrain.river_width, 1.0f, 12.0f);
     ops.floatRow("Sinuosity", edited.terrain.river_sinuosity, 0.0f, 1.0f);
     ops.floatRow("Depth", edited.terrain.river_depth, 0.2f, 5.0f);
-    ops.floatRow("Max flow speed", edited.terrain.river_max_flow_speed, 0.1f, 10.0f);
-    // Минимальное падение дна на тайл пути. На нуле русло просто
-    // повторяет рельеф со всеми буграми — вода стоит в локальных ямах
-    // вместо того, чтобы течь по руслу.
-    ops.floatRow("Bed slope (per tile)", edited.terrain.river_bed_slope, 0.0f, 0.05f);
 
     ops.section("Ponds");
-    ops.floatRow("Min depth", edited.terrain.min_pond_depth, 0.0f, 0.5f);
-    ops.intRow("Min size (tiles)", edited.terrain.min_pond_size, 1, 200);
-    ops.intRow("Max size (0=none)", edited.terrain.max_pond_size, 0, 2000);
+    // Средняя глубина воды пруда — в тех же единицах, что и глубина реки.
+    // Где именно быть пруду и какого размера, решает рельеф (Priority-
+    // Flood), а не отдельные фильтры по размеру.
     ops.floatRow("Depth", edited.terrain.pond_depth, 0.0f, 5.0f);
 
-    ops.section("Moisture");
-    ops.floatRow("Falloff (tiles)", edited.terrain.moisture_falloff, 1.0f, 40.0f);
-    ops.floatRow("Water boost", edited.terrain.water_moisture_boost, 0.0f, 1.0f);
-    ops.floatRow("Rock reduction", edited.terrain.rock_moisture_reduction, 0.0f, 1.0f);
-
     ops.section("Minerals");
+    // Среднее по карте; дальше минералы разносит течение (HydrologySystem)
+    // и возвращает в почву перегной.
     ops.floatRow("Average", edited.terrain.minerals_average, 0.0f, 50.0f);
-    ops.intRow("River value", edited.terrain.river_minerals, 0, 50);
-    // Свойство мира (06_GameLoop.md, п.1a), не текущий параметр
-    // симуляции: выбирается здесь, при генерации, и во время самой
-    // симуляции HydrologySystem его больше не меняет.
-    ops.floatRow("Moisture threshold", edited.terrain.mineral_moisture_threshold, 0.0f, 1.0f);
 
-    ops.section("Water flow");
-    // Свойство мира (06_GameLoop.md, п.1a): доля разницы уровней
-    // поверхности, перетекающая к самому низкому соседу за тик — больше
-    // значение, быстрее вода растекается/заполняет впадины (и быстрее
-    // приток от источника расходится по руслу, а не скапливается рядом с
-    // истоком).
+    ops.section("Water");
+    // Сколько "родников" в случайных точках карты — плюс по одному
+    // автоматически на исток каждой реки.
+    ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
+    // АБСОЛЮТНЫЙ приток (глубина за тик), не множитель испарения: источник
+    // должен перекрывать и своё испарение, и то, что течение уносит
+    // соседям, при любых настройках.
+    ops.floatRow("Source strength", edited.terrain.water_source_strength, 0.0f, 2.0f);
+    // Доля разницы уровней поверхности, перетекающая к самому низкому
+    // соседу за тик на ровном месте (на склоне ядро добавляет уклон).
     ops.floatRow("Flow rate", edited.terrain.water_flow_rate, 0.0f, 1.0f);
-    // Добавка к скорости за уклон: чем круче склон, тем быстрее по нему
-    // течёт. С одной лишь Flow rate скорость всюду одинаковая, и чтобы
-    // протолкнуть приток дальше по руслу, воде приходится копить у
-    // истока большой стоячий перепад — тот самый "конус" у источника.
-    ops.floatRow("Slope boost", edited.terrain.water_slope_boost, 0.0f, 20.0f);
 
     ops.section("Erosion");
     // Доля перенесённой воды, превращающаяся в вымытую породу. Порода не
     // исчезает: ровно столько же оседает там, куда пришла вода.
-    // Каменистая и утрамбованная почва размывается заметно медленнее.
     ops.floatRow("Erosion rate", edited.terrain.soil_erosion_rate, 0.0f, 0.5f);
-    // Потолок выемки относительно соседа — без него клетка под
-    // источником размывается без остановки в бездонную яму.
+    // Потолок выемки относительно соседа — без него клетка под источником
+    // размывается без остановки в бездонную яму.
     ops.floatRow("Max scour depth", edited.terrain.max_erosion_depth, 0.0f, 3.0f);
-    // Доля основного размыва, заодно достающаяся соседям клетки-истока —
-    // берег осыпается вместе с руслом, а не остаётся резкой стенкой.
-    ops.floatRow("Erosion spread", edited.terrain.erosion_spread_rate, 0.0f, 0.3f);
-
-    ops.section("Map edges");
-    // Доля глубины, стекающая "за карту" у тайлов на самой границе —
-    // без этого края ведут себя как стенки и вода копится у кромки.
-    ops.floatRow("Edge drain rate", edited.terrain.edge_drain_rate, 0.0f, 0.2f);
-
-    ops.section("Water sources");
-    ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
-    // Оба — свойства мира, как порог минералов выше. precision=6 у
-    // Evaporation rate — иначе такое маленькое значение читалось бы как
-    // "0.0000". Source strength — АБСОЛЮТНЫЙ приток (глубина за тик), не
-    // множитель Evaporation rate (было так раньше — и при маленьком
-    // испарении даже огромный множитель давал ничтожный приток, источник
-    // не мог угнаться за собственным оттоком через течение).
-    ops.floatRow("Evaporation rate", edited.terrain.water_evaporation_rate, 0.0f, 0.001f, 6);
-    ops.floatRow("Source strength", edited.terrain.water_source_strength, 0.0f, 2.0f);
 }
 
 // Только считает высоту, ничего не рисует — используется до

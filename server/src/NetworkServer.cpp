@@ -34,6 +34,14 @@ namespace {
 // оттенок тайла.
 constexpr int kMilliScale = 1000;
 
+// Порог невыбранной очереди отправки у клиента, при котором очередная
+// рассылка пропускается: клиент не успевает принимать, и копить для него
+// данные бессмысленно. Изменения не теряются — следующая дельта считается
+// от последнего реально отправленного состояния и включит в себя
+// пропущенное. Не настройка: это свойство транспорта, а не мира, и от
+// мира к миру оно не меняется.
+constexpr std::size_t kSnapshotBacklogBytes = 1024 * 1024;
+
 int encodeMilli(float value) {
     return static_cast<int>(std::lround(static_cast<double>(value) * kMilliScale));
 }
@@ -186,12 +194,8 @@ void NetworkServer::publish(bool force) {
 }
 
 bool NetworkServer::clientsAreBehind() {
-    const int threshold = baseConfig_.snapshot_backlog_bytes;
-    if (threshold <= 0) {
-        return false;
-    }
     for (const auto& client : server_.getClients()) {
-        if (client->bufferedAmount() > static_cast<std::size_t>(threshold)) {
+        if (client->bufferedAmount() > kSnapshotBacklogBytes) {
             return true;
         }
     }

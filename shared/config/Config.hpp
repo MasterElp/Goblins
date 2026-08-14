@@ -32,111 +32,64 @@ struct AreaSize {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AreaSize, width, height)
 
-struct ViewSize {
-    int width = 60;
-    int height = 25;
-};
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ViewSize, width, height)
-
 // Зеркало core::TerrainParams (core/generation/TerrainParams.hpp) — но
 // JSON-сериализуемое. Дублирование полей осознанное: core не знает о
 // JSON и конфигурации вообще (07_TechStack.md, п.6), поэтому именно
 // server (main.cpp) переносит значения из этой структуры в
 // core::TerrainParams перед вызовом generateTerrain. Имена и значения по
-// умолчанию должны совпадать с core::TerrainParams.
+// умолчанию должны совпадать с core::TerrainParams — включая и то, каких
+// полей здесь НЕТ: числа, одинаковые для любого мира (форма fBm, уклон
+// дна русла, испарение, сток за край карты, пороги), живут константами
+// рядом с местом использования в core и не тянутся через конфигурацию,
+// сеть и файл сохранения ради того, чтобы никогда не быть изменёнными.
 struct TerrainConfig {
-    float height_noise_frequency = 0.02f;
-    float rock_noise_frequency = 0.05f;
-    float compaction_noise_frequency = 0.04f;
-    float moisture_noise_frequency = 0.03f;
-    float minerals_noise_frequency = 0.06f;
-
+    // Масштаб рельефа. Частоты остальных слоёв шума (каменистость,
+    // утрамбованность, минералы) — фиксированные кратные от неё, см.
+    // core::TerrainParams::noiseFrequency.
+    float noise_frequency = 0.02f;
     int noise_octaves = 4;
-    float noise_lacunarity = 2.0f;
-    float noise_gain = 0.5f;
 
-    float rock_height_bump = 0.35f;
-    float compaction_height_bump = 0.25f;
+    // Насколько твёрдая земля (каменистость и утрамбованность вместе)
+    // поднимает рельеф — вода такие участки огибает.
+    float hardness_height_bump = 0.6f;
 
     int river_count = 3;
     float river_width = 3.0f;
     float river_sinuosity = 0.5f;
     float river_depth = 0.9f;
-    // Верхняя граница скорости потока — у каждой реки при генерации своя
-    // случайная скорость до этого предела (см. TerrainGenerator.cpp).
-    float river_max_flow_speed = 1.0f;
 
-    // Минимальный уклон дна русла (на тайл пути) — без него русло просто
-    // повторяет рельеф со всеми его буграми, и вода стоит в локальных
-    // ямах вместо того, чтобы течь; см. core::TerrainParams::riverBedSlope.
-    float river_bed_slope = 0.01f;
-
-    float min_pond_depth = 0.01f;
-    int min_pond_size = 1;
-    int max_pond_size = 0;
+    // Средняя глубина воды пруда — в тех же единицах, что и river_depth
+    // (глубина тайла, не множитель).
     float pond_depth = 0.9f;
 
-    float moisture_falloff = 8.0f;
-    float water_moisture_boost = 0.7f;
-    float rock_moisture_reduction = 0.3f;
-
-    // Минералы (SoilComponent.minerals): среднее значение при генерации
-    // обычной почвы и фиксированное значение на клетках реки — см.
-    // core::TerrainParams::mineralsAverage/riverMinerals.
+    // Минералы (SoilComponent.minerals): среднее по карте значение при
+    // генерации — см. core::TerrainParams::mineralsAverage.
     float minerals_average = 10.0f;
-    int river_minerals = 10;
-
-    // Порог влажности для переноса минералов — свойство мира
-    // (core::WorldPropertiesComponent), не текущий параметр симуляции:
-    // генерация выбирает его один раз, регенерация (заново) может
-    // задать другое значение, но во время самой симуляции он не
-    // меняется — см. core::TerrainParams::mineralMoistureThreshold.
-    float mineral_moisture_threshold = 0.5f;
 
     // Источники воды (WaterSourceComponent): сколько "родников" в
     // случайных точках карты (плюс автоматически — по одному на исток
-    // каждой реки). water_evaporation_rate/water_source_strength/
-    // water_flow_rate — тоже свойства мира, как mineral_moisture_threshold
-    // — см. core::TerrainParams::waterSourceCount/waterEvaporationRate/
-    // waterSourceStrength/waterFlowRate. water_source_strength —
-    // абсолютный приток (глубина за тик), не множитель
-    // water_evaporation_rate: не должен зависеть от того, насколько
-    // маленькое испарение настроено.
+    // каждой реки). water_source_strength — абсолютный приток (глубина за
+    // тик) и свойство мира (core::WorldPropertiesComponent), не текущий
+    // параметр симуляции: генерация выбирает его один раз, во время самой
+    // симуляции он не меняется.
     int water_source_count = 3;
-    float water_evaporation_rate = 0.00004f;
     float water_source_strength = 0.05f;
 
     // Доля разницы уровней поверхности, перетекающая к самому низкому
-    // соседу за тик (на ровном месте), и добавка за уклон — см.
-    // core::TerrainParams::waterFlowRate/waterSlopeBoost.
+    // соседу за тик на ровном месте — тоже свойство мира, см.
+    // core::TerrainParams::waterFlowRate.
     float water_flow_rate = 0.3f;
-    float water_slope_boost = 5.0f;
 
     // Эрозия: скорость вымывания породы потоком и потолок выемки
     // относительно соседа — тоже свойства мира, см.
     // core::TerrainParams::soilErosionRate/maxErosionDepth.
     float soil_erosion_rate = 0.05f;
     float max_erosion_depth = 0.5f;
-
-    // Доля основного размыва, заодно достающаяся соседям клетки-истока —
-    // тоже свойство мира, см. core::TerrainParams::erosionSpreadRate.
-    float erosion_spread_rate = 0.05f;
-
-    // Доля глубины, стекающая за край карты за тик у тайлов на самой
-    // границе Области — тоже свойство мира, см.
-    // core::TerrainParams::edgeDrainRate.
-    float edge_drain_rate = 0.01f;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_frequency, rock_noise_frequency,
-                                    compaction_noise_frequency, moisture_noise_frequency, minerals_noise_frequency,
-                                    noise_octaves, noise_lacunarity, noise_gain, rock_height_bump,
-                                    compaction_height_bump, river_count, river_width, river_sinuosity, river_depth,
-                                    river_max_flow_speed, river_bed_slope, min_pond_depth, min_pond_size,
-                                    max_pond_size, pond_depth, moisture_falloff, water_moisture_boost,
-                                    rock_moisture_reduction, minerals_average, river_minerals,
-                                    mineral_moisture_threshold, water_source_count, water_evaporation_rate,
-                                    water_source_strength, water_flow_rate, water_slope_boost,
-                                    soil_erosion_rate, max_erosion_depth, erosion_spread_rate, edge_drain_rate)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, noise_frequency, noise_octaves, hardness_height_bump,
+                                    river_count, river_width, river_sinuosity, river_depth, pond_depth,
+                                    minerals_average, water_source_count, water_source_strength, water_flow_rate,
+                                    soil_erosion_rate, max_erosion_depth)
 
 // Зеркало core::PlantParams (core/generation/PlantParams.hpp) — по той же
 // причине, что и TerrainConfig выше: core не знает о JSON, поэтому
@@ -155,8 +108,8 @@ struct PlantConfig {
     float grass_coverage = 0.06f;
 
     // Свойства мира (core::WorldPropertiesComponent), как и
-    // mineral_moisture_threshold у террейна: выбираются при генерации,
-    // во время симуляции PlantSystem их только читает.
+    // water_flow_rate у террейна: выбираются при генерации, во время
+    // симуляции PlantSystem их только читает.
     float mutation_rate = 0.06f;
     float humus_decay_rate = 0.02f;
 };
@@ -178,10 +131,12 @@ struct ServerConfig {
     PlantConfig plants{};
     unsigned plant_seed = 24680;
 
+    // Целевой интервал тика. Сколько тиков выполнить — не настройка:
+    // мир существует независимо от наблюдателя и тикает, пока сервер жив
+    // (02_CorePrinciples.md, п.1); прежний tick_count всегда стоял в -1
+    // ("бесконечно") и был отладочным ограничителем, а не параметром
+    // мира.
     int tick_interval_ms = 200;
-    // Отрицательное значение — тикать бесконечно (мир существует
-    // независимо от наблюдателя, 02_CorePrinciples.md, п.1).
-    int tick_count = -1;
 
     // Как часто состояние мира уходит клиентам. Это не тот же интервал,
     // что tick_interval_ms: мир может тикать чаще, чем имеет смысл
@@ -189,12 +144,6 @@ struct ServerConfig {
     // сокете — клиент показывал бы прошлое (тик продолжал бы расти уже
     // после паузы). Ноль — рассылать на каждом тике.
     int snapshot_interval_ms = 100;
-    // Порог невыбранной очереди отправки (байт) у клиента, при котором
-    // очередная рассылка пропускается: клиент не успевает принимать, и
-    // копить для него данные бессмысленно. Изменения не теряются —
-    // следующая дельта считается от последнего реально отправленного
-    // состояния и включит в себя пропущенное.
-    int snapshot_backlog_bytes = 1048576;
 
     // Каталог сохранённых миров (по одному JSON-файлу на мир, см.
     // server/WorldSave.hpp). Относительный путь разрешается относительно
@@ -202,8 +151,8 @@ struct ServerConfig {
     std::string saves_dir = "saves";
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, terrain_seed, terrain, boulder_count,
-                                    boulder_seed, plants, plant_seed, tick_interval_ms, tick_count,
-                                    snapshot_interval_ms, snapshot_backlog_bytes, saves_dir)
+                                    boulder_seed, plants, plant_seed, tick_interval_ms, snapshot_interval_ms,
+                                    saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
 // сети (протокол "regenerate", см. NetworkServer.hpp) без пересоздания
@@ -231,12 +180,6 @@ struct ClientConfig {
     std::string host = "127.0.0.1";
     int port = 9002;
 
-    // Сколько тайлов видно в окне просмотра (режим "Симуляция") и с
-    // какой скоростью (тайлов в секунду) прокручивать при зажатой
-    // клавише.
-    ViewSize view{};
-    int scroll_step = 5;
-
     // Размер тайла в пикселях на экране (режим "Симуляция"; в режиме
     // "Генерация мира" тайл всегда пересчитывается так, чтобы вся карта
     // помещалась на экране, это поле там не используется).
@@ -247,8 +190,8 @@ struct ClientConfig {
     int window_height = 720;
     bool fullscreen = false;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, view, scroll_step, tile_size, window_width,
-                                    window_height, fullscreen)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
+                                    fullscreen)
 
 namespace detail {
 

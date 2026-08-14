@@ -12,6 +12,7 @@
 
 #include <fastnoiselite/FastNoiseLite.h>
 
+#include "core/Moisture.hpp"
 #include "core/components/HeightComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -26,6 +27,21 @@ namespace {
 constexpr int kDx8[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
 constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 
+// Канонические параметры формы fBm. Не в TerrainParams: их подстройка
+// меняет картинку примерно тем же способом, что частота и число октав,
+// только гораздо менее предсказуемо — две ручки на один эффект.
+constexpr float kNoiseLacunarity = 2.0f;
+constexpr float kNoiseGain = 0.5f;
+
+// Частоты остальных слоёв — кратные от единственной настраиваемой
+// (TerrainParams::noiseFrequency). Слоям нужна не независимая настройка, а
+// лишь разный масштаб узора, чтобы каменистость не повторяла рельеф один
+// в один. Значения подобраны так, чтобы при noiseFrequency = 0.02
+// получались те же 0.05/0.04/0.06, что были раздельными параметрами.
+constexpr float kRockFrequencyRatio = 2.5f;
+constexpr float kCompactionFrequencyRatio = 2.0f;
+constexpr float kMineralsFrequencyRatio = 3.0f;
+
 float normalize01(float noiseValue) {
     // FastNoiseLite возвращает примерно [-1, 1].
     return std::clamp((noiseValue + 1.0f) * 0.5f, 0.0f, 1.0f);
@@ -36,8 +52,8 @@ FastNoiseLite makeFbmNoise(int seed, float frequency, const TerrainParams& param
     noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
     noise.SetFractalType(FastNoiseLite::FractalType_FBm);
     noise.SetFractalOctaves(params.noiseOctaves);
-    noise.SetFractalLacunarity(params.noiseLacunarity);
-    noise.SetFractalGain(params.noiseGain);
+    noise.SetFractalLacunarity(kNoiseLacunarity);
+    noise.SetFractalGain(kNoiseGain);
     noise.SetFrequency(frequency);
     return noise;
 }
@@ -59,8 +75,7 @@ constexpr float kPi = 3.14159265358979323846f;
 
 // Не параметры генерации (params зашивать их незачем — они управляют
 // внутренней механикой построения пути/шума, а не видимым результатом,
-// который целиком определяют riverWidth/riverSinuosity/riverDepth/
-// riverMaxFlowSpeed).
+// который целиком определяют riverWidth/riverSinuosity/riverDepth).
 constexpr float kMeanderFrequency = 1.0f / 12.0f; // один "изгиб" примерно на 12 тайлов длины пути
 constexpr float kMeanderPushScale = 1.4f;         // сила виляния от шума
 constexpr float kSoilProbeDist = 2.0f;            // на сколько тайлов пробуем рельеф по бокам от курса
@@ -72,7 +87,10 @@ constexpr float kSoilPushClamp = 1.5f;            // потолок боково
 // на десятки тайлов за шаг — resulting samples.size() и стоимость
 // stampFootprint взрывались, генерация зависала на потоке GameLoop.
 constexpr float kMaxLateralPerStep = 2.5f;
-constexpr float kMinSpeedFraction = 0.3f; // минимальная доля от riverMaxFlowSpeed у самой медленной реки
+// Насколько сильно путь реки виляет: у каждой реки своя случайная доля из
+// [0, kMaxWander]. Ноль — идеально прямая линия от истока к устью, чтобы
+// реки одной карты не были похожи одна на другую.
+constexpr float kMaxWander = 0.7f;
 constexpr float kWidthNoiseFrequency = 1.0f / 10.0f;
 constexpr float kWidthNoiseAmplitude = 0.5f;
 constexpr float kWidthMinMul = 0.5f;
@@ -85,6 +103,21 @@ constexpr float kRiverCarveMultiplier = 2.0f; // запас карвинга н�
 constexpr int kRiverAttemptMultiplier = 100;  // maxAttempts = riverCount * 100, как в BoulderScatter
 constexpr float kMergeProbability = 0.5f;     // при столкновении с уже принятой рекой — шанс слиться, а не отклонить путь
 constexpr float kMergeMarginFraction = 0.15f; // не сливаемся у самого истока целевой реки (первые 15% её длины)
+
+// Минимальный уклон дна русла: на сколько дно ГАРАНТИРОВАННО понижается
+// на каждый тайл пути от истока к устью. Без него русло — просто траншея
+// постоянной глубины, вырезанная в шумном рельефе: она наследует все его
+// бугры и ямы, вода из истока стекает в ближайший локальный минимум
+// внутри траншеи и стоит там, потому что "вниз по руслу" физически не
+// существует. Не параметр: это условие того, что река вообще течёт, а не
+// ручка внешнего вида.
+constexpr float kRiverBedSlope = 0.01f;
+
+// Минимальная глубина впадины, чтобы считаться прудом. Порог "это вообще
+// впадина, а не численный шум Priority-Flood", а не настройка вида карты
+// — размер пруда определяет рельеф, а не фильтр по числу тайлов (раньше
+// таких фильтров было два, min/max, и оба стояли на "пропускать всё").
+constexpr float kMinPondDepth = 0.01f;
 
 // Подстраховки диагностики (GenerationStats), а не поведения "по умолчанию":
 // при нормальных параметрах ни одна не должна срабатывать. Если сработала —
@@ -119,7 +152,6 @@ struct RiverCell {
 struct River {
     std::vector<RiverPathSample> centerline;      // порядок: исток -> устье или точка слияния в другую реку
     std::unordered_map<int, RiverCell> footprint; // index клетки -> данные; map, т.к. слияние дописывает существующие реки
-    float flowSpeed = 0.0f;                       // собственная случайная скорость этой реки (<= riverMaxFlowSpeed)
 };
 
 float smoothstep01(float u) {
@@ -355,11 +387,11 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
 
     // --- 1. Heightmap + почвенные параметры (fBm, разные seed/частоты) ---
     const auto heightmapStart = Clock::now();
-    auto heightNoise = makeFbmNoise(static_cast<int>(seed), params.heightNoiseFrequency, params);
-    auto rockNoise = makeFbmNoise(static_cast<int>(seed) + 1, params.rockNoiseFrequency, params);
-    auto compactionNoise = makeFbmNoise(static_cast<int>(seed) + 2, params.compactionNoiseFrequency, params);
-    auto moistureNoise = makeFbmNoise(static_cast<int>(seed) + 3, params.moistureNoiseFrequency, params);
-    auto mineralsNoise = makeFbmNoise(static_cast<int>(seed) + 4, params.mineralsNoiseFrequency, params);
+    auto heightNoise = makeFbmNoise(static_cast<int>(seed), params.noiseFrequency, params);
+    auto rockNoise = makeFbmNoise(static_cast<int>(seed) + 1, params.noiseFrequency * kRockFrequencyRatio, params);
+    auto compactionNoise =
+        makeFbmNoise(static_cast<int>(seed) + 2, params.noiseFrequency * kCompactionFrequencyRatio, params);
+    auto mineralsNoise = makeFbmNoise(static_cast<int>(seed) + 4, params.noiseFrequency * kMineralsFrequencyRatio, params);
 
     std::vector<float> elevation(cellCount);
     std::vector<float> rockiness(cellCount);
@@ -377,8 +409,13 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             // Каменистые и утрамбованные участки физически выше — вода их
             // естественно огибает, поэтому там река не может
             // самостоятельно возникнуть (без ручных исключений).
+            // Каменистость и утрамбованность здесь — одно и то же
+            // свойство "твёрдая земля" (та же пара, что даёт мягкость
+            // почвы при эрозии в HydrologySystem), поэтому и подъём у них
+            // общий, а не два независимых.
             const float baseHeight = normalize01(heightNoise.GetNoise(fx, fy));
-            elevation[i] = baseHeight + rockiness[i] * params.rockHeightBump + compaction[i] * params.compactionHeightBump;
+            const float hardness = (rockiness[i] + compaction[i]) * 0.5f;
+            elevation[i] = baseHeight + hardness * params.hardnessHeightBump;
         }
     }
     stats.heightmapMs = elapsedMs(heightmapStart);
@@ -408,7 +445,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     {
         std::uniform_int_distribution<int> edgeDist(0, 3);
         std::uniform_int_distribution<int> destOffsetDist(1, 3);
-        std::uniform_real_distribution<float> speedFractionDist(kMinSpeedFraction, 1.0f);
+        std::uniform_real_distribution<float> wanderDist(0.0f, kMaxWander);
         std::uniform_real_distribution<float> mergeRoll(0.0f, 1.0f);
 
         const int maxAttempts = std::max(0, params.riverCount) * kRiverAttemptMultiplier;
@@ -433,8 +470,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const PathPoint p1 = edgePoint(destEdge, pickEdgeCoordinate(riverRng, edgeLength(destEdge, width, height)),
                                             width, height);
 
-            const float speedFraction = speedFractionDist(riverRng);
-            const float wander = 1.0f - speedFraction;
+            const float wander = wanderDist(riverRng);
             const int pathSeed = static_cast<int>(riverRng());
             const int widthSeed = static_cast<int>(riverRng());
             const int depthSeed = static_cast<int>(riverRng());
@@ -494,7 +530,6 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
 
             River river;
             river.centerline = std::move(samples);
-            river.flowSpeed = speedFraction * params.riverMaxFlowSpeed;
             stampSegment(river.centerline, 0, river.centerline.size() - 1, width, height, river.footprint);
             for (const auto& [idx, cell] : river.footprint) {
                 riverOwner[static_cast<std::size_t>(idx)] = placed;
@@ -526,7 +561,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // Вода в такой траншее стекает в ближайший локальный минимум и стоит
     // там: "вниз по руслу" просто не существует. Поэтому вдоль
     // центральной линии (исток -> устье) дно дополнительно продавливается
-    // до монотонно убывающего профиля — минимум на riverBedSlope за тайл.
+    // до монотонно убывающего профиля — минимум на kRiverBedSlope за тайл.
     // min() с текущим рельефом: где рельеф и так падает круче, берём его
     // (это нижняя граница уклона, а не жёсткая линейка), а бугры срезаем.
     //
@@ -553,7 +588,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const RiverPathSample& sample = river.centerline[s];
             if (s > 0) {
                 const std::size_t centerIdx = index(sample.x, sample.y);
-                bedLevel = std::min(elevation[centerIdx], bedLevel - params.riverBedSlope);
+                bedLevel = std::min(elevation[centerIdx], bedLevel - kRiverBedSlope);
             }
             const int r = std::max(1, static_cast<int>(std::ceil(sample.halfWidth)));
             for (int dy = -r; dy <= r; ++dy) {
@@ -630,11 +665,11 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     std::vector<float> waterDepth(cellCount, 0.0f);
 
     // Пруды: связные (8-связность, как и весь остальной D8-расчёт)
-    // области впадин глубже params.minPondDepth; params.minPondSize /
-    // params.maxPondSize ограничивают размер (0 у max — без ограничения).
+    // области впадин глубже kMinPondDepth. Размер области ничем не
+    // ограничивается — какой рельеф насчитал, такой пруд и получился.
     std::vector<bool> pondCandidate(cellCount, false);
     for (std::size_t i = 0; i < cellCount; ++i) {
-        pondCandidate[i] = (filled[i] - elevation[i]) > params.minPondDepth;
+        pondCandidate[i] = (filled[i] - elevation[i]) > kMinPondDepth;
     }
 
     std::vector<bool> pondVisited(cellCount, false);
@@ -671,11 +706,6 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             }
         }
 
-        const bool tooSmall = static_cast<int>(componentBuffer.size()) < params.minPondSize;
-        const bool tooBig = params.maxPondSize > 0 && static_cast<int>(componentBuffer.size()) > params.maxPondSize;
-        if (tooSmall || tooBig) {
-            continue;
-        }
         ++stats.pondComponentsPlaced;
         // Форма впадины (Priority-Flood) внутри пруда неровная — центр
         // глубже краёв. Нормируем её на среднюю глубину впадины по всему
@@ -705,21 +735,17 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     }
     stats.pondMs = elapsedMs(pondStart);
 
-    // --- 4. Реки: глубина воды + скорость потока по вырезанным руслам ---
-    // После прудов — на пересечении реки с прудом глубина берётся как
-    // max (как и для двух прудов выше), а скорость потока всё равно > 0
-    // (вода течёт даже через разлив). У пруда flowSpeed остаётся 0. depthMul
-    // — шум глубины вдоль русла (buildPathSamples); flowSpeed — своя
-    // случайная скорость этой реки (<= riverMaxFlowSpeed), а не общий
-    // параметр на все реки.
-    std::vector<float> flowSpeed(cellCount, 0.0f);
+    // --- 4. Реки: глубина воды по вырезанным руслам ---
+    // После прудов — на пересечении реки с прудом глубина берётся как max
+    // (как и для двух прудов выше). depthMul — шум глубины вдоль русла
+    // (buildPathSamples). Отдельного признака "здесь река" тайл не
+    // получает: для симуляции реки и пруда не существует как разных
+    // вещей, вода везде течёт по одному закону — уклону поверхности
+    // (HydrologySystem).
     for (const auto& river : acceptedRivers) {
         for (const auto& [idx, cell] : river.footprint) {
             const std::size_t i = static_cast<std::size_t>(idx);
             waterDepth[i] = std::max(waterDepth[i], params.riverDepth * cell.falloff * cell.depthMul);
-            if (cell.falloff > 0.0f) {
-                flowSpeed[i] = std::max(flowSpeed[i], river.flowSpeed);
-            }
         }
     }
 
@@ -751,9 +777,12 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
         }
     }
 
-    // --- 5. Влажность: фоновый шум + затухание по расстоянию до воды ---
+    // --- 5. Влажность: равновесное состояние (core/Moisture.hpp) ---
     // Multi-source BFS от всех водных клеток — стандартный distance
-    // transform, даёт плавный градиент вместо ступенчатого.
+    // transform, даёт плавный градиент вместо ступенчатого. Дальше та же
+    // функция moistureTarget, к которой влажность тянет и HydrologySystem
+    // каждый тик: мир генерируется сразу в равновесии, и первый же тик
+    // симуляции не начинает переписывать только что созданную карту.
     const auto moistureStart = Clock::now();
     std::vector<int> distanceToWater(cellCount, -1);
     std::queue<int> bfs;
@@ -790,34 +819,24 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
         for (int x = 0; x < width; ++x) {
             const std::size_t i = index(x, y);
 
-            const float baseMoisture = normalize01(moistureNoise.GetNoise(static_cast<float>(x), static_cast<float>(y)));
-            float waterBoost = 0.0f;
-            if (distanceToWater[i] >= 0) {
-                waterBoost = std::exp(-static_cast<float>(distanceToWater[i]) / params.moistureFalloff);
-            }
-            // Каменистая почва хуже держит влагу.
-            const float moisture = std::clamp(
-                baseMoisture * (1.0f - rockiness[i] * params.rockMoistureReduction) +
-                    waterBoost * params.waterMoistureBoost,
-                0.0f, 1.0f);
+            const float moisture = moistureTarget(distanceToWater[i], rockiness[i]);
 
-            // Минералы: на обычной почве — шум, в среднем дающий
-            // params.mineralsAverage (noise01 в среднем ~0.5, поэтому
-            // *2*mineralsAverage сходится к среднему mineralsAverage); на
-            // клетках реки — не шум, а всегда фиксированное riverMinerals
-            // (river/dwater flowSpeed[i] > 0 однозначно отличает реку от
-            // пруда, где flowSpeed == 0 — см. WaterComponent).
+            // Минералы: шум, в среднем дающий params.mineralsAverage
+            // (noise01 в среднем ~0.5, поэтому *2*mineralsAverage сходится
+            // к среднему mineralsAverage). Отдельного значения для речных
+            // клеток нет: минералы разносит по карте течение
+            // (HydrologySystem, правило песочной кучи), и русло получает
+            // своё содержание само, а не назначением при генерации.
             const float mineralsNoise01 = normalize01(mineralsNoise.GetNoise(static_cast<float>(x), static_cast<float>(y)));
-            const int generatedMinerals =
+            const int minerals =
                 std::max(0, static_cast<int>(std::lround(mineralsNoise01 * params.mineralsAverage * 2.0f)));
-            const int minerals = flowSpeed[i] > 0.0f ? params.riverMinerals : generatedMinerals;
 
             const auto entity = world.registry().create();
             world.registry().emplace<PositionComponent>(entity, PositionComponent{x, y});
             world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, rockiness[i], compaction[i], minerals});
             world.registry().emplace<HeightComponent>(entity, HeightComponent{elevation[i]});
             if (waterDepth[i] > 0.0f) {
-                world.registry().emplace<WaterComponent>(entity, WaterComponent{waterDepth[i], flowSpeed[i]});
+                world.registry().emplace<WaterComponent>(entity, WaterComponent{waterDepth[i]});
             }
             if (isWaterSource[i]) {
                 world.registry().emplace<WaterSourceComponent>(entity);
@@ -833,15 +852,10 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // (создан в World::reset/конструкторе) — значения по умолчанию
     // просто перезаписываются выбором этой генерации.
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
-    worldProperties.mineralMoistureThreshold = params.mineralMoistureThreshold;
-    worldProperties.waterEvaporationRate = params.waterEvaporationRate;
     worldProperties.waterSourceStrength = params.waterSourceStrength;
     worldProperties.waterFlowRate = params.waterFlowRate;
-    worldProperties.waterSlopeBoost = params.waterSlopeBoost;
     worldProperties.soilErosionRate = params.soilErosionRate;
     worldProperties.maxErosionDepth = params.maxErosionDepth;
-    worldProperties.erosionSpreadRate = params.erosionSpreadRate;
-    worldProperties.edgeDrainRate = params.edgeDrainRate;
 
     stats.totalMs = elapsedMs(totalStart);
     return stats;

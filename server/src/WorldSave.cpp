@@ -133,15 +133,10 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["time"] = {{"tick", time->tick}};
         }
         if (const auto* worldProperties = registry.try_get<WorldPropertiesComponent>(entity)) {
-            record["world_properties"] = {{"mineral_moisture_threshold", worldProperties->mineralMoistureThreshold},
-                                          {"water_evaporation_rate", worldProperties->waterEvaporationRate},
-                                          {"water_source_strength", worldProperties->waterSourceStrength},
+            record["world_properties"] = {{"water_source_strength", worldProperties->waterSourceStrength},
                                           {"water_flow_rate", worldProperties->waterFlowRate},
-                                          {"water_slope_boost", worldProperties->waterSlopeBoost},
                                           {"soil_erosion_rate", worldProperties->soilErosionRate},
                                           {"max_erosion_depth", worldProperties->maxErosionDepth},
-                                          {"erosion_spread_rate", worldProperties->erosionSpreadRate},
-                                          {"edge_drain_rate", worldProperties->edgeDrainRate},
                                           {"plant_mutation_rate", worldProperties->plantMutationRate},
                                           {"humus_decay_rate", worldProperties->humusDecayRate},
                                           {"plant_random_seed", worldProperties->plantRandomSeed}};
@@ -166,7 +161,7 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["height"] = heightComponent->height;
         }
         if (const auto* water = registry.try_get<WaterComponent>(entity)) {
-            record["water"] = {{"depth", water->depth}, {"flow_speed", water->flowSpeed}};
+            record["water"] = {{"depth", water->depth}};
         }
         if (const auto* humus = registry.try_get<HumusComponent>(entity)) {
             record["humus"] = {{"minerals", humus->minerals}, {"pending", humus->pending}};
@@ -223,24 +218,14 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         }
         if (record.contains("world_properties")) {
             parsed.hasWorldProperties = true;
-            parsed.worldProperties.mineralMoistureThreshold =
-                record["world_properties"].value("mineral_moisture_threshold", 0.5f);
-            parsed.worldProperties.waterEvaporationRate =
-                record["world_properties"].value("water_evaporation_rate", 0.00004f);
             parsed.worldProperties.waterSourceStrength =
                 record["world_properties"].value("water_source_strength", 0.05f);
             parsed.worldProperties.waterFlowRate =
                 record["world_properties"].value("water_flow_rate", 0.3f);
-            parsed.worldProperties.waterSlopeBoost =
-                record["world_properties"].value("water_slope_boost", 5.0f);
             parsed.worldProperties.soilErosionRate =
                 record["world_properties"].value("soil_erosion_rate", 0.05f);
             parsed.worldProperties.maxErosionDepth =
                 record["world_properties"].value("max_erosion_depth", 0.5f);
-            parsed.worldProperties.erosionSpreadRate =
-                record["world_properties"].value("erosion_spread_rate", 0.05f);
-            parsed.worldProperties.edgeDrainRate =
-                record["world_properties"].value("edge_drain_rate", 0.01f);
             parsed.worldProperties.plantMutationRate =
                 record["world_properties"].value("plant_mutation_rate", 0.06f);
             parsed.worldProperties.humusDecayRate =
@@ -277,8 +262,11 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         parsed.height = record.value("height", 0.0f);
         if (record.contains("water")) {
             parsed.hasWater = true;
+            // Старые файлы несут ещё и "flow_speed" — его молча
+            // игнорируем: признака "река" у воды больше нет (см.
+            // WaterComponent), а нечитаемым из-за лишнего ключа файл
+            // становиться не должен.
             parsed.water.depth = record["water"].value("depth", 0.0f);
-            parsed.water.flowSpeed = record["water"].value("flow_speed", 0.0f);
         }
         parsed.impassable = record.value("impassable", false);
         parsed.waterSource = record.value("water_source", false);
