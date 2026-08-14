@@ -55,7 +55,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.minPondDepth = config.min_pond_depth;
     params.minPondSize = config.min_pond_size;
     params.maxPondSize = config.max_pond_size;
-    params.pondDepthScale = config.pond_depth_scale;
+    params.pondDepth = config.pond_depth;
     params.moistureFalloff = config.moisture_falloff;
     params.waterMoistureBoost = config.water_moisture_boost;
     params.rockMoistureReduction = config.rock_moisture_reduction;

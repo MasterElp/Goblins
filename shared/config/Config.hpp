@@ -61,7 +61,7 @@ struct TerrainConfig {
     int river_count = 3;
     float river_width = 3.0f;
     float river_sinuosity = 0.5f;
-    float river_depth = 1.5f;
+    float river_depth = 0.9f;
     // Верхняя граница скорости потока — у каждой реки при генерации своя
     // случайная скорость до этого предела (см. TerrainGenerator.cpp).
     float river_max_flow_speed = 1.0f;
@@ -74,7 +74,7 @@ struct TerrainConfig {
     float min_pond_depth = 0.01f;
     int min_pond_size = 1;
     int max_pond_size = 0;
-    float pond_depth_scale = 4.0f;
+    float pond_depth = 0.9f;
 
     float moisture_falloff = 8.0f;
     float water_moisture_boost = 0.7f;
@@ -132,7 +132,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, height_noise_freq
                                     noise_octaves, noise_lacunarity, noise_gain, rock_height_bump,
                                     compaction_height_bump, river_count, river_width, river_sinuosity, river_depth,
                                     river_max_flow_speed, river_bed_slope, min_pond_depth, min_pond_size,
-                                    max_pond_size, pond_depth_scale, moisture_falloff, water_moisture_boost,
+                                    max_pond_size, pond_depth, moisture_falloff, water_moisture_boost,
                                     rock_moisture_reduction, minerals_average, river_minerals,
                                     mineral_moisture_threshold, water_source_count, water_evaporation_rate,
                                     water_source_strength, water_flow_rate, water_slope_boost,

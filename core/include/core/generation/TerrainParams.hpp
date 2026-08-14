@@ -38,7 +38,7 @@ struct TerrainParams {
     int riverCount = 3;
     float riverWidth = 3.0f;
     float riverSinuosity = 0.5f;
-    float riverDepth = 1.5f;
+    float riverDepth = 0.9f;
     float riverMaxFlowSpeed = 1.0f;
 
     // Минимальный уклон дна русла: на сколько дно ГАРАНТИРОВАННО
@@ -54,11 +54,17 @@ struct TerrainParams {
 
     // Пруды (Priority-Flood): минимальная глубина впадины, чтобы
     // считаться прудом, и допустимый размер связной области в тайлах.
-    // maxPondSize = 0 — без верхнего ограничения.
+    // maxPondSize = 0 — без верхнего ограничения. pondDepth — средняя
+    // глубина воды пруда в тех же единицах, что и riverDepth (глубина
+    // тайла, не множитель): у каждого пруда своя форма впадины
+    // (Priority-Flood), поэтому глубина внутри пруда не одна и та же
+    // всюду, а масштабируется формой впадины так, чтобы СРЕДНЯЯ по пруду
+    // глубина равнялась ровно pondDepth — как у реки depthMul даёт шум
+    // вдоль русла вокруг среднего riverDepth.
     float minPondDepth = 0.01f;
     int minPondSize = 1;
     int maxPondSize = 0;
-    float pondDepthScale = 4.0f;
+    float pondDepth = 0.9f;
 
     // Влажность: во сколько тайлов спадает примерно вдвое влияние воды
     // на влажность, насколько вода её поднимает и насколько каменистость

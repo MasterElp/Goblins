@@ -677,17 +677,29 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             continue;
         }
         ++stats.pondComponentsPlaced;
+        // Форма впадины (Priority-Flood) внутри пруда неровная — центр
+        // глубже краёв. Нормируем её на среднюю глубину впадины по всему
+        // пруду и умножаем на params.pondDepth, поэтому итоговая СРЕДНЯЯ
+        // глубина воды по пруду равна ровно params.pondDepth (те же
+        // единицы — глубина тайла, — что и у params.riverDepth), а форма
+        // впадины сохраняется как внутренний узор глубины.
+        float basinDepthSum = 0.0f;
         for (int idx : componentBuffer) {
             const std::size_t i = static_cast<std::size_t>(idx);
-            const float pondDepth = filled[i] - elevation[i];
-            waterDepth[i] = std::max(waterDepth[i], pondDepth * params.pondDepthScale);
+            basinDepthSum += filled[i] - elevation[i];
+        }
+        const float avgBasinDepth = basinDepthSum / static_cast<float>(componentBuffer.size());
+        for (int idx : componentBuffer) {
+            const std::size_t i = static_cast<std::size_t>(idx);
+            const float basinDepth = filled[i] - elevation[i];
+            const float shape = avgBasinDepth > 0.0f ? basinDepth / avgBasinDepth : 1.0f;
+            waterDepth[i] = std::max(waterDepth[i], params.pondDepth * shape);
             // Дно опускается вместе с глубиной, а не остаётся на исходном
-            // уровне рельефа: без этого pondDepthScale > 1 просто поднимал
-            // бы поверхность воды выше естественной точки перелива filled
-            // (пруд как будто раздувается сам из себя). Опускаем дно так,
-            // чтобы поверхность (elevation + waterDepth) осталась на
-            // filled — котловина настоящая, а не вода поверх
-            // невыкопанного рельефа.
+            // уровне рельефа: без этого поверхность воды (elevation +
+            // waterDepth) оказалась бы выше естественной точки перелива
+            // filled (пруд как будто раздувается сам из себя). Опускаем
+            // дно так, чтобы поверхность осталась на filled — котловина
+            // настоящая, а не вода поверх невыкопанного рельефа.
             elevation[i] = filled[i] - waterDepth[i];
         }
     }

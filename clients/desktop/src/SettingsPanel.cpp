@@ -77,7 +77,7 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     ops.floatRow("Min depth", edited.terrain.min_pond_depth, 0.0f, 0.5f);
     ops.intRow("Min size (tiles)", edited.terrain.min_pond_size, 1, 200);
     ops.intRow("Max size (0=none)", edited.terrain.max_pond_size, 0, 2000);
-    ops.floatRow("Depth scale", edited.terrain.pond_depth_scale, 0.5f, 10.0f);
+    ops.floatRow("Depth", edited.terrain.pond_depth, 0.0f, 5.0f);
 
     ops.section("Moisture");
     ops.floatRow("Falloff (tiles)", edited.terrain.moisture_falloff, 1.0f, 40.0f);
