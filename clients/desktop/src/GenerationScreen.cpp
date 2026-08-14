@@ -6,6 +6,7 @@
 #include <raygui.h>
 #include <raylib.h>
 
+#include "ConstantsOverlay.hpp"
 #include "MapTexture.hpp"
 #include "TileColors.hpp"
 
@@ -31,6 +32,7 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
     const Color cursorColor{255, 220, 90, 255};
 
     DrawText("World Generation - Soil, Water & Grass", 12, 10, 20, textColor);
+    DrawText("C - constants", 12 + MeasureText("World Generation - Soil, Water & Grass", 20) + 20, 14, 16, mutedColor);
 
     // Разделяемый указатель на неизменяемый снимок, а не копия: копировать
     // массивы по числу тайлов каждый кадр незачем — меняются они только с
@@ -157,16 +159,24 @@ AppScreen draw(NetworkClient& network, SettingsPanel& panel) {
         DrawText(label.c_str(), 12, screenH - 22, 16, cursorColor);
     }
 
-    goblins::RegenerationRequest regenerateRequest;
+    // panelParams — то, что сейчас набрано на панели (заполняется каждый
+    // кадр). И "Regenerate", и "Save values" работают с одними и теми же
+    // значениями: сохраняется ровно то, что видно на экране, даже если
+    // мир этими значениями ещё не перегенерирован.
+    goblins::RegenerationRequest panelParams;
     bool saveRequested = false;
     const Rectangle panelBounds{static_cast<float>(screenW) - kPanelWidth, 0, kPanelWidth,
                                  static_cast<float>(screenH)};
-    if (panel.draw(panelBounds, regenerateRequest, saveRequested)) {
-        network.sendRegenerate(regenerateRequest);
+    if (panel.draw(panelBounds, panelParams, saveRequested)) {
+        network.sendRegenerate(panelParams);
     }
     if (saveRequested) {
-        network.sendSaveGenerationConfig();
+        network.sendSaveGenerationConfig(panelParams);
     }
+
+    // Оверлей констант — поверх карты и панели: подбирая параметр, надо
+    // видеть и числа, которые в него упираются, но не настраиваются.
+    ConstantsOverlay::update(snapshot);
 
     if (backPressed || IsKeyPressed(KEY_ESCAPE)) {
         // Мир мог быть запущен прямо отсюда (кнопка Start) — уходя в

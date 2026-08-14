@@ -19,6 +19,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
+#include "core/Diagnostics.hpp"
 
 namespace goblins {
 
@@ -859,6 +860,42 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
 
     stats.totalMs = elapsedMs(totalStart);
     return stats;
+}
+
+
+// Константы этой стадии — наружу только для чтения (core/Diagnostics.hpp).
+// Список ведётся здесь же, под самими значениями: добавил константу —
+// добавь строку сюда, и она сама появится в оверлее клиента.
+void appendTerrainConstants(std::vector<ConstantInfo>& out) {
+    constexpr const char* g = "Terrain";
+    out.push_back({g, "kNoiseLacunarity", kNoiseLacunarity});
+    out.push_back({g, "kNoiseGain", kNoiseGain});
+    out.push_back({g, "kRockFrequencyRatio", kRockFrequencyRatio});
+    out.push_back({g, "kCompactionFrequencyRatio", kCompactionFrequencyRatio});
+    out.push_back({g, "kMineralsFrequencyRatio", kMineralsFrequencyRatio});
+    out.push_back({g, "kMeanderFrequency", kMeanderFrequency});
+    out.push_back({g, "kMeanderPushScale", kMeanderPushScale});
+    out.push_back({g, "kSoilProbeDist", kSoilProbeDist});
+    out.push_back({g, "kSoilPushScale", kSoilPushScale});
+    out.push_back({g, "kSoilPushClamp", kSoilPushClamp});
+    out.push_back({g, "kMaxLateralPerStep", kMaxLateralPerStep});
+    out.push_back({g, "kMaxWander", kMaxWander});
+    out.push_back({g, "kWidthNoiseFrequency", kWidthNoiseFrequency});
+    out.push_back({g, "kWidthNoiseAmplitude", kWidthNoiseAmplitude});
+    out.push_back({g, "kWidthMinMul", kWidthMinMul});
+    out.push_back({g, "kWidthMaxMul", kWidthMaxMul});
+    out.push_back({g, "kDepthNoiseFrequency", kDepthNoiseFrequency});
+    out.push_back({g, "kDepthNoiseAmplitude", kDepthNoiseAmplitude});
+    out.push_back({g, "kDepthMinMul", kDepthMinMul});
+    out.push_back({g, "kDepthMaxMul", kDepthMaxMul});
+    out.push_back({g, "kRiverCarveMultiplier", kRiverCarveMultiplier});
+    out.push_back({g, "kRiverAttemptMultiplier", static_cast<float>(kRiverAttemptMultiplier)});
+    out.push_back({g, "kMergeProbability", kMergeProbability});
+    out.push_back({g, "kMergeMarginFraction", kMergeMarginFraction});
+    out.push_back({g, "kRiverBedSlope", kRiverBedSlope});
+    out.push_back({g, "kMinPondDepth", kMinPondDepth});
+    out.push_back({g, "kRiverStageDeadlineMs", static_cast<float>(kRiverStageDeadlineMs)});
+    out.push_back({g, "kMaxRiverPathSamples", static_cast<float>(kMaxRiverPathSamples)});
 }
 
 } // namespace goblins

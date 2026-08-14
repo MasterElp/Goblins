@@ -14,6 +14,7 @@
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/PlantGenetics.hpp"
+#include "core/Diagnostics.hpp"
 
 namespace goblins {
 
@@ -461,6 +462,25 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             registry.get<WaterComponent>(entity).depth = depth;
         }
     }
+}
+
+
+// Константы этой системы — наружу только для чтения (core/Diagnostics.hpp).
+void appendHydrologyConstants(std::vector<ConstantInfo>& out) {
+    constexpr const char* g = "Hydrology";
+    out.push_back({g, "kMoistureAdaptRate", kMoistureAdaptRate});
+    out.push_back({g, "kCompactionRockFloor", kCompactionRockFloor});
+    out.push_back({g, "kCompactionSoftenReach", kCompactionSoftenReach});
+    out.push_back({g, "kCompactionSoftenRate", kCompactionSoftenRate});
+    out.push_back({g, "kWaterAppearThreshold", kWaterAppearThreshold});
+    out.push_back({g, "kWaterDisappearThreshold", kWaterDisappearThreshold});
+    out.push_back({g, "kWaterSlopeBoost", kWaterSlopeBoost});
+    out.push_back({g, "kWaterDepthBoost", kWaterDepthBoost});
+    out.push_back({g, "kWaterEvaporationRate", kWaterEvaporationRate});
+    out.push_back({g, "kEdgeDrainRate", kEdgeDrainRate});
+    out.push_back({g, "kMineralMoistureThreshold", kMineralMoistureThreshold});
+    out.push_back({g, "kMineralSlopeThreshold", static_cast<float>(kMineralSlopeThreshold)});
+    out.push_back({g, "kSoilRainCells", static_cast<float>(kSoilRainCells)});
 }
 
 } // namespace goblins

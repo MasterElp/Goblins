@@ -1,4 +1,5 @@
 #include "core/generation/PlantGenetics.hpp"
+#include "core/Diagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -232,6 +233,23 @@ float habitatFit(const PlantGenomeComponent& genome, const SoilComponent& soil) 
     }
 
     return rockinessFit * compactionFit;
+}
+
+
+// Константы генетики — наружу только для чтения (core/Diagnostics.hpp).
+// Часть из них живёт в заголовке (kMinGrassSpecies и далее): они нужны и
+// вызывающей стороне, но в оверлее им место здесь же, рядом со своими.
+void appendPlantGeneticsConstants(std::vector<ConstantInfo>& out) {
+    constexpr const char* g = "Genetics";
+    out.push_back({g, "kMinAdvantage", kMinAdvantage});
+    out.push_back({g, "kMaxAdvantage", kMaxAdvantage});
+    out.push_back({g, "kBudgetFitIterations", static_cast<float>(kBudgetFitIterations)});
+    out.push_back({g, "kMinSpeciesDistance", kMinSpeciesDistance});
+    out.push_back({g, "kSpeciesAttempts", static_cast<float>(kSpeciesAttempts)});
+    out.push_back({g, "kMinGrassSpecies", static_cast<float>(kMinGrassSpecies)});
+    out.push_back({g, "kMaxGrassSpecies", static_cast<float>(kMaxGrassSpecies)});
+    out.push_back({g, "kAdvantageBudgetShare", kAdvantageBudgetShare});
+    out.push_back({g, "kSpeciesBand", kSpeciesBand});
 }
 
 } // namespace goblins

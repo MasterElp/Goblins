@@ -14,6 +14,7 @@
 #include "SimulationScreen.hpp"
 #include "WorldSelectScreen.hpp"
 #include "config/Config.hpp"
+#include "Version.hpp"
 
 // Клиент — графическое приложение (raylib), не консоль. Подключается
 // только по WebSocket-протоколу сервера (07_TechStack.md, п.6) — никакого
@@ -34,8 +35,13 @@ int main(int argc, char** argv) {
     NetworkClient network;
     network.connect(config.host, config.port);
 
+    // Версия в заголовке окна — единственный надёжный способ на глаз
+    // отличить только что собранный .exe от того, что уже был запущен:
+    // окно можно не пересоздавать между запусками (тот же .exe путь),
+    // содержимое биндится намертво при InitWindow.
+    const std::string windowTitle = std::string("Goblins - World Simulator v") + goblins::kAppVersion;
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-    InitWindow(config.window_width, config.window_height, "Goblins - World Simulator");
+    InitWindow(config.window_width, config.window_height, windowTitle.c_str());
     // Esc — по умолчанию "exit key" в raylib (сам взводит WindowShouldClose,
     // в обход экранов). Экраны сами решают, что делать по Esc (вернуться в
     // меню, снять паузу и т.п.), поэтому дефолтное поведение отключаем.

@@ -18,10 +18,13 @@ public:
     // недописанные правки на каждый тик).
     void loadFrom(const goblins::RegenerationRequest& current, bool force = false);
 
-    // Рисует панель. Возвращает true и заполняет outRequest, если
-    // пользователь нажал "Regenerate". Выставляет outSaveRequested в true,
-    // если пользователь нажал "Save values" (вызывающая сторона сама
-    // решает, что с этим делать — отправить save_generation_config).
+    // Рисует панель. outRequest заполняется всегда — это текущее
+    // содержимое ползунков; возвращает true, если пользователь нажал
+    // "Regenerate". Выставляет outSaveRequested в true, если пользователь
+    // нажал "Save values" (вызывающая сторона сама решает, что с этим
+    // делать — отправить save_generation_config с теми же значениями:
+    // "Save values" сохраняет набранное на панели, а не то, чем
+    // сгенерирован текущий мир).
     bool draw(Rectangle bounds, goblins::RegenerationRequest& outRequest, bool& outSaveRequested);
 
 private:

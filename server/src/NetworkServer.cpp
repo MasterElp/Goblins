@@ -20,6 +20,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/generation/PlantGenetics.hpp"
+#include "core/Diagnostics.hpp"
 #include "server/WorldSave.hpp"
 
 namespace goblins {
@@ -264,7 +265,25 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
         message["terrain"] = currentGenerationConfig_.terrain;
         message["boulder_count"] = currentGenerationConfig_.boulder_count;
         message["boulder_seed"] = currentGenerationConfig_.boulder_seed;
+        // Растения — на тех же правах, что и террейн с булыжниками: панель
+        // настроек клиента строится из этого сообщения целиком. Без них
+        // клиент показывал бы (и отправлял обратно по "Regenerate") свои
+        // вкомпилированные умолчания, молча затирая настройки растений с
+        // сервера.
+        message["plants"] = currentGenerationConfig_.plants;
+        message["plant_seed"] = currentGenerationConfig_.plant_seed;
     }
+
+    // Константы законов мира (core/Diagnostics.hpp) — только для показа.
+    // Едут в world_init, а не отдельным сообщением: они не меняются
+    // никогда, а world_init по определению содержит всё, из чего клиент
+    // строит картину мира с нуля. Шесть десятков коротких записей рядом с
+    // плотными массивами на всю Область ничего не весят.
+    auto constants = nlohmann::json::array();
+    for (const auto& constant : coreConstants()) {
+        constants.push_back({{"group", constant.group}, {"name", constant.name}, {"value", constant.value}});
+    }
+    message["constants"] = constants;
 
     // Булыжники и источники — разреженно, тегом без данных: их немного
     // (boulder_count + river_count + water_source_count), плотный массив
@@ -470,18 +489,38 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
     } else if (type == "save_generation_config") {
         // Только файловый ввод-вывод, ECS registry не трогаем — можно
         // прямо здесь, на сетевом потоке, как и toggle_pause.
-        ServerConfig toSave = baseConfig_;
-        {
+        //
+        // Сохраняем то, что прислал клиент (набранное на панели), а не
+        // currentGenerationConfig_: последний обновляется только после
+        // успешной регенерации, и раньше "Save values" без предварительного
+        // "Regenerate" молча записывал в файл прежние значения — правки
+        // ползунков не сохранялись вовсе. currentGenerationConfig_ при этом
+        // не трогаем: он описывает, чем сгенерирован мир, лежащий в памяти,
+        // и уходит и в world_init, и в файл сохранённого мира — подменять
+        // его непримененными правками значило бы врать о содержимом мира.
+        RegenerationRequest toWrite;
+        if (json.contains("params")) {
+            try {
+                toWrite = json.at("params").get<RegenerationRequest>();
+            } catch (const nlohmann::json::exception& e) {
+                std::cerr << "NetworkServer: invalid save_generation_config request (" << e.what() << ")\n";
+                return;
+            }
+        } else {
             std::lock_guard<std::mutex> lock(generationConfigMutex_);
-            toSave.terrain_seed = currentGenerationConfig_.terrain_seed;
-            toSave.terrain = currentGenerationConfig_.terrain;
-            toSave.boulder_count = currentGenerationConfig_.boulder_count;
-            toSave.boulder_seed = currentGenerationConfig_.boulder_seed;
-            toSave.plants = currentGenerationConfig_.plants;
-            toSave.plant_seed = currentGenerationConfig_.plant_seed;
+            toWrite = currentGenerationConfig_;
         }
+
+        ServerConfig toSave = baseConfig_;
+        toSave.terrain_seed = toWrite.terrain_seed;
+        toSave.terrain = toWrite.terrain;
+        toSave.boulder_count = toWrite.boulder_count;
+        toSave.boulder_seed = toWrite.boulder_seed;
+        toSave.plants = toWrite.plants;
+        toSave.plant_seed = toWrite.plant_seed;
         saveServerConfig(configPath_, toSave);
         std::cout << "Generation config saved to '" << configPath_ << "'.\n";
+        broadcastNotice("info", "Generation values saved to config.");
     } else if (type == "stop_simulation") {
         // В отличие от toggle_pause, это не переключение, а безусловная
         // остановка — клиент нажал "Back", повторный запрос не должен

@@ -17,6 +17,7 @@ add_executable(client
     src/main.cpp
     src/NetworkClient.cpp
     src/MapTexture.cpp
+    src/ConstantsOverlay.cpp
     src/SettingsPanel.cpp
     src/MainMenuScreen.cpp
     src/SettingsScreen.cpp

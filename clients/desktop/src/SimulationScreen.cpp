@@ -10,6 +10,7 @@
 #include <raygui.h>
 #include <raylib.h>
 
+#include "ConstantsOverlay.hpp"
 #include "MapTexture.hpp"
 #include "TileColors.hpp"
 
@@ -74,7 +75,9 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —
     // иначе клик по кнопке диалога совпадёт с движением камеры или сменой
     // слоя позади, а буквенные клавиши при вводе имени — с WASD/P/1-6.
-    if (!confirmingExit && !showSaveDialog) {
+    // Оверлей констант — по той же причине: он перекрывает экран целиком,
+    // и слои под ним переключались бы вслепую.
+    if (!confirmingExit && !showSaveDialog && !ConstantsOverlay::visible()) {
         if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
         if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
         if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) viewX -= scrollSpeedPx * dt;
@@ -259,7 +262,7 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
     DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   Zoom: %d%%   WASD-scroll  Wheel-zoom  "
-                         "1-6-layers  P-pause  Esc-menu",
+                         "1-6-layers  P-pause  C-constants  Esc-menu",
                          snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
                          static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
                          static_cast<int>(viewX / tileSizeF), static_cast<int>(viewY / tileSizeF),
@@ -399,6 +402,12 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
             confirmingExit = false;
         }
     }
+
+    // Оверлей констант — последним: он перекрывает всё, включая диалоги.
+    // Переключение отключено, пока открыто поле ввода имени мира, иначе
+    // буква "C" в имени открывала бы оверлей вместо того, чтобы набраться.
+    ConstantsOverlay::update(snapshot, !showSaveDialog);
+
     return AppScreen::Simulation;
 }
 

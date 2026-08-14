@@ -9,6 +9,9 @@ namespace {
 // экранах прежние слайдеры было тяжело зацепить мышью.
 constexpr float kRowHeight = 44.0f;
 constexpr float kSectionGap = 12.0f;
+// Заголовок полосы (GENERATION / WORLD PROPERTIES) — выше строки-секции и
+// с чертой под ним: это деление важнее, чем деление на секции внутри.
+constexpr float kGroupHeight = 40.0f;
 
 // Единственное место, где перечислены все строки панели — и для отрисовки
 // (DrawOps), и для расчёта высоты контента (MeasureOps, см. ниже).
@@ -18,32 +21,23 @@ constexpr float kSectionGap = 12.0f;
 // параметры, либо оставлял пустой хвост. Теперь высота — это ровно то,
 // что реально нарисовано: добавить параметр можно, добавив вызов сюда, и
 // больше нигде.
+// Порядок здесь — не косметика, а главное деление этих параметров: одни
+// работают ОДИН РАЗ, в момент "Regenerate" (форма рельефа, где лечь рекам,
+// сколько насыпать булыжников), другие генерация только ВЫБИРАЕТ, а
+// работают они потом каждый тик (WorldPropertiesComponent — течение,
+// эрозия, мутация; 06_GameLoop.md, п.1a). Крутить их вслепую вперемешку
+// бессмысленно: у первых видимый результат появляется сразу после
+// регенерации и дальше не меняется, у вторых — только на запущенной
+// симуляции и тем позже, чем меньше значение. Внутри каждой полосы —
+// группировка по тому, чего параметр касается.
 template <typename Ops>
 void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
+    ops.group("GENERATION -- applied on Regenerate");
+
     ops.section("Seeds");
     ops.unsignedSeedRow("Terrain seed", edited.terrain_seed);
     ops.unsignedSeedRow("Boulder seed", edited.boulder_seed);
     ops.unsignedSeedRow("Plant seed", edited.plant_seed);
-
-    ops.section("Boulders");
-    ops.intRow("Boulder count", edited.boulder_count, 0, 300);
-
-    ops.section("Grass");
-    // Число видов травы — 3..12 (ядро всё равно обрежет значение к этим
-    // границам): меньше трёх видов не даёт конкуренции, больше
-    // двенадцати — виды перестают отличаться друг от друга при одном и
-    // том же бюджете преимуществ.
-    ops.intRow("Species", edited.plants.grass_species, 3, 12);
-    // Стартовая заселённость, а не итоговая: дальше трава расселяется
-    // сама и занимает всё, что ей подходит.
-    ops.floatRow("Initial coverage", edited.plants.grass_coverage, 0.0f, 0.4f, 3);
-    // Свойства мира (06_GameLoop.md, п.1a): выбираются при генерации, во
-    // время симуляции не меняются. Мутация — доля вложения черты, а не
-    // доля значения гена (у всех черт вложение живёт в одном диапазоне,
-    // поэтому настройка одна на весь геном).
-    ops.floatRow("Mutation rate", edited.plants.mutation_rate, 0.0f, 0.3f, 3);
-    // Сколько крупиц минералов перегной возвращает в почву за тик.
-    ops.floatRow("Humus decay (per tick)", edited.plants.humus_decay_rate, 0.001f, 0.2f, 3);
 
     ops.section("Terrain shape");
     // Масштаб рельефа: меньше — крупнее формы. Частоты остальных слоёв
@@ -56,7 +50,7 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // не может".
     ops.floatRow("Hard ground bump", edited.terrain.hardness_height_bump, 0.0f, 1.5f);
 
-    ops.section("River");
+    ops.section("Rivers");
     ops.intRow("Count", edited.terrain.river_count, 0, 20);
     ops.floatRow("Width (tiles)", edited.terrain.river_width, 1.0f, 12.0f);
     ops.floatRow("Sinuosity", edited.terrain.river_sinuosity, 0.0f, 1.0f);
@@ -68,15 +62,31 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // Flood), а не отдельные фильтры по размеру.
     ops.floatRow("Depth", edited.terrain.pond_depth, 0.0f, 5.0f);
 
-    ops.section("Minerals");
+    ops.section("Springs");
+    // Сколько "родников" в случайных точках карты — плюс по одному
+    // автоматически на исток каждой реки. Сколько их — решается при
+    // генерации; насколько они сильные — уже свойство мира, ниже.
+    ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
+
+    ops.section("Soil & boulders");
     // Среднее по карте; дальше минералы разносит течение (HydrologySystem)
     // и возвращает в почву перегной.
-    ops.floatRow("Average", edited.terrain.minerals_average, 0.0f, 50.0f);
+    ops.floatRow("Minerals average", edited.terrain.minerals_average, 0.0f, 50.0f);
+    ops.intRow("Boulder count", edited.boulder_count, 0, 300);
 
-    ops.section("Water");
-    // Сколько "родников" в случайных точках карты — плюс по одному
-    // автоматически на исток каждой реки.
-    ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
+    ops.section("Grass seeding");
+    // Число видов травы — 3..12 (ядро всё равно обрежет значение к этим
+    // границам): меньше трёх видов не даёт конкуренции, больше
+    // двенадцати — виды перестают отличаться друг от друга при одном и
+    // том же бюджете преимуществ.
+    ops.intRow("Species", edited.plants.grass_species, 3, 12);
+    // Стартовая заселённость, а не итоговая: дальше трава расселяется
+    // сама и занимает всё, что ей подходит.
+    ops.floatRow("Initial coverage", edited.plants.grass_coverage, 0.0f, 0.4f, 3);
+
+    ops.group("WORLD PROPERTIES -- chosen here, read every tick");
+
+    ops.section("Water flow");
     // АБСОЛЮТНЫЙ приток (глубина за тик), не множитель испарения: источник
     // должен перекрывать и своё испарение, и то, что течение уносит
     // соседям, при любых настройках.
@@ -92,6 +102,14 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // Потолок выемки относительно соседа — без него клетка под источником
     // размывается без остановки в бездонную яму.
     ops.floatRow("Max scour depth", edited.terrain.max_erosion_depth, 0.0f, 3.0f);
+
+    ops.section("Plant life");
+    // Мутация — доля вложения черты, а не доля значения гена (у всех черт
+    // вложение живёт в одном диапазоне, поэтому настройка одна на весь
+    // геном).
+    ops.floatRow("Mutation rate", edited.plants.mutation_rate, 0.0f, 0.3f, 3);
+    // Сколько крупиц минералов перегной возвращает в почву за тик.
+    ops.floatRow("Humus decay (per tick)", edited.plants.humus_decay_rate, 0.001f, 0.2f, 3);
 }
 
 // Только считает высоту, ничего не рисует — используется до
@@ -99,6 +117,7 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
 struct MeasureOps {
     float height = 0.0f;
 
+    void group(const char*) { height += kGroupHeight + kSectionGap; }
     void section(const char*) { height += kRowHeight + kSectionGap; }
     void floatRow(const char*, float&, float, float, int precision = 4) {
         (void)precision;
@@ -115,6 +134,13 @@ struct DrawOps {
     float x;
     float y;
     float rowWidth;
+
+    void group(const char* title) {
+        DrawText(title, static_cast<int>(x), static_cast<int>(y + 14), 16, Color{235, 200, 110, 255});
+        DrawLine(static_cast<int>(x), static_cast<int>(y + kGroupHeight - 6), static_cast<int>(x + rowWidth),
+                 static_cast<int>(y + kGroupHeight - 6), Color{120, 105, 60, 255});
+        y += kGroupHeight + kSectionGap;
+    }
 
     void section(const char* title) {
         GuiLabel(Rectangle{x, y, rowWidth, kRowHeight}, title);
@@ -208,9 +234,8 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
         loaded_ = false; // следующий loadFrom(..., force=false) перезапишет edited_
     }
 
-    if (regenerate) {
-        outRequest = edited_;
-        return true;
-    }
-    return false;
+    // Заполняем всегда, а не только по "Regenerate": по "Save values"
+    // на диск должно уйти ровно то, что сейчас набрано на панели.
+    outRequest = edited_;
+    return regenerate;
 }

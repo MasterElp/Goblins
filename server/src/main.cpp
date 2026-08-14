@@ -28,6 +28,7 @@
 #include "server/ConsoleHotkeyWatcher.hpp"
 #include "server/NetworkServer.hpp"
 #include "server/WorldSave.hpp"
+#include "Version.hpp"
 
 namespace {
 
@@ -186,6 +187,11 @@ void printGenerationStats(const goblins::GenerationStats& stats) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // Версия — первая строка вывода, до чтения конфига: если сервер
+    // завис или упал на конфиге, по консоли всё равно видно, какой .exe
+    // реально запустился.
+    std::cout << "Goblins server v" << goblins::kAppVersion << "\n";
+
     const std::string configPath = argc > 1 ? argv[1] : goblins::defaultConfigPathNextToExecutable();
     goblins::ensureConfigExists<goblins::ServerConfig>(configPath);
     const auto config = goblins::loadServerConfig(configPath);

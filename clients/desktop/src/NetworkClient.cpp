@@ -137,10 +137,11 @@ void NetworkClient::sendStopSimulation() {
     webSocket_.send(request.dump());
 }
 
-void NetworkClient::sendSaveGenerationConfig() {
-    nlohmann::json request;
-    request["type"] = "save_generation_config";
-    webSocket_.send(request.dump());
+void NetworkClient::sendSaveGenerationConfig(const goblins::RegenerationRequest& request) {
+    nlohmann::json message;
+    message["type"] = "save_generation_config";
+    message["params"] = request;
+    webSocket_.send(message.dump());
 }
 
 void NetworkClient::handleMessage(const std::string& payload) {
@@ -217,7 +218,26 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.generation.terrain_seed = json.value("terrain_seed", working_.generation.terrain_seed);
         working_.generation.boulder_count = json.value("boulder_count", working_.generation.boulder_count);
         working_.generation.boulder_seed = json.value("boulder_seed", working_.generation.boulder_seed);
+        if (json.contains("plants")) {
+            working_.generation.plants = json["plants"].get<goblins::PlantConfig>();
+        }
+        working_.generation.plant_seed = json.value("plant_seed", working_.generation.plant_seed);
         working_.hasGeneration = true;
+
+        // Константы ядра — никогда не меняются, но приходят с каждым
+        // world_init: перечитываем целиком, это дешевле и честнее, чем
+        // проверять, не изменились ли они.
+        if (json.contains("constants") && json["constants"].is_array()) {
+            working_.constants.clear();
+            for (const auto& constant : json["constants"]) {
+                if (!constant.is_object()) {
+                    continue;
+                }
+                working_.constants.push_back({constant.value("group", std::string{}),
+                                              constant.value("name", std::string{}),
+                                              constant.value("value", 0.0f)});
+            }
+        }
         working_.currentWorld = json.value("world", working_.currentWorld);
         publishState();
     } else if (type == "world_delta") {

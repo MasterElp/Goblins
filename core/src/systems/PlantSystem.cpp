@@ -15,6 +15,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/PlantGenetics.hpp"
+#include "core/Diagnostics.hpp"
 
 namespace goblins {
 
@@ -432,6 +433,25 @@ void PlantSystem(World& world, CommandQueue& commands) {
             });
         }
     }
+}
+
+
+// Константы этой системы — наружу только для чтения (core/Diagnostics.hpp).
+void appendPlantSystemConstants(std::vector<ConstantInfo>& out) {
+    constexpr const char* g = "Plants (tick)";
+    out.push_back({g, "kMinSizeShare", kMinSizeShare});
+    out.push_back({g, "kSoilDrying", kSoilDrying});
+    out.push_back({g, "kVitalityFloor", kVitalityFloor});
+    out.push_back({g, "kStressGain", kStressGain});
+    out.push_back({g, "kStressRelief", kStressRelief});
+    out.push_back({g, "kDrownStress", kDrownStress});
+    out.push_back({g, "kSeedMinGrowth", kSeedMinGrowth});
+    out.push_back({g, "kSeedMaxStress", kSeedMaxStress});
+    out.push_back({g, "kSeedGrowthCost", kSeedGrowthCost});
+    out.push_back({g, "kSeedMoistureShare", kSeedMoistureShare});
+    out.push_back({g, "kSeedlingGrowth", kSeedlingGrowth});
+    out.push_back({g, "kSeedMinFit", kSeedMinFit});
+    out.push_back({g, "kSeedMoistureMargin", kSeedMoistureMargin});
 }
 
 } // namespace goblins

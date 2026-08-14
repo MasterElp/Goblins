@@ -11,6 +11,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/PlantGenetics.hpp"
+#include "core/Diagnostics.hpp"
 
 namespace goblins {
 
@@ -149,6 +150,15 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
 
         ++planted;
     }
+}
+
+
+// Константы этой стадии — наружу только для чтения (core/Diagnostics.hpp).
+void appendGrassSeedingConstants(std::vector<ConstantInfo>& out) {
+    constexpr const char* g = "Grass seeding";
+    out.push_back({g, "kSeedingMinFit", kSeedingMinFit});
+    out.push_back({g, "kInitialMoistureShare", kInitialMoistureShare});
+    out.push_back({g, "kAttemptMultiplier", static_cast<float>(kAttemptMultiplier)});
 }
 
 } // namespace goblins

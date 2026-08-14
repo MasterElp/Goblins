@@ -70,6 +70,18 @@ struct WorldState {
     bool hasGeneration = false;
     bool connected = false;
 
+    // Константы законов мира, как их прислал сервер (core/Diagnostics.hpp):
+    // группа, имя как в исходнике ядра, значение. Только для показа
+    // (оверлей по клавише C). Как и с чертами генома выше — тройки, а не
+    // структура с полями: клиент не знает состава этого списка и не должен,
+    // новая константа появится в оверлее сама.
+    struct Constant {
+        std::string group;
+        std::string name;
+        float value = 0.0f;
+    };
+    std::vector<Constant> constants;
+
     // Имя мира, который сейчас в памяти сервера; пустая строка — мир ещё
     // не сохранён (например, только что перегенерирован на экране World
     // Generation).
@@ -125,7 +137,13 @@ public:
     // сохранённый мир с этим именем.
     void sendStartSimulation(const std::string& worldName = std::string{});
     void sendStopSimulation();
-    void sendSaveGenerationConfig();
+
+    // Сохранить параметры генерации в config.json сервера. Параметры
+    // передаются явно — это ровно то, что сейчас набрано на панели, а не
+    // то, чем сгенерирован мир: кнопка "Save values" стоит рядом с
+    // ползунками и означает "запомнить вот эти значения", независимо от
+    // того, нажимал ли пользователь перед этим "Regenerate".
+    void sendSaveGenerationConfig(const goblins::RegenerationRequest& request);
 
     // Запросить список сохранённых миров (ответ — world_list).
     void sendListWorlds();
