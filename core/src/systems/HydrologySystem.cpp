@@ -9,9 +9,11 @@
 #include "core/components/HeightComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
+#include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
+#include "core/generation/PlantGenetics.hpp"
 
 namespace goblins {
 
@@ -89,6 +91,15 @@ constexpr float kMineralMoistureThreshold = 0.5f;
 // предсказуемого сглаживания получаются на вид хаотичные "волны" — тот же
 // приём единственного лучшего соседа, что и у течения воды выше.
 constexpr int kMineralSlopeThreshold = 2;
+
+// Появление почвы "из воздуха": вымытая эрозией порода больше никуда не
+// переносится напрямую (не оседает у соседа, куда пришла вода) — вместо
+// этого за тик появляется в kSoilRainCells случайных клетках карты,
+// суммарно в объёме, сравнимом с тем, что вымыло (соль отличает этот поток
+// случайности от посевного PlantSystem — тот же приём mixSeed/randomUnit,
+// что и там).
+constexpr int kSoilRainCells = 8;
+constexpr std::uint64_t kSoilRainSalt = 0x536F696C52616e21ull;
 
 } // namespace
 
@@ -202,6 +213,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // влияет на результат. ---
     std::vector<float> nextWaterDepth(waterDepth);
     std::vector<float> nextTerrainHeight(terrainHeight);
+    float totalEroded = 0.0f;
 
     for (std::size_t i = 0; i < cellCount; ++i) {
         if (waterDepth[i] <= 0.0f) {
@@ -265,30 +277,62 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         nextWaterDepth[i] -= amount;
         nextWaterDepth[j] += amount;
 
-        // Эрозия: поток вымывает породу из клетки, откуда уходит вода, и
-        // ровно столько же откладывает там, куда она пришла. Обе правки
-        // используют одну и ту же величину erosion — почвы в мире не
-        // становится меньше, она только переносится ниже по течению и
-        // оседает там, где вода останавливается (в пруду, во впадине).
+        // Эрозия: поток вымывает породу из клетки, откуда уходит вода.
+        // Вымытое никуда не переносится и не оседает у соседа (см. ниже,
+        // шаг 5а, "почва из воздуха") — эрозия просто убирает породу,
+        // соседняя клетка её больше не получает.
         //
-        // Разная почва вымывается по-разному: каменистая и утрамбованная
-        // сопротивляются размыву, рыхлая уходит легко.
-        const float softness = (1.0f - rockiness[i]) * (1.0f - compaction[i]);
+        // Эродируем только там, где без воды путь бы не существовал: если
+        // дно клетки-источника УЖЕ выше дна соседа (terrainHeight[i] >
+        // terrainHeight[j]), вода и так потечёт этим путём из-за разницы
+        // высот самого рельефа — размывать дальше незачем, русло уже
+        // сформировано. Эрозия нужна только там, где дно пока не ниже
+        // соседского и вода течёт лишь за счёт собственного уровня (пруд
+        // выше маленького порожка) — именно это и есть "почва ещё мешает
+        // течению".
+        if (terrainHeight[i] <= terrainHeight[j]) {
+            // Разная почва вымывается по-разному: каменистая и
+            // утрамбованная сопротивляются размыву, рыхлая уходит легко.
+            const float softness = (1.0f - rockiness[i]) * (1.0f - compaction[i]);
 
-        // Потолок выемки. Без него клетка под постоянным источником
-        // размывается каждый тик без остановки — высота уезжает в минус,
-        // и появляется бездонная яма, никак не связанная с рельефом
-        // вокруг. Ограничиваем глубину относительно соседа, с которым
-        // клетка обменивается водой: ниже, чем на maxErosionDepth под
-        // ним, размыть нельзя. Считаем от снимка (terrainHeight), а не от
-        // накопителя, чтобы результат не зависел от порядка обхода клеток
-        // — как и всё остальное в этом шаге.
-        const float erosionFloor = terrainHeight[j] - maxErosionDepth;
-        const float allowedErosion = std::max(0.0f, terrainHeight[i] - erosionFloor);
-        const float erosion = std::min(amount * soilErosionRate * softness, allowedErosion);
+            // Потолок выемки. Без него клетка под постоянным источником
+            // размывается каждый тик без остановки — высота уезжает в
+            // минус, и появляется бездонная яма, никак не связанная с
+            // рельефом вокруг. Ограничиваем глубину относительно соседа,
+            // с которым клетка обменивается водой: ниже, чем на
+            // maxErosionDepth под ним, размыть нельзя. Считаем от снимка
+            // (terrainHeight), а не от накопителя, чтобы результат не
+            // зависел от порядка обхода клеток — как и всё остальное в
+            // этом шаге.
+            const float erosionFloor = terrainHeight[j] - maxErosionDepth;
+            const float allowedErosion = std::max(0.0f, terrainHeight[i] - erosionFloor);
+            const float erosion = std::min(amount * soilErosionRate * softness, allowedErosion);
 
-        nextTerrainHeight[i] -= erosion;
-        nextTerrainHeight[j] += erosion;
+            nextTerrainHeight[i] -= erosion;
+            totalEroded += erosion;
+        }
+    }
+
+    // --- 5a. Почва "из воздуха": сколько за этот шаг суммарно вымыло
+    // эрозией (totalEroded выше), столько же появляется обратно, но не у
+    // соседа, а в kSoilRainCells случайных клетках карты — эрозия больше
+    // не переносит породу по руслу вниз по течению напрямую, а объём
+    // почвы в мире всё равно не убывает бесследно. Детерминированная
+    // случайность — тот же приём, что и у PlantSystem: seed мира + номер
+    // тика (+ своя соль, чтобы поток случайности не совпадал с посевным). ---
+    if (totalEroded > 0.0f) {
+        const auto worldSeed = static_cast<std::uint64_t>(worldProperties.plantRandomSeed);
+        const std::uint64_t tick = registry.get<const TimeComponent>(world.worldEntity()).tick;
+        std::uint64_t rainState = mixSeed(worldSeed, mixSeed(tick, kSoilRainSalt));
+        const float perCell = totalEroded / static_cast<float>(kSoilRainCells);
+        for (int n = 0; n < kSoilRainCells; ++n) {
+            const float roll = randomUnit(rainState);
+            std::size_t idx = static_cast<std::size_t>(roll * static_cast<float>(cellCount));
+            if (idx >= cellCount) {
+                idx = cellCount - 1;
+            }
+            nextTerrainHeight[idx] += perCell;
+        }
     }
 
     // --- 5b. Испарение + источники: независимые правки поверх nextWaterDepth
