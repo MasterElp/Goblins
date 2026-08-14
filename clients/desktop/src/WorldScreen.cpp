@@ -1,4 +1,4 @@
-#include "SimulationScreen.hpp"
+#include "WorldScreen.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -6,7 +6,6 @@
 #include <cstring>
 #include <vector>
 
-#include <nlohmann/json.hpp>
 #include <raygui.h>
 #include <raylib.h>
 
@@ -14,27 +13,34 @@
 #include "MapTexture.hpp"
 #include "TileColors.hpp"
 
-namespace SimulationScreen {
+namespace WorldScreen {
 
 namespace {
+
 constexpr int kHudHeight = 32;
-constexpr float kMinZoom = 0.25f;
+// Нижний предел масштаба ниже, чем нужно для просто "отдалить": вписывание
+// всей карты в окно (клавиша F) на большой Области упирается именно в
+// него, и слишком высокий пол не дал бы увидеть мир целиком.
+constexpr float kMinZoom = 0.1f;
 constexpr float kMaxZoom = 4.0f;
 constexpr float kZoomStep = 1.1f;
+// Ширина панели генерации, когда она открыта. То же число, что было на
+// отдельном экране генерации — под ним подобраны ширины ползунков.
+constexpr float kPanelWidth = 460.0f;
+
 } // namespace
 
-AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std::string& configPath) {
+AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std::string& configPath,
+               SettingsPanel& panel) {
     // Персистентны между кадрами, пока это состояние активно (при
     // возврате в меню и обратно позиция прокрутки сохраняется — это
     // осознанное поведение, не забытый сброс).
     static float viewX = 0.0f;
     static float viewY = 0.0f;
-    // Масштаб и слои — заводятся один раз из config (значения с диска или
-    // умолчания ClientConfig), дальше живут как обычные static-переменные
-    // экрана; при изменении пишутся обратно в config и на диск (ниже, у
-    // каждого места, где меняются). "initialized" — не "loaded" из
-    // SettingsPanel: тут нечего перезагружать по кнопке, конфиг читается
-    // один раз за всё время жизни процесса.
+    // Масштаб, слои и открытость панели — заводятся один раз из config
+    // (значения с диска или умолчания ClientConfig), дальше живут как
+    // обычные static-переменные экрана; при изменении пишутся обратно в
+    // config и на диск (ниже, у каждого места, где меняются).
     static bool initialized = false;
     static float zoom = 1.0f;
     static bool showRockiness = true;
@@ -43,6 +49,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     static bool showMinerals = true;
     static bool showHeight = true;
     static bool showPlants = true;
+    static bool panelOpen = false;
     if (!initialized) {
         zoom = config.zoom;
         showRockiness = config.show_rockiness;
@@ -51,6 +58,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         showMinerals = config.show_minerals;
         showHeight = config.show_height;
         showPlants = config.show_plants;
+        panelOpen = config.show_generation_panel;
         initialized = true;
     }
     static bool confirmingExit = false;
@@ -62,22 +70,30 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // Карта в текстуре — тоже состояние экрана: пересобирается только
     // когда пришло новое состояние мира или переключён слой.
     static MapTexture::Cache mapCache;
+    // Вписать карту в окно по клавише F: сам пересчёт масштаба возможен
+    // только когда известен размер Области, а он приходит с сервера —
+    // поэтому нажатие запоминается здесь и отрабатывается ниже, после
+    // получения снапшота.
+    bool fitRequested = false;
 
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
-    const int viewportW = screenW;
+    // Панель генерации занимает правый край во всю высоту, карта — всё
+    // остальное. Верхняя полоса тянется только над картой, а не над
+    // панелью: панель прокручивается целиком, и полоса поверх неё съедала
+    // бы первую строку параметров.
+    const float panelX = static_cast<float>(screenW) - kPanelWidth;
+    const int viewportW = panelOpen ? std::max(1, static_cast<int>(panelX)) : screenW;
     const int viewportH = screenH - kHudHeight;
 
     const Color backgroundColor{28, 28, 32, 255};
     const Color boulderColor{70, 66, 62, 255};
     const Color hudColor{18, 18, 20, 255};
     const Color textColor{230, 230, 230, 255};
+    const Color mutedColor{150, 150, 156, 255};
     const Color cursorColor{255, 220, 90, 255};
     const Color pausedColor{220, 70, 70, 255};
 
-    // Масштаб — рантайм-множитель поверх config.tile_size (базового
-    // размера тайла), не персистится: при перезапуске клиента сбрасывается
-    // к 100%, как и позиция прокрутки.
     float tileSizeF = static_cast<float>(config.tile_size) * zoom;
 
     const float dt = GetFrameTime();
@@ -87,6 +103,12 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // меняется.
     constexpr float kScrollTilesPerSecond = 5.0f;
     const float scrollSpeedPx = kScrollTilesPerSecond * tileSizeF;
+
+    const Vector2 mouse = GetMousePosition();
+    // Колесо над панелью настроек прокручивает её саму (GuiScrollPanel), а
+    // не меняет масштаб карты — иначе одно движение колеса делало бы сразу
+    // два несвязанных действия.
+    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW);
 
     // Пока открыт диалог подтверждения выхода или диалог сохранения, мир
     // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —
@@ -103,24 +125,40 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // Зум колёсиком мыши — к точке под курсором: мировая координата под
         // курсором остаётся на месте, чтобы приближение/отдаление не
         // "убегало" в сторону.
-        const float wheel = GetMouseWheelMove();
+        const float wheel = mouseOverMap ? GetMouseWheelMove() : 0.0f;
         if (wheel != 0.0f) {
-            const Vector2 wheelMouse = GetMousePosition();
-            const float worldX = wheelMouse.x + viewX;
-            const float worldY = wheelMouse.y - kHudHeight + viewY;
+            const float worldX = mouse.x + viewX;
+            const float worldY = mouse.y - kHudHeight + viewY;
 
             const float factor = wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep;
             zoom = std::clamp(zoom * factor, kMinZoom, kMaxZoom);
             tileSizeF = static_cast<float>(config.tile_size) * zoom;
 
-            viewX = worldX * factor - wheelMouse.x;
-            viewY = worldY * factor - wheelMouse.y;
+            viewX = worldX * factor - mouse.x;
+            viewY = worldY * factor - mouse.y;
 
             // Пишем на диск на каждый "тик" колеса, а не только когда
             // прокрутка остановилась: щёлкает колесо редко относительно
             // кадров (в отличие от WASD-прокрутки, идущей каждый кадр),
             // поэтому лишней нагрузки на диск это не создаёт.
             config.zoom = zoom;
+            goblins::saveClientConfig(configPath, config);
+        }
+
+        // Вписать всю карту в окно — то, что раньше делал отдельный экран
+        // генерации (он всегда показывал мир целиком). При подборе
+        // параметров важно видеть форму рек и очертания прудов сразу, а не
+        // проматывать карту после каждой регенерации.
+        if (IsKeyPressed(KEY_F)) {
+            fitRequested = true;
+        }
+
+        // Панель генерации — сворачиваемая: 460px справа нужны, только
+        // когда параметры действительно крутят, а смотреть на идущую
+        // симуляцию удобнее во всё окно.
+        if (IsKeyPressed(KEY_G)) {
+            panelOpen = !panelOpen;
+            config.show_generation_panel = panelOpen;
             goblins::saveClientConfig(configPath, config);
         }
 
@@ -172,7 +210,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
         // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
         // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
-        // подтверждения через pause_state/world_snapshot, чтобы все
+        // подтверждения через pause_state/world_delta, чтобы все
         // подключённые клиенты видели одно и то же состояние.
         if (IsKeyPressed(KEY_P)) {
             network.sendTogglePause();
@@ -184,6 +222,24 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // меняются они только с приходом сообщения сервера.
     const auto statePtr = network.snapshot();
     const WorldState& snapshot = *statePtr;
+
+    if (snapshot.hasGeneration) {
+        panel.loadFrom(snapshot.generation);
+    }
+
+    if (fitRequested && snapshot.areaWidth > 0 && snapshot.areaHeight > 0) {
+        const float base = static_cast<float>(config.tile_size);
+        const float fitZoom = std::min(static_cast<float>(viewportW) / (snapshot.areaWidth * base),
+                                        static_cast<float>(viewportH) / (snapshot.areaHeight * base));
+        zoom = std::clamp(fitZoom, kMinZoom, kMaxZoom);
+        tileSizeF = base * zoom;
+        // Карта после вписывания меньше окна (или равна ему) — прокрутка
+        // обнуляется, иначе остался бы сдвиг от прежнего масштаба.
+        viewX = 0.0f;
+        viewY = 0.0f;
+        config.zoom = zoom;
+        goblins::saveClientConfig(configPath, config);
+    }
 
     if (snapshot.areaWidth > 0) {
         const float maxX = std::max(0.0f, static_cast<float>(snapshot.areaWidth) * tileSizeF - viewportW);
@@ -197,11 +253,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
     const int tileSize = std::max(1, static_cast<int>(std::round(tileSizeF)));
 
-    const Vector2 mouse = GetMousePosition();
     bool hasHoverTile = false;
     int hoverX = 0;
     int hoverY = 0;
-    if (snapshot.areaWidth > 0 && mouse.x >= 0 && mouse.x < viewportW && mouse.y >= kHudHeight &&
+    if (snapshot.areaWidth > 0 && mouseOverMap && mouse.x >= 0 && mouse.y >= kHudHeight &&
         mouse.y < kHudHeight + viewportH) {
         hoverX = static_cast<int>(std::floor((mouse.x + viewX) / tileSizeF));
         hoverY = static_cast<int>(std::floor((mouse.y - kHudHeight + viewY) / tileSizeF));
@@ -242,8 +297,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 screenY > viewportH + kHudHeight) {
                 continue;
             }
-            DrawRectangle(static_cast<int>(screenX) + 2, static_cast<int>(screenY) + 2, tileSize - 4, tileSize - 4,
-                          boulderColor);
+            // На сильно отдалённой карте (вписанной в окно) тайл — считанные
+            // пиксели, и отступ в 2px съел бы булыжник целиком.
+            const int inset = tileSize > 5 ? 2 : 0;
+            DrawRectangle(static_cast<int>(screenX) + inset, static_cast<int>(screenY) + inset,
+                          std::max(1, tileSize - 2 * inset), std::max(1, tileSize - 2 * inset), boulderColor);
         }
 
         // Источники воды — тег без данных (истоки рек + "родники"),
@@ -312,33 +370,67 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     }
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
-    DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   View: (%d,%d)   Zoom: %d%%   WASD-scroll  Wheel-zoom  "
-                         "1-6-layers  P-pause  C-constants  Esc-menu",
+    DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   Zoom: %d%%",
                          snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
                          static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
-                         static_cast<int>(viewX / tileSizeF), static_cast<int>(viewY / tileSizeF),
                          static_cast<int>(std::round(zoom * 100.0f))),
              10, 8, 16, textColor);
 
-    // Сохранение — состояние мира целиком на текущем тике, поверх того же
-    // файла, из которого мир загружен (а если он ещё безымянный — в
-    // новый). Сам мир при этом не останавливается: сервер сохраняет между
-    // тиками. Кнопка открывает диалог с именем вместо немедленного
-    // сохранения — так можно и сохранить под текущим именем (просто
-    // нажать Save), и сделать копию мира под новым.
-    if (confirmingExit || showSaveDialog) GuiLock();
-    const bool savePressed =
-        GuiButton(Rectangle{static_cast<float>(screenW) - 220, 2, 100, kHudHeight - 4}, "Save world");
+    // Пока открыт любой из модальных диалогов, ни кнопки полосы, ни панель
+    // настроек под ним не должны ловить клики.
+    const bool modalOpen = confirmingExit || showSaveDialog;
+    if (modalOpen) GuiLock();
+
+    // Кнопки полосы — справа налево. Пауза здесь же кнопкой, а не только
+    // клавишей P: на прежнем экране генерации Start/Stop нажимали мышью,
+    // не отрываясь от ползунков.
+    float buttonX = static_cast<float>(viewportW) - 110.0f;
+    const bool backPressed = GuiButton(Rectangle{buttonX, 2, 100, kHudHeight - 4}, "Back (Esc)");
+    buttonX -= 110.0f;
+    const bool savePressed = GuiButton(Rectangle{buttonX, 2, 100, kHudHeight - 4}, "Save world");
+    buttonX -= 130.0f;
+    const bool panelPressed =
+        GuiButton(Rectangle{buttonX, 2, 120, kHudHeight - 4}, panelOpen ? "Hide params (G)" : "Params (G)");
+    buttonX -= 80.0f;
+    const bool pausePressed = GuiButton(Rectangle{buttonX, 2, 70, kHudHeight - 4}, snapshot.paused ? "Start" : "Stop");
+
     if (savePressed) {
         std::snprintf(saveNameBuffer, sizeof(saveNameBuffer), "%s", snapshot.currentWorld.c_str());
         showSaveDialog = true;
     }
+    if (panelPressed) {
+        panelOpen = !panelOpen;
+        config.show_generation_panel = panelOpen;
+        goblins::saveClientConfig(configPath, config);
+    }
+    if (pausePressed) {
+        network.sendTogglePause();
+    }
 
-    bool backPressed = GuiButton(Rectangle{static_cast<float>(screenW) - 110, 2, 100, kHudHeight - 4}, "Back (Esc)");
-    if (confirmingExit || showSaveDialog) GuiUnlock();
+    // Панель генерации. Рисуется после карты и полосы, но до модальных
+    // диалогов: она часть экрана, а не наложение поверх него.
+    if (panelOpen) {
+        goblins::RegenerationRequest panelParams;
+        bool saveParamsRequested = false;
+        const Rectangle panelBounds{panelX, 0, kPanelWidth, static_cast<float>(screenH)};
+        if (panel.draw(panelBounds, panelParams, saveParamsRequested)) {
+            network.sendRegenerate(panelParams);
+        }
+        if (saveParamsRequested) {
+            network.sendSaveGenerationConfig(panelParams);
+        }
+    }
 
-    // Параметры тайла под курсором — по нижнему краю справа, как на
-    // экране генерации: в верхней полосе их теснят имя мира и кнопки.
+    if (modalOpen) GuiUnlock();
+
+    // Подсказка по клавишам — по нижнему краю слева, мелким приглушённым
+    // текстом: в верхней полосе её теснят имя мира и кнопки, а нужна она
+    // редко.
+    DrawText("WASD-scroll  Wheel-zoom  F-fit  1-6-layers  P-pause  G-params  C-constants  Esc-menu", 10,
+             screenH - 20, 14, mutedColor);
+
+    // Параметры тайла под курсором — по нижнему краю справа (над панелью
+    // настроек, если она открыта, места нет — поэтому от края карты).
     if (hasHoverTile) {
         const std::size_t hi = static_cast<std::size_t>(hoverY) * snapshot.areaWidth + hoverX;
         const bool hoverIsSource =
@@ -355,13 +447,13 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                            : "",
                        snapshot.humus[hi] > 0 ? TextFormat("  humus %d", snapshot.humus[hi]) : "");
         const int labelWidth = MeasureText(tileLabel.c_str(), 16);
-        DrawText(tileLabel.c_str(), screenW - labelWidth - 12, screenH - 24, 16, cursorColor);
+        DrawText(tileLabel.c_str(), viewportW - labelWidth - 12, screenH - 42, 16, cursorColor);
     }
 
     // Результат сохранения (или ошибка загрузки, если мир так и не
     // открылся) — единственное место, где клиент об этом узнаёт.
     if (hasFreshNotice(snapshot)) {
-        DrawText(snapshot.notice.c_str(), 10, screenH - 24, 16,
+        DrawText(snapshot.notice.c_str(), 10, screenH - 42, 16,
                  snapshot.noticeIsError ? Color{230, 110, 110, 255} : textColor);
     }
 
@@ -459,7 +551,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // буква "C" в имени открывала бы оверлей вместо того, чтобы набраться.
     ConstantsOverlay::update(snapshot, !showSaveDialog);
 
-    return AppScreen::Simulation;
+    return AppScreen::World;
 }
 
-} // namespace SimulationScreen
+} // namespace WorldScreen

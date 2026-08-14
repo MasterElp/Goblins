@@ -74,8 +74,7 @@ AppScreen draw(NetworkClient& network) {
     const Color errorColor{230, 110, 110, 255};
 
     DrawText("Select world", 30, 24, 28, textColor);
-    DrawText("Simulation always runs a saved world: pick one to continue, or create a new one.", 30, 60, 16,
-             mutedColor);
+    DrawText("Pick a world to open, or create a new one.", 30, 60, 16, mutedColor);
 
     // Пока открыт диалог подтверждения удаления, фон не должен реагировать
     // на клики (Back/строки списка) под ним; Esc в этом состоянии
@@ -106,21 +105,22 @@ AppScreen draw(NetworkClient& network) {
     }
 
     // Сохранённых миров нет — выбирать не из чего, поэтому сразу просим
-    // сервер сгенерировать новый (он же его и сохранит как мир с нулевым
-    // тиком) и уходим в симуляцию. Кадром позже этот экран уже не
+    // сервер сгенерировать новый и уходим на экран мира. На диск он при
+    // этом не пишется (см. StartSimulationRequest) — сохранит его игрок
+    // сам, кнопкой "Save world". Кадром позже этот экран уже не
     // рисуется, так что запрос уходит ровно один раз.
     if (snapshot.worlds.empty()) {
         DrawText("No saved worlds yet - generating a new one...", 30, screenH / 2 - 10, 20, textColor);
         network.sendStartSimulation();
-        return AppScreen::Simulation;
+        return AppScreen::World;
     }
 
     if (!pendingDelete.empty()) GuiLock();
     if (GuiButton(Rectangle{30, 92, 220, 34}, "New world")) {
         network.sendStartSimulation();
-        return AppScreen::Simulation;
+        return AppScreen::World;
     }
-    DrawText("New world uses the parameters from the World Generation screen.", 262, 102, 14, mutedColor);
+    DrawText("New world uses the current generation parameters (G on the world screen).", 262, 102, 14, mutedColor);
 
     const float listY = 140.0f;
     const float listBottom = static_cast<float>(screenH) - 50.0f;
@@ -188,7 +188,7 @@ AppScreen draw(NetworkClient& network) {
 
     if (!selected.empty()) {
         network.sendStartSimulation(selected);
-        return AppScreen::Simulation;
+        return AppScreen::World;
     }
 
     return AppScreen::WorldSelect;

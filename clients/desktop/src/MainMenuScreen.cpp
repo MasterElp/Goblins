@@ -27,13 +27,12 @@ AppScreen draw(NetworkClient& network) {
     if (GuiButton(Rectangle{x, startY, buttonWidth, buttonHeight}, "Settings")) {
         next = AppScreen::Settings;
     }
-    if (GuiButton(Rectangle{x, startY + (buttonHeight + gap), buttonWidth, buttonHeight}, "World Generation")) {
-        next = AppScreen::WorldGeneration;
-    }
-    if (GuiButton(Rectangle{x, startY + 2 * (buttonHeight + gap), buttonWidth, buttonHeight}, "Simulation")) {
-        // Симулируется всегда конкретный сохранённый мир — сначала экран
-        // выбора. Список запрашиваем сразу, чтобы он был на месте к
-        // первому же кадру нового экрана.
+    // Один пункт вместо прежних "World Generation" и "Simulation": и
+    // подбор параметров генерации, и наблюдение за симуляцией теперь на
+    // одном экране (см. AppScreen.hpp). Мир — всегда конкретный
+    // сохранённый мир, поэтому сначала экран выбора. Список запрашиваем
+    // сразу, чтобы он был на месте к первому же кадру нового экрана.
+    if (GuiButton(Rectangle{x, startY + (buttonHeight + gap), buttonWidth, buttonHeight}, "World")) {
         network.sendListWorlds();
         next = AppScreen::WorldSelect;
     }

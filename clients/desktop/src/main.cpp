@@ -6,12 +6,11 @@
 #include <raylib.h>
 
 #include "AppScreen.hpp"
-#include "GenerationScreen.hpp"
 #include "MainMenuScreen.hpp"
 #include "NetworkClient.hpp"
 #include "SettingsPanel.hpp"
 #include "SettingsScreen.hpp"
-#include "SimulationScreen.hpp"
+#include "WorldScreen.hpp"
 #include "WorldSelectScreen.hpp"
 #include "config/Config.hpp"
 #include "Version.hpp"
@@ -64,14 +63,11 @@ int main(int argc, char** argv) {
             case AppScreen::Settings:
                 screen = SettingsScreen::draw(config, configPath);
                 break;
-            case AppScreen::WorldGeneration:
-                screen = GenerationScreen::draw(network, generationPanel);
-                break;
             case AppScreen::WorldSelect:
                 screen = WorldSelectScreen::draw(network);
                 break;
-            case AppScreen::Simulation:
-                screen = SimulationScreen::draw(network, config, configPath);
+            case AppScreen::World:
+                screen = WorldScreen::draw(network, config, configPath, generationPanel);
                 break;
         }
 

@@ -21,9 +21,8 @@ add_executable(client
     src/SettingsPanel.cpp
     src/MainMenuScreen.cpp
     src/SettingsScreen.cpp
-    src/GenerationScreen.cpp
     src/WorldSelectScreen.cpp
-    src/SimulationScreen.cpp
+    src/WorldScreen.cpp
 )
 
 target_link_libraries(client PRIVATE nlohmann_json ixwebsocket shared_config raylib raygui)
