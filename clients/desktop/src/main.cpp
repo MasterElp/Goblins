@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
                 screen = WorldSelectScreen::draw(network);
                 break;
             case AppScreen::Simulation:
-                screen = SimulationScreen::draw(network, config);
+                screen = SimulationScreen::draw(network, config, configPath);
                 break;
         }
 

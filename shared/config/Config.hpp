@@ -200,9 +200,25 @@ struct ClientConfig {
     int window_width = 1280;
     int window_height = 720;
     bool fullscreen = false;
+
+    // Экран "Симуляция": какие слои почвы включены и во сколько раз
+    // увеличена карта — сохраняется между запусками клиента, как и
+    // графика выше, чтобы каждый раз не подбирать заново одно и то же
+    // (например, "минералы выключены, потому что мешают смотреть на
+    // растения"). Позиция прокрутки (viewX/viewY) НЕ сохраняется —
+    // осмысленной точкой отсчёта она была бы только для конкретного
+    // мира, а после запуска клиента мир может оказаться другим.
+    bool show_rockiness = true;
+    bool show_compaction = true;
+    bool show_moisture = true;
+    bool show_minerals = true;
+    bool show_height = true;
+    bool show_plants = true;
+    float zoom = 1.0f;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
-                                    fullscreen)
+                                    fullscreen, show_rockiness, show_compaction, show_moisture, show_minerals,
+                                    show_height, show_plants, zoom)
 
 namespace detail {
 

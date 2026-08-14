@@ -23,12 +23,19 @@ constexpr float kMaxZoom = 4.0f;
 constexpr float kZoomStep = 1.1f;
 } // namespace
 
-AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
+AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std::string& configPath) {
     // Персистентны между кадрами, пока это состояние активно (при
     // возврате в меню и обратно позиция прокрутки сохраняется — это
     // осознанное поведение, не забытый сброс).
     static float viewX = 0.0f;
     static float viewY = 0.0f;
+    // Масштаб и слои — заводятся один раз из config (значения с диска или
+    // умолчания ClientConfig), дальше живут как обычные static-переменные
+    // экрана; при изменении пишутся обратно в config и на диск (ниже, у
+    // каждого места, где меняются). "initialized" — не "loaded" из
+    // SettingsPanel: тут нечего перезагружать по кнопке, конфиг читается
+    // один раз за всё время жизни процесса.
+    static bool initialized = false;
     static float zoom = 1.0f;
     static bool showRockiness = true;
     static bool showCompaction = true;
@@ -36,6 +43,16 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
     static bool showMinerals = true;
     static bool showHeight = true;
     static bool showPlants = true;
+    if (!initialized) {
+        zoom = config.zoom;
+        showRockiness = config.show_rockiness;
+        showCompaction = config.show_compaction;
+        showMoisture = config.show_moisture;
+        showMinerals = config.show_minerals;
+        showHeight = config.show_height;
+        showPlants = config.show_plants;
+        initialized = true;
+    }
     static bool confirmingExit = false;
     // Диалог ввода имени при сохранении — открывается кнопкой "Save
     // world", буфер предзаполняется именем текущего мира (пусто, если
@@ -98,6 +115,13 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
 
             viewX = worldX * factor - wheelMouse.x;
             viewY = worldY * factor - wheelMouse.y;
+
+            // Пишем на диск на каждый "тик" колеса, а не только когда
+            // прокрутка остановилась: щёлкает колесо редко относительно
+            // кадров (в отличие от WASD-прокрутки, идущей каждый кадр),
+            // поэтому лишней нагрузки на диск это не создаёт.
+            config.zoom = zoom;
+            goblins::saveClientConfig(configPath, config);
         }
 
         // Слои почвы — каждый можно исключить из смешения цвета тайла
@@ -109,15 +133,42 @@ AppScreen draw(NetworkClient& network, const goblins::ClientConfig& config) {
         // смешения, а множитель яркости поверх готового цвета (см.
         // TileColors::applyHeightShading), поэтому переключается и
         // применяется отдельно от остальных четырёх.
-        if (IsKeyPressed(KEY_ONE)) showRockiness = !showRockiness;
-        if (IsKeyPressed(KEY_TWO)) showCompaction = !showCompaction;
-        if (IsKeyPressed(KEY_THREE)) showMoisture = !showMoisture;
-        if (IsKeyPressed(KEY_FOUR)) showMinerals = !showMinerals;
-        if (IsKeyPressed(KEY_FIVE)) showHeight = !showHeight;
+        // Каждое переключение — редкое дискретное событие (не каждый
+        // кадр, как WASD-прокрутка), поэтому сохраняем в config.json сразу,
+        // без отдельной кнопки "Сохранить" — как и масштаб выше.
+        if (IsKeyPressed(KEY_ONE)) {
+            showRockiness = !showRockiness;
+            config.show_rockiness = showRockiness;
+            goblins::saveClientConfig(configPath, config);
+        }
+        if (IsKeyPressed(KEY_TWO)) {
+            showCompaction = !showCompaction;
+            config.show_compaction = showCompaction;
+            goblins::saveClientConfig(configPath, config);
+        }
+        if (IsKeyPressed(KEY_THREE)) {
+            showMoisture = !showMoisture;
+            config.show_moisture = showMoisture;
+            goblins::saveClientConfig(configPath, config);
+        }
+        if (IsKeyPressed(KEY_FOUR)) {
+            showMinerals = !showMinerals;
+            config.show_minerals = showMinerals;
+            goblins::saveClientConfig(configPath, config);
+        }
+        if (IsKeyPressed(KEY_FIVE)) {
+            showHeight = !showHeight;
+            config.show_height = showHeight;
+            goblins::saveClientConfig(configPath, config);
+        }
         // Растения и перегной — один выключатель (KEY_SIX): перегной это
         // и есть след умершего растения, разделять их значило бы видеть
         // остатки при погашенном слое травы.
-        if (IsKeyPressed(KEY_SIX)) showPlants = !showPlants;
+        if (IsKeyPressed(KEY_SIX)) {
+            showPlants = !showPlants;
+            config.show_plants = showPlants;
+            goblins::saveClientConfig(configPath, config);
+        }
 
         // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
         // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
