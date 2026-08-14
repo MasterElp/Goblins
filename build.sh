@@ -3,18 +3,32 @@
 # зависимости от bash (Git Bash/WSL) и без вопросов политики выполнения
 # скриптов, характерных для PowerShell.
 set -e
+set -o pipefail  # иначе код возврата пайпа берётся от tee (всегда 0), и
+                  # set -e не заметит упавшую сборку внутри `{...} | tee`.
 
 CONFIG="${1:-Release}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$ROOT_DIR/build.log"
 
-echo "== Building server (config: $CONFIG) =="
-cmake -S "$ROOT_DIR" -B "$ROOT_DIR/build" -DCMAKE_BUILD_TYPE="$CONFIG"
-cmake --build "$ROOT_DIR/build" --config "$CONFIG" -j
+# При ошибке `set -e` завершает скрипт немедленно, ДО паузы в самом низу —
+# поэтому окно консоли (запуск двойным кликом) закрывалось вместе с текстом
+# ошибки, не оставляя времени прочитать её. trap на EXIT срабатывает и при
+# обычном завершении, и при падении из-за set -e, поэтому пауза теперь
+# гарантированно происходит в обоих случаях. Заодно весь вывод дублируется
+# в build.log — сообщение об ошибке не обязательно ловить взглядом именно в
+# момент, когда оно промелькнёт в консоли.
+trap 'echo ""; read -p "Нажмите Enter для выхода..."' EXIT
 
-echo ""
-echo "== Building client (config: $CONFIG) =="
-cmake -S "$ROOT_DIR/clients/desktop" -B "$ROOT_DIR/clients/desktop/build" -DCMAKE_BUILD_TYPE="$CONFIG"
-cmake --build "$ROOT_DIR/clients/desktop/build" --config "$CONFIG" -j
+{
+    echo "== Building server (config: $CONFIG) =="
+    cmake -S "$ROOT_DIR" -B "$ROOT_DIR/build" -DCMAKE_BUILD_TYPE="$CONFIG"
+    cmake --build "$ROOT_DIR/build" --config "$CONFIG" -j
 
-echo ""
-echo "Done."
+    echo ""
+    echo "== Building client (config: $CONFIG) =="
+    cmake -S "$ROOT_DIR/clients/desktop" -B "$ROOT_DIR/clients/desktop/build" -DCMAKE_BUILD_TYPE="$CONFIG"
+    cmake --build "$ROOT_DIR/clients/desktop/build" --config "$CONFIG" -j
+
+    echo ""
+    echo "Done."
+} 2>&1 | tee "$LOG_FILE"
