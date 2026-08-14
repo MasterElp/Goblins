@@ -61,6 +61,14 @@ constexpr float kWaterDisappearThreshold = 0.001f;
 // мирам оно ни разу не задавалось разным.
 constexpr float kWaterSlopeBoost = 5.0f;
 
+// Чем глубже вода в клетке, тем быстрее она утекает: добавка к скорости
+// = waterDepth * kWaterDepthBoost, независимо от уклона. Без неё глубокая
+// стоячая лужа и мелкая плёнка воды на том же уклоне растекаются с
+// одинаковой скоростью, хотя у глубокой явно больше "напора" — паводок и
+// маленький ручеёк ведут себя одинаково. Тоже форма закона, не свойство
+// конкретного мира.
+constexpr float kWaterDepthBoost = 2.0f;
+
 // На сколько глубина воды тайла уменьшается за тик просто от испарения.
 // Маленькое значение намеренно: испарение действует на КАЖДУЮ водную
 // клетку карты (их могут быть тысячи на 100x100), а источников — единицы,
@@ -260,7 +268,8 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
         const std::size_t j = static_cast<std::size_t>(bestNeighbor);
         const float diff = surface - bestNeighborSurface;
-        // Чем круче склон, тем быстрее по нему течёт. С постоянной
+        // Чем круче склон и чем глубже вода в клетке, тем быстрее по нему
+        // течёт (kWaterSlopeBoost/kWaterDepthBoost выше). С постоянной
         // скоростью, чтобы протолкнуть дальше постоянный приток, воде
         // приходилось копить у истока большой стоячий перепад (скорость
         // ограничена, значит нужен большой diff) — отсюда и "конус"
@@ -268,7 +277,8 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         // устойчивость: за тик уровни в паре в худшем случае ровно
         // сравняются, но не перехлестнутся, то есть колебаний
         // "туда-обратно" не возникает.
-        const float rate = std::min(1.0f, waterFlowRate + bestSlope * kWaterSlopeBoost);
+        const float rate =
+            std::min(1.0f, waterFlowRate + bestSlope * kWaterSlopeBoost + waterDepth[i] * kWaterDepthBoost);
         const float amount = std::min(waterDepth[i], diff * 0.5f) * rate;
         if (amount <= 0.0f) {
             continue;
