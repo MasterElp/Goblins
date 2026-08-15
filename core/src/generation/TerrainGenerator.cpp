@@ -55,6 +55,13 @@ constexpr float kMountainSharpness = 2.5f;
 // рельеф конкретного мира.
 constexpr float kRiverHeadTopFraction = 0.02f;
 
+// ...но самые вершины из этого набора выбрасываются. На пике рельеф падает
+// во все стороны сразу, поэтому и вода с него растекается во все стороны:
+// исток на макушке горы даёт не реку, а расползающееся пятно. Чуть ниже
+// вершины склон уже имеет одно направление, и река течёт в одну сторону —
+// как и положено реке.
+constexpr float kRiverHeadPeakSkipFraction = 0.005f;
+
 float normalize01(float noiseValue) {
     // FastNoiseLite возвращает примерно [-1, 1].
     return std::clamp((noiseValue + 1.0f) * 0.5f, 0.0f, 1.0f);
@@ -147,8 +154,10 @@ constexpr float kRiverBedSlope = 0.002f;
 //
 // Не параметр: это условие того, что русло вообще является руслом, а не
 // полосой разлива. Величина — заметно больше типичного перепада уровня
-// между соседними клетками потока, иначе запаса не хватает.
-constexpr float kRiverFreeboard = 1.0f;
+// между соседними клетками потока, иначе запаса не хватает: при единице
+// река местами всё равно переливалась через край там, где рельеф рядом
+// случайно проседал.
+constexpr float kRiverFreeboard = 2.0f;
 
 // Минимальная глубина впадины, чтобы считаться прудом. Порог "это вообще
 // впадина, а не численный шум Priority-Flood", а не настройка вида карты
@@ -490,13 +499,24 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
         riverHeadCells[i] = static_cast<int>(i);
     }
     {
+        const auto higher = [&](int a, int b) {
+            return elevation[static_cast<std::size_t>(a)] > elevation[static_cast<std::size_t>(b)];
+        };
         const std::size_t keep = std::max<std::size_t>(
             1, static_cast<std::size_t>(static_cast<float>(cellCount) * kRiverHeadTopFraction));
         std::nth_element(riverHeadCells.begin(), riverHeadCells.begin() + static_cast<std::ptrdiff_t>(keep),
-                          riverHeadCells.end(),
-                          [&](int a, int b) { return elevation[static_cast<std::size_t>(a)] >
-                                                      elevation[static_cast<std::size_t>(b)]; });
+                          riverHeadCells.end(), higher);
         riverHeadCells.resize(keep);
+
+        // И выбрасываем самые макушки: на пике склон падает во все стороны
+        // сразу, и вода с него растекается пятном вместо реки.
+        const std::size_t skip = std::min(
+            keep - 1, static_cast<std::size_t>(static_cast<float>(cellCount) * kRiverHeadPeakSkipFraction));
+        if (skip > 0) {
+            std::nth_element(riverHeadCells.begin(), riverHeadCells.begin() + static_cast<std::ptrdiff_t>(skip),
+                              riverHeadCells.end(), higher);
+            riverHeadCells.erase(riverHeadCells.begin(), riverHeadCells.begin() + static_cast<std::ptrdiff_t>(skip));
+        }
     }
 
     // --- 1b. Реки: пути + вырезание русла в elevation, ДО Priority-Flood ---
@@ -1020,6 +1040,7 @@ void appendTerrainConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kVoidHeight", kVoidHeight});
     out.push_back({g, "kMountainSharpness", kMountainSharpness});
     out.push_back({g, "kRiverHeadTopFraction", kRiverHeadTopFraction});
+    out.push_back({g, "kRiverHeadPeakSkipFraction", kRiverHeadPeakSkipFraction});
     out.push_back({g, "kMinPondDepth", kMinPondDepth});
     out.push_back({g, "kRiverStageDeadlineMs", static_cast<float>(kRiverStageDeadlineMs)});
     out.push_back({g, "kMaxRiverPathSamples", static_cast<float>(kMaxRiverPathSamples)});

@@ -16,9 +16,10 @@
     "seed": 959080,
     "snapshot_interval_ms": 100,
     "terrain": {
-        "hardness_height_bump": 0.6000000238418579,
         "max_erosion_depth": 1.5281691551208496,
         "minerals_average": 20.657276153564453,
+        "mountain_hardness": 0.6000000238418579,
+        "mountain_height": 29.530515670776367,
         "noise_frequency": 0.019999999552965164,
         "noise_octaves": 4,
         "pond_depth": 2.2300469875335693,
@@ -27,12 +28,11 @@
         "river_count": 2,
         "river_depth": 1.0450705289840698,
         "river_sinuosity": 0.23004694283008575,
-        "river_width": 6.913145542144775,
+        "river_width": 5.002347469329834,
         "soil_erosion_rate": 0.22652582824230194,
         "water_evaporation_rate": 0.0014084507711231709,
-        "water_flow_rate": 0.8497652411460876,
-        "water_source_count": 6,
-        "water_source_strength": 0.9530516266822815
+        "water_source_count": 10,
+        "water_source_depth": 1.0
     },
     "tick_interval_ms": 200
 }

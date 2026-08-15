@@ -50,7 +50,7 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // Чем больше, тем круче спуск от истока к краю мира; при высоте
     // порядка глубины реки рельефа фактически нет и вода расползается по
     // плоскому.
-    ops.floatRow("Mountain height", edited.terrain.mountain_height, 1.0f, 30.0f);
+    ops.floatRow("Mountain height", edited.terrain.mountain_height, 1.0f, 60.0f);
     // Насколько высота делает почву твёрдой: горы и подножия —
     // преимущественно камень и слежавшийся грунт. 0 — каменистость сама по
     // себе, от шума; 1 — почти повторяет рельеф.
