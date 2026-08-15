@@ -46,15 +46,15 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // считает их само.
     ops.floatRow("Scale (smaller = bigger shapes)", edited.terrain.noise_frequency, 0.002f, 0.2f);
     ops.intRow("Octaves (detail layers)", edited.terrain.noise_octaves, 1, 8);
+    // Высота высочайшей вершины — в тех же единицах, что глубина воды.
+    // Чем больше, тем круче спуск от истока к краю мира; при высоте
+    // порядка глубины реки рельефа фактически нет и вода расползается по
+    // плоскому.
+    ops.floatRow("Mountain height", edited.terrain.mountain_height, 1.0f, 30.0f);
     // Насколько высота делает почву твёрдой: горы и подножия —
     // преимущественно камень и слежавшийся грунт. 0 — каменистость сама по
     // себе, от шума; 1 — почти повторяет рельеф.
     ops.floatRow("Mountains are rocky", edited.terrain.mountain_hardness, 0.0f, 1.0f);
-    // Высота, выше которой лежат вечные ледники — бесконечные источники
-    // воды, и там же истоки всех рек. Выше отметки — меньше ледников и
-    // меньше разных истоков; выше высшей точки карты — ледников нет вовсе,
-    // и все реки начинаются с одной вершины.
-    ops.floatRow("Ice cap height", edited.terrain.ice_cap_height, 0.3f, 1.0f);
 
     ops.section("Rivers");
     ops.intRow("Count", edited.terrain.river_count, 0, 20);
@@ -69,9 +69,10 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     ops.floatRow("Depth", edited.terrain.pond_depth, 0.0f, 5.0f);
 
     ops.section("Springs");
-    // Сколько "родников" в случайных точках карты — плюс по одному
-    // автоматически на исток каждой реки. Сколько их — решается при
-    // генерации; насколько они сильные — уже свойство мира, ниже.
+    // Сколько "родников" в случайных точках карты — плюс ровно по одному
+    // автоматически на исток каждой реки. Именно это число и решает,
+    // зальёт ли мир водой: источник стоит постоянным столбом и отдаёт
+    // примерно свою глубину за тик, сколько бы из него ни вытекло.
     ops.intRow("Extra springs", edited.terrain.water_source_count, 0, 20);
 
     ops.section("Soil & boulders");

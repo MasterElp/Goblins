@@ -34,8 +34,8 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     goblins::TerrainParams params;
     params.noiseFrequency = config.noise_frequency;
     params.noiseOctaves = config.noise_octaves;
+    params.mountainHeight = config.mountain_height;
     params.mountainHardness = config.mountain_hardness;
-    params.iceCapHeight = config.ice_cap_height;
     params.riverCount = config.river_count;
     params.riverWidth = config.river_width;
     params.riverSinuosity = config.river_sinuosity;
@@ -158,13 +158,9 @@ void printPlantStats(const goblins::World& world) {
 // другое.
 void printGenerationStats(const goblins::GenerationStats& stats) {
     std::cout << std::fixed << std::setprecision(1);
-    std::cout << "Terrain generated in " << stats.totalMs << "ms (heightmap " << stats.heightmapMs << "ms ["
-               << stats.iceCapCells << " ice-cap cells";
-    if (stats.iceCapCells == 0) {
-        std::cout << ", none above ice_cap_height -- all rivers start from the single highest point";
-    }
-    std::cout << "], rivers " << stats.riverMs << "ms [" << stats.riversPlaced << "/" << stats.riversRequested
-               << " placed, " << stats.riverAttemptsUsed << "/" << stats.riverAttemptsMax << " attempts";
+    std::cout << "Terrain generated in " << stats.totalMs << "ms (heightmap " << stats.heightmapMs << "ms, rivers "
+               << stats.riverMs << "ms [" << stats.riversPlaced << "/" << stats.riversRequested << " placed, "
+               << stats.riverAttemptsUsed << "/" << stats.riverAttemptsMax << " attempts";
     if (stats.riverTimedOut) {
         std::cout << ", TIMED OUT -- hit kRiverStageDeadlineMs, investigate river/noise parameters";
     }
@@ -172,8 +168,8 @@ void printGenerationStats(const goblins::GenerationStats& stats) {
         std::cout << ", " << stats.riverPathsCapped << " path(s) hit sample cap";
     }
     std::cout << "], flood-fill " << stats.floodFillMs << "ms, ponds " << stats.pondMs << "ms ["
-               << stats.pondComponentsPlaced << " components], moisture " << stats.moistureMs << "ms, entities "
-               << stats.entityMs << "ms)\n";
+               << stats.pondComponentsPlaced << " components], " << stats.waterSourcesPlaced
+               << " water sources, moisture " << stats.moistureMs << "ms, entities " << stats.entityMs << "ms)\n";
     std::cout << std::defaultfloat;
     if (stats.riverTimedOut || stats.riverPathsCapped > 0) {
         std::cout << "WARNING: river generation hit a safety limit above -- this points at a real bug, please "

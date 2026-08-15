@@ -221,7 +221,7 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         if (record.contains("world_properties")) {
             parsed.hasWorldProperties = true;
             parsed.worldProperties.waterSourceDepth =
-                record["world_properties"].value("water_source_depth", 2.0f);
+                record["world_properties"].value("water_source_depth", 1.0f);
             // Умолчания — как в WorldPropertiesComponent: у мира,
             // сохранённого до появления этих полей, будут они, а не нули
             // (нулевое испарение при работающих источниках залило бы такой
