@@ -34,11 +34,14 @@ void appendHydrologyConstants(std::vector<ConstantInfo>& out);
 void appendPlantSystemConstants(std::vector<ConstantInfo>& out);
 void appendPlantGeneticsConstants(std::vector<ConstantInfo>& out);
 void appendGrassSeedingConstants(std::vector<ConstantInfo>& out);
+void appendHerbivoreSystemConstants(std::vector<ConstantInfo>& out);
+void appendHerbivoreGeneticsConstants(std::vector<ConstantInfo>& out);
+void appendHerbivoreSeedingConstants(std::vector<ConstantInfo>& out);
 
 // Все константы ядра разом, в порядке стадий игрового цикла
 // (06_GameLoop.md, п.3): генерация террейна, затем гидрология, затем
-// растения. Строится заново на каждый вызов — вызывается он раз на
-// world_init, а не в цикле.
+// растения, затем животные. Строится заново на каждый вызов — вызывается
+// он раз на world_init, а не в цикле.
 std::vector<ConstantInfo> coreConstants();
 
 } // namespace goblins

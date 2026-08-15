@@ -13,6 +13,8 @@
 
 #include "config/Config.hpp"
 #include "core/World.hpp"
+#include "core/components/DesireComponent.hpp"
+#include "core/components/HerbivoreComponent.hpp"
 #include "world/WorldSaveInfo.hpp"
 
 namespace goblins {
@@ -40,7 +42,7 @@ struct SaveWorldRequest {
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 13):
+// Протокол (версия 14):
 //   Состояние мира уходит клиенту двумя разными сообщениями, потому что
 //   оно состоит из двух разных по природе частей. Полный world_init —
 //   всё, включая то, что между регенерациями не меняется вообще
@@ -59,12 +61,12 @@ struct SaveWorldRequest {
 //      "scale": 1000,  -- делитель для целочисленных слоёв (см. ниже)
 //      "seed": N, "terrain": {...},
 //      "boulder_count": N,
-//      "plants": {...},  -- вместе с seed/terrain/boulder_count это полный
-//              RegenerationRequest: панель настроек клиента строится из
-//              этого сообщения целиком, без вкомпилированных умолчаний.
-//              Один seed на весь мир, а не три (terrain/boulder/plant) —
-//              внутри генерации он расходится по стадиям со смещением
-//              (server/main.cpp, kBoulderSeedOffset/kPlantSeedOffset)
+//      "plants": {...}, "herbivores": {...},  -- вместе с
+//              seed/terrain/boulder_count это полный RegenerationRequest:
+//              панель настроек клиента строится из этого сообщения целиком,
+//              без вкомпилированных умолчаний. Один seed на весь мир, а не
+//              по одному на стадию — внутри генерации он расходится по
+//              стадиям со смещением (core/Simulation.cpp)
 //      "constants": [{"group", "name", "value"}, ...],  -- числа, зашитые
 //              в законы мира (core/Diagnostics.hpp): не настраиваются и
 //              никогда не меняются, клиент показывает их только для
@@ -73,6 +75,14 @@ struct SaveWorldRequest {
 //      "water_sources": [{"x", "y"}, ...],  -- истоки рек + "родники"
 //              (WaterSourceComponent), тег без данных, как boulders
 //      "plant_species": [{"species": N, <черты генома>}, ...],
+//      "herbivore_species": [{"species": N, <черты генома>}, ...],
+//      "herbivores": [{"x", "y", "species", "sex", "desire", "growth"}, ...]
+//              -- второй канал состояния, рядом с тайловыми слоями: у
+//              подвижных существ нет "своей клетки", их десятки на десятки
+//              тысяч клеток, и плотный массив на всю Область ради них был
+//              бы и дороже, и лживее (на одном тайле их может стоять
+//              несколько). Поэтому — список, целиком, и в world_init, и в
+//              дельте (см. ниже)
 //      "layers": {"rockiness", "moisture", "compaction", "minerals",
 //                 "height", "water", "humus", "species", "growth"}}
 //              -- плоские массивы целых, row-major, по одному значению на
@@ -95,6 +105,11 @@ struct SaveWorldRequest {
 //              world_init). Пары "индекс тайла - новое значение", только
 //              изменившиеся клетки; слой без изменений в сообщение не
 //              попадает вовсе.
+//      Список животных ("herbivores") в дельте идёт целиком, а не
+//      изменениями: животное меняет клетку каждый шаг, и "дельта списка"
+//      описывала бы почти весь список — при десятках животных это дешевле
+//      и проще, чем ключи и сравнения по идентификаторам. Не изменился —
+//      не отправляется.
 //   Сервер -> клиент, сразу при подключении и после каждого сохранения:
 //     {"type": "world_list", "current": "имя текущего мира",
 //      "worlds": [WorldSaveInfo, ...]}  -- см. shared/world/WorldSaveInfo.hpp
@@ -273,11 +288,33 @@ private:
         // одного и того же снимка, что и дельты.
         std::vector<int> rockiness;
 
+        // Животные — не слой, а список: см. "herbivores" в описании
+        // протокола выше. Лежат в том же снимке, потому что сравниваются
+        // с отправленным ровно так же, как слои.
+        struct HerbivoreView {
+            int x = 0;
+            int y = 0;
+            int species = 0;
+            int growth = 0;   // целые проценты, как и у растений
+            Sex sex = Sex::Female;
+            Desire desire = Desire::Idle;
+
+            bool operator==(const HerbivoreView& other) const {
+                return x == other.x && y == other.y && species == other.species && growth == other.growth &&
+                       sex == other.sex && desire == other.desire;
+            }
+        };
+        std::vector<HerbivoreView> herbivores;
+
         void resize(int w, int h);
     };
 
     // Читает ECS registry в out. Только с потока GameLoop.
     void captureLayers(LayerSnapshot& out) const;
+    // Список животных в том виде, в котором он уходит клиенту. Одна
+    // функция на world_init и на дельту: список там и там целиком и
+    // одинаковый, поэтому и собирается одним местом.
+    static nlohmann::json herbivoresToJson(const std::vector<LayerSnapshot::HerbivoreView>& herbivores);
     std::string buildInitMessage(const LayerSnapshot& layers) const;
     // Возвращает пустую строку, если ничего не изменилось.
     std::string buildDeltaMessage(const LayerSnapshot& previous, const LayerSnapshot& current) const;

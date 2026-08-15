@@ -91,6 +91,17 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     // сама и занимает всё, что ей подходит.
     ops.floatRow("Initial coverage", edited.plants.grass_coverage, 0.0f, 0.4f, 3);
 
+    ops.section("Herbivores");
+    // Число видов травоядных — 1..8 (ядро обрежет к этим границам): один
+    // вид — вполне осмысленный мир, а больше восьми при общем бюджете
+    // преимуществ перестают отличаться друг от друга, да и поголовье
+    // каждого становится слишком мелким, чтобы животные находили пару.
+    ops.intRow("Species", edited.herbivores.species, 1, 8);
+    // Стартовое поголовье в штуках, а не долей карты: травоядных десятки.
+    // Дальше стадо живёт само — размножается, голодает и вымирает по
+    // законам HerbivoreSystem. Ноль — мир вовсе без животных.
+    ops.intRow("Initial head count", edited.herbivores.count, 0, 400);
+
     ops.group("WORLD PROPERTIES -- chosen here, read every tick");
 
     ops.section("Water sources");
@@ -131,6 +142,12 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     ops.floatRow("Mutation rate", edited.plants.mutation_rate, 0.0f, 0.3f, 3);
     // Сколько крупиц минералов перегной возвращает в почву за тик.
     ops.floatRow("Humus decay (per tick)", edited.plants.humus_decay_rate, 0.001f, 0.2f, 3);
+
+    ops.section("Animal life");
+    // Та же мутация, что и у растений, но своя: наследование телёнка
+    // считается по таблице черт травоядного, и настраивать их вместе
+    // значило бы связать два независимых мира одним ползунком.
+    ops.floatRow("Mutation rate", edited.herbivores.mutation_rate, 0.0f, 0.3f, 3);
 }
 
 // Только считает высоту, ничего не рисует — используется до

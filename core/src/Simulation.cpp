@@ -2,6 +2,8 @@
 
 #include "core/generation/BoulderScatter.hpp"
 #include "core/generation/GrassSeeding.hpp"
+#include "core/generation/HerbivoreSeeding.hpp"
+#include "core/systems/HerbivoreSystem.hpp"
 #include "core/systems/HydrologySystem.hpp"
 #include "core/systems/PlantSystem.hpp"
 #include "core/systems/TimeSystem.hpp"
@@ -15,6 +17,7 @@ namespace {
 // seed+4, seed+10, seed+20), чтобы стадии не столкнулись на одном числе.
 constexpr unsigned kBoulderSeedOffset = 1000;
 constexpr unsigned kPlantSeedOffset = 2000;
+constexpr unsigned kHerbivoreSeedOffset = 3000;
 
 } // namespace
 
@@ -28,10 +31,15 @@ GenerationStats generateWorld(World& world, int width, int height, const WorldGe
     //    воду булыжник не ложится.
     scatterBoulders(world, params.boulderCount, params.seed + kBoulderSeedOffset);
 
-    // 3. Заселение растительностью — последним: трава должна видеть и
-    //    водоёмы, и занятые тайлы, чтобы не сесть на воду и не занять
-    //    чужой (02_CorePrinciples.md, п.5).
+    // 3. Заселение растительностью: трава должна видеть и водоёмы, и
+    //    занятые тайлы, чтобы не сесть на воду и не занять чужой
+    //    (02_CorePrinciples.md, п.5).
     seedGrass(world, params.plants, params.seed + kPlantSeedOffset);
+
+    // 4. Появление животных — последним: травоядное выпускается туда, где
+    //    ему есть что есть, а значит трава к этому моменту должна уже
+    //    расти (02_CorePrinciples.md, п.5).
+    seedHerbivores(world, params.herbivores, params.seed + kHerbivoreSeedOffset);
 
     return stats;
 }
@@ -46,6 +54,11 @@ void addDefaultSystems(GameLoop& loop) {
     // Затем растения — по почве, уже приведённой водой в состояние этого
     // тика, а не прошлого.
     loop.addSystem(PlantSystem);
+    // И последними — животные: они ходят по уже сложившемуся миру, едят
+    // траву такой, какой она стала на этом тике, а то, что они с ней
+    // сделали (объели, вытоптали), трава увидит на следующем — системы
+    // разговаривают только состоянием компонентов (05_Entity.md, п.6).
+    loop.addSystem(HerbivoreSystem);
 }
 
 } // namespace goblins

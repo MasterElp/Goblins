@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <ixwebsocket/IXWebSocket.h>
+#include <nlohmann/json.hpp>
 
 #include "config/Config.hpp"
 #include "world/WorldSaveInfo.hpp"
@@ -63,6 +64,23 @@ struct WorldState {
     // зависит только от протокола, 07_TechStack.md, п.6), поэтому новая
     // черта появится в клиенте сама, без правок здесь.
     std::vector<std::vector<std::pair<std::string, float>>> plantSpecies;
+    // Виды травоядных — тем же способом и по той же причине.
+    std::vector<std::vector<std::pair<std::string, float>>> herbivoreSpecies;
+
+    // Травоядные — списком, а не слоем по тайлам, как всё остальное выше:
+    // они подвижны, их десятки на десятки тысяч клеток, и на одной клетке
+    // их может стоять несколько (плотный массив этого просто не выразил бы).
+    // Пол и желание приходят строками — клиент их только показывает и не
+    // должен знать, какие ещё бывают.
+    struct Herbivore {
+        int x = 0;
+        int y = 0;
+        int species = 0;
+        float growth = 0.0f;
+        std::string sex;
+        std::string desire;
+    };
+    std::vector<Herbivore> herbivores;
 
     // Параметры, которыми сгенерирован текущий мир — стартовая точка для
     // панели настроек генерации.
@@ -157,6 +175,8 @@ public:
 
 private:
     void handleMessage(const std::string& payload);
+    // Разбор списка животных: он одинаков в world_init и в world_delta.
+    void applyHerbivores(const nlohmann::json& message);
     // Опубликовать working_ как новый неизменяемый снимок. Единственное
     // место, где состояние копируется.
     void publishState();

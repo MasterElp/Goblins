@@ -11,6 +11,9 @@ std::vector<ConstantInfo> coreConstants() {
     appendGrassSeedingConstants(all);
     appendPlantGeneticsConstants(all);
     appendPlantSystemConstants(all);
+    appendHerbivoreSeedingConstants(all);
+    appendHerbivoreGeneticsConstants(all);
+    appendHerbivoreSystemConstants(all);
     return all;
 }
 
