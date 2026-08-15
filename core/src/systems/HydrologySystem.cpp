@@ -24,15 +24,11 @@ namespace {
 constexpr int kDx8[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
 constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 
-// Расстояние до соседа по каждому из восьми направлений. Нужно там, где
-// считается именно УКЛОН (падение уровня на единицу расстояния), а не
-// просто разница высот: по диагонали до соседа дальше в sqrt(2) раз, и
-// без этой поправки диагональные направления выигрывают конкуренцию за
-// сток чаще, чем должны — вода расползается характерным квадратом
-// вместо круга. Для BFS-дистанции до воды и для минералов (там всё
-// решает не уклон, а сам факт соседства) поправка не нужна.
-constexpr float kDiagonal = 1.41421356f;
-constexpr float kDist8[8] = {kDiagonal, 1.0f, kDiagonal, 1.0f, 1.0f, kDiagonal, 1.0f, kDiagonal};
+// Поправки на расстояние до диагонального соседа (прежний kDist8) здесь
+// больше нет и быть не должно: уклон в этой системе нигде не считается.
+// Вода не выбирает направление и не течёт с какой-то скоростью — она
+// встаёт на один уровень внутри "лужи" (см. шаг 5), а для уровня важно
+// только то, кто с кем граничит, а не насколько сосед далеко.
 
 // Влажность: цель — общая с генерацией функция moistureTarget
 // (core/Moisture.hpp), одна на весь проект. Здесь она не применяется
@@ -60,43 +56,14 @@ constexpr float kCompactionSoftenRate = 0.02f;
 // самого порога, — меньше, чем испаряется за 25 тиков.
 constexpr float kWaterMinDepth = 0.001f;
 
-// Насколько круче склон — тем быстрее по нему течёт: фактическая доля
-// выравнивания = waterFlowRate (свойство мира) + уклон * kWaterSlopeBoost,
-// не больше 1. Без этого слагаемого скорость всюду одинаковая, и чтобы
-// протолкнуть постоянный приток дальше по руслу, воде приходится
-// накапливать большой стоячий перепад у истока — отсюда и "конус" вокруг
-// источника вместо реки. Само число — форма закона, а не выбор конкретного
-// мира: разным мирам оно ни разу не задавалось разным.
-//
-// Слагаемого "чем глубже, тем быстрее" (прежний kWaterDepthBoost = 2.0)
-// здесь больше нет: при типичной глубине реки/пруда оно одно давало 2-6 и
-// упирало долю в потолок 1.0 ВЕЗДЕ, где есть настоящая вода. То есть и
-// waterFlowRate, и уклон переставали на что-либо влиять — ползунок Flow
-// rate был мёртвым для всего, кроме тонкой кромки. Напор глубокой воды и
-// так учтён: он весь в разнице поверхностей, от которой считается объём.
-constexpr float kWaterSlopeBoost = 5.0f;
-
-// Чем руководствуется вода, ВЫБИРАЯ соседа. Кандидатами остаются только
-// те, у кого ниже ПОВЕРХНОСТЬ (высота + своя вода): течь вверх по уровню
-// вода не может ни при каких весах, иначе пруд перестал бы выравниваться и
-// начал бы сам себя накачивать. А вот среди кандидатов решает не один лишь
-// перепад поверхности:
-//
-//   счёт = уклон поверхности
-//        + уклон ДНА * kBedSlopeWeight
-//        + kJoinWaterBonus, если у соседа уже стоит вода.
-//
-// Уклон дна с весом — это "вода идёт по руслу": промоина, уходящая вниз,
-// перетягивает воду у ровного места, даже когда по уровню оба соседа
-// почти одинаковы. Бонус за уже стоящую воду — "ручьи сливаются, а не
-// текут рядом": на плоском месте поток скорее свернёт в существующее
-// русло, чем расползётся по сухой земле новым языком.
-//
-// Оба — именно добавки к перепаду, а не замена ему: при заметной разнице
-// уровней (десятые доли) она сама всё решает, и добавки лишь разводят
-// почти равных кандидатов. Поэтому "старается", а не "всегда".
-constexpr float kBedSlopeWeight = 2.0f;
-constexpr float kJoinWaterBonus = 0.05f;
+// Сколько клеток в "луже" — сама клетка и восемь соседей. Делить сумму
+// правок надо именно на это ПОСТОЯННОЕ число, а не на то, во скольких
+// группах клетка реально участвовала: внутри одной группы сумма правок
+// равна нулю по построению (вода только перераспределяется), поэтому
+// деление на общую константу оставляет нулевой и сумму по всей карте —
+// вода не появляется и не исчезает на кромке водоёма, где число групп у
+// клеток разное.
+constexpr int kPoolCells = 9;
 
 // Сколько воды почва удерживает у себя и НЕ отдаёт течению — плёнка,
 // смачивающая грунт. Течёт только то, что выше этой глубины.
@@ -113,12 +80,15 @@ constexpr float kJoinWaterBonus = 0.05f;
 // поэтому на само течение рек и прудов не влияет.
 constexpr float kWaterRetention = 0.02f;
 
-// Доля глубины, стекающая "за край карты" за тик — но только у тайлов на
-// самой границе Области. Без этого края карты ведут себя как стенки:
-// вода, которую течение толкает наружу, просто некуда девать, и она
-// накапливается у границы. Доля (не абсолютная величина), поэтому убыль
-// сама замедляется по мере обмеления.
-constexpr float kEdgeDrainRate = 0.01f;
+// Край карты — обрыв в пустоту (kVoidHeight из HeightComponent.hpp,
+// docs/01_Cosmology.md): Область висит в космосе островом, и за её границей
+// нет ни земли, ни дна. Тайлы самой границы держатся на нулевой высоте и
+// нулевой глубине: всё, что туда натекло, за тот же тик падает вниз и в мир
+// не возвращается.
+//
+// Раньше на этом месте была доля стока (kEdgeDrainRate): край вёл себя как
+// пологий слив, вода у границы всё равно копилась, и приходилось подбирать
+// скорость. Обрыв ничего подбирать не требует — он просто край мира.
 
 // Порог влажности соседнего тайла, при котором минералы начинают
 // "вымываться" в его сторону — SoilComponent.moisture нормализована в
@@ -169,11 +139,10 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // Свойства мира, выбранные один раз при генерации — System только
     // читает, никогда не пишет (06_GameLoop.md, п.1a).
     const auto& worldProperties = world.registry().get<const WorldPropertiesComponent>(world.worldEntity());
-    const float waterSourceStrength = worldProperties.waterSourceStrength;
+    const float waterSourceDepth = worldProperties.waterSourceDepth;
     const float waterEvaporationRate = worldProperties.waterEvaporationRate;
     const int rainIntervalTicks = worldProperties.rainIntervalTicks;
     const float rainAmount = worldProperties.rainAmount;
-    const float waterFlowRate = worldProperties.waterFlowRate;
     const float soilErosionRate = worldProperties.soilErosionRate;
     const float maxErosionDepth = worldProperties.maxErosionDepth;
 
@@ -265,70 +234,66 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
     }
 
-    // --- 5. Течение + эрозия/осаждение. Три прохода по снимку, поэтому
-    // порядок обхода клеток не влияет на результат.
+    // --- 5. Течение: вода в "луже" встаёт на один уровень.
     //
-    //   5.1 намерения: каждая водная клетка выбирает ОДНОГО соседа и
-    //       считает, сколько хотела бы ему отдать;
-    //   5.2 приём: у каждого получателя входящий поток масштабируется так,
-    //       чтобы его поверхность не поднялась выше самого низкого из
-    //       отправителей;
-    //   5.3 применение: вода, эрозия и осаждение — уже по итоговым объёмам.
+    // Закон один и предельно простой: берём клетку с водой и тех её восьмерых
+    // соседей, куда вода вообще может попасть, и разливаем всю воду этой
+    // группы так, чтобы ПОВЕРХНОСТЬ (дно + вода) везде в ней стала одинаковой.
+    // Где дно ниже — глубже, где дно выше уровня — сухо. Это и есть "вода
+    // находит свой уровень"; ни направления стока, ни скорости, ни выбора
+    // одного соседа из восьми здесь больше нет.
     //
-    // Второй проход и есть главное лекарство от ряби. Раньше ограничена
-    // была только ОТДАЧА: клетка отдаёт половину разницы одному соседу —
-    // для ПАРЫ это ровно выравнивание без перелёта. Но принимать клетка
-    // может от всех восьми сразу, и каждый считал свою половину независимо
-    // по одному и тому же снимку. Локальный минимум за тик получал до
-    // восьми половин, его поверхность перелетала выше соседей, на следующем
-    // тике вода шла обратно — шахматное дрожание по всей воде. ---
+    // Сосед участвует, если у него УЖЕ есть вода (лужи сливаются) или если
+    // его ДНО ниже нашей текущей поверхности (воде есть куда пролиться).
+    // Второе условие и есть единственная дверь на сушу: подняться выше
+    // собственного уровня вода не может, поэтому берег выше кромки (при
+    // генерации русло получает берега на kRiverBankHeight выше воды) держит
+    // реку в русле сам, без запретов.
+    //
+    // Группы соседних клеток перекрываются, поэтому правка каждой клетки —
+    // сумма её правок по всем группам, делённая на постоянное kPoolCells
+    // (см. комментарий у константы: только постоянный делитель сохраняет
+    // объём воды). Внутри группы выравнивание полное, за один тик; общая
+    // же картина доходит до ровного уровня за несколько тиков — и именно
+    // это усреднение по перекрывающимся группам гасит рябь, из-за которой
+    // прежний вариант с выбором одного соседа приходилось чинить в три
+    // прохода. ---
     std::vector<float> nextWaterDepth(waterDepth);
     std::vector<float> nextTerrainHeight(terrainHeight);
 
-    const float kNoSender = std::numeric_limits<float>::infinity();
-    std::vector<int> flowTarget(cellCount, -1);
-    std::vector<float> flowAmount(cellCount, 0.0f);
-    std::vector<float> inflow(cellCount, 0.0f);
-    // Поверхность и дно самого низкого из отправителей в эту клетку —
-    // потолок и для принимаемой воды (5.2), и для осаждаемой породы (5.3).
-    std::vector<float> lowestSenderSurface(cellCount, kNoSender);
-    std::vector<float> lowestSenderBed(cellCount, kNoSender);
+    // Сумма правок глубины по всем группам, куда попала клетка (делится на
+    // kPoolCells ниже), и самое низкое ЧУЖОЕ дно среди них — потолок для
+    // размыва и осаждения в 5.1.
+    std::vector<float> depthDelta(cellCount, 0.0f);
+    std::vector<float> lowestNeighborBed(cellCount, std::numeric_limits<float>::infinity());
 
-    // --- 5.1 Намерения ---
+    // Буферы одной группы: сама клетка плюс до восьми соседей.
+    int poolCell[kPoolCells];
+    float poolBed[kPoolCells];
+    float poolMobile[kPoolCells];
+    int poolOrder[kPoolCells];
+
     for (std::size_t i = 0; i < cellCount; ++i) {
         // Течёт только вода выше удерживаемой почвой плёнки
-        // (kWaterRetention). Уровень поверхности при этом считается от
-        // ПОЛНОЙ глубины: удержанная вода никуда не делась, она просто не
-        // течёт.
-        const float mobileDepth = waterDepth[i] - kWaterRetention;
-        if (mobileDepth <= 0.0f) {
+        // (kWaterRetention): её "дном" для разлива служит верх этой плёнки,
+        // сама она остаётся на месте.
+        if (waterDepth[i] - kWaterRetention <= 0.0f) {
             continue;
         }
         const int x = static_cast<int>(i) % width;
         const int y = static_cast<int>(i) / width;
         const float surface = terrainHeight[i] + waterDepth[i];
 
-        // Направление стока. Кто вообще может принять воду, решает
-        // ПОВЕРХНОСТЬ (высота + своя вода): течь можно только туда, где
-        // она ниже — вода не поднимается сама к себе, и на этом же держится
-        // выравнивание прудов. Кого из подошедших выбрать, решает счёт
-        // (kBedSlopeWeight/kJoinWaterBonus выше): вниз по руслу и к уже
-        // стоящей воде — на плоском месте поток скорее свернёт в
-        // существующее русло, чем расползётся по сухому новым языком.
-        //
-        // Всё делится на расстояние до соседа (а не берётся сырым
-        // перепадом): иначе диагональный сосед с тем же падением
-        // выигрывает наравне с ортогональным, хотя он дальше, и вода
-        // расползается квадратом.
-        //
-        // Правило одно на любую воду — и на реку, и на пруд: "река" вообще
-        // не понятие для симуляции, это просто вода, которой есть куда
-        // стекать.
-        int bestNeighbor = -1;
-        float bestScore = 0.0f;
-        float bestSlope = 0.0f;
-        float bestNeighborSurface = surface;
-        float bestDistance = 1.0f;
+        auto addMember = [&](std::size_t k, int& count) {
+            const float held = std::min(waterDepth[k], kWaterRetention);
+            poolCell[count] = static_cast<int>(k);
+            poolBed[count] = terrainHeight[k] + held;
+            poolMobile[count] = waterDepth[k] - held;
+            ++count;
+        };
+
+        int members = 0;
+        addMember(i, members);
         for (int dir = 0; dir < 8; ++dir) {
             const int nx = x + kDx8[dir];
             const int ny = y + kDy8[dir];
@@ -336,155 +301,124 @@ void HydrologySystem(World& world, CommandQueue& commands) {
                 continue;
             }
             const std::size_t ni = index(nx, ny);
-            const float neighborSurface = terrainHeight[ni] + waterDepth[ni];
-            const float drop = surface - neighborSurface;
-            // Единственное жёсткое условие: вверх по уровню воды не течём.
-            if (drop <= 0.0f) {
-                continue;
+            if (waterDepth[ni] <= 0.0f && terrainHeight[ni] >= surface) {
+                continue; // сухо и выше нашего уровня — воде туда не подняться
             }
-            // Всё остальное — предпочтение (см. kBedSlopeWeight/
-            // kJoinWaterBonus): вниз по руслу и к уже стоящей воде.
-            const float dist = kDist8[dir];
-            const float surfaceSlope = drop / dist;
-            const float bedSlope = (terrainHeight[i] - terrainHeight[ni]) / dist;
-            const float score = surfaceSlope + bedSlope * kBedSlopeWeight +
-                                 (waterDepth[ni] > 0.0f ? kJoinWaterBonus : 0.0f);
-            // bestNeighbor < 0 — первый подошедший кандидат берётся всегда:
-            // счёт, в отличие от перепада, может быть и отрицательным (дно
-            // круто идёт вверх, а поверхность чуть ниже), и сравнение с
-            // нулём отбрасывало бы годных соседей.
-            if (bestNeighbor < 0 || score > bestScore) {
-                bestScore = score;
-                // В скорость (rate ниже) идёт именно уклон ПОВЕРХНОСТИ: это
-                // напор, который двигает воду, тогда как счёт выше — лишь
-                // способ выбрать, куда именно.
-                bestSlope = surfaceSlope;
-                bestNeighborSurface = neighborSurface;
-                bestDistance = dist;
-                bestNeighbor = static_cast<int>(ni);
+            addMember(ni, members);
+            lowestNeighborBed[i] = std::min(lowestNeighborBed[i], terrainHeight[ni]);
+            lowestNeighborBed[ni] = std::min(lowestNeighborBed[ni], terrainHeight[i]);
+        }
+        if (members < 2) {
+            continue;
+        }
+
+        // Уровень L, при котором вся подвижная вода группы разлита ровно:
+        // sum(max(0, L - дно_k)) = sum(подвижная_k). Идём по дну снизу
+        // вверх — как только пробный уровень не достаёт до следующего по
+        // высоте дна, он и есть ответ (эта клетка и все выше неё остаются
+        // сухими).
+        float volume = 0.0f;
+        for (int n = 0; n < members; ++n) {
+            volume += poolMobile[n];
+            poolOrder[n] = n;
+        }
+        for (int a = 1; a < members; ++a) { // сортировка вставками: members <= 9
+            const int key = poolOrder[a];
+            int b = a - 1;
+            while (b >= 0 && poolBed[poolOrder[b]] > poolBed[key]) {
+                poolOrder[b + 1] = poolOrder[b];
+                --b;
+            }
+            poolOrder[b + 1] = key;
+        }
+
+        float level = poolBed[poolOrder[0]];
+        float bedSum = 0.0f;
+        for (int k = 0; k < members; ++k) {
+            bedSum += poolBed[poolOrder[k]];
+            const float candidate = (volume + bedSum) / static_cast<float>(k + 1);
+            if (k + 1 == members || candidate <= poolBed[poolOrder[k + 1]]) {
+                level = candidate;
+                break;
             }
         }
 
-        if (bestNeighbor < 0) {
-            continue;
-        }
-        const std::size_t j = static_cast<std::size_t>(bestNeighbor);
-        const float diff = surface - bestNeighborSurface;
-        // Чем круче склон, тем быстрее по нему течёт (kWaterSlopeBoost
-        // выше). С постоянной скоростью, чтобы протолкнуть дальше
-        // постоянный приток, воде приходилось копить у истока большой
-        // стоячий перепад (доля ограничена, значит нужен большой diff) —
-        // отсюда и "конус" вокруг источника. Потолок 1.0 и множитель 0.5
-        // дают ровно выравнивание пары без перелёта.
-        //
-        // Делим на расстояние до соседа по той же причине, по какой на него
-        // делится уклон при выборе: диагональный сосед дальше в sqrt(2)
-        // раз. Без этого сосед выбирался по одной метрике, а объём считался
-        // по другой — диагонали переносили столько же, сколько ортогонали,
-        // и вода расползалась квадратом.
-        const float rate = std::min(1.0f, waterFlowRate + bestSlope * kWaterSlopeBoost);
-        const float amount = std::min(mobileDepth, diff * 0.5f) * rate / bestDistance;
-        if (amount <= 0.0f) {
-            continue;
-        }
-
-        flowTarget[i] = bestNeighbor;
-        flowAmount[i] = amount;
-        inflow[j] += amount;
-        lowestSenderSurface[j] = std::min(lowestSenderSurface[j], surface);
-        lowestSenderBed[j] = std::min(lowestSenderBed[j], terrainHeight[i]);
-    }
-
-    // --- 5.2 Приём: масштаб входящего потока ---
-    // Получателю разрешено подняться максимум до поверхности САМОГО НИЗКОГО
-    // из отправителей — выше неё вода в принципе не могла бы натечь, там
-    // начался бы обратный сток. Считаем от снимка: собственный отток
-    // получателя не учитываем, то есть оцениваем запас с запасом в меньшую
-    // сторону — это и делает шаг заведомо неколебательным.
-    std::vector<float> inflowScale(cellCount, 1.0f);
-    for (std::size_t j = 0; j < cellCount; ++j) {
-        if (inflow[j] <= 0.0f) {
-            continue;
-        }
-        const float surface = terrainHeight[j] + waterDepth[j];
-        const float allowed = std::max(0.0f, lowestSenderSurface[j] - surface);
-        if (inflow[j] > allowed) {
-            inflowScale[j] = allowed / inflow[j];
+        for (int n = 0; n < members; ++n) {
+            const float target = std::max(0.0f, level - poolBed[n]);
+            depthDelta[static_cast<std::size_t>(poolCell[n])] += target - poolMobile[n];
         }
     }
 
-    // --- 5.3 Применение: вода, эрозия, осаждение ---
+    // --- 5.1 Применение: вода, эрозия, осаждение ---
+    // Итоговая правка глубины — сумма по всем группам, делённая на
+    // постоянное kPoolCells. Отсюда же берётся и "сколько воды через клетку
+    // прошло": отдала (правка < 0) или приняла (правка > 0).
+    //
     // Эрозия и осаждение — две ветки одного закона, а не разные механизмы:
-    //   дно клетки НЕ НИЖЕ соседского -> порода мешает течению, вымываем;
-    //   дно соседа НИЖЕ -> впереди углубление, туда оседает нанос.
+    //   клетка ОТДАЁТ воду, и её дно не ниже соседского -> порода мешает
+    //     течению, вымываем;
+    //   клетка ПРИНИМАЕТ воду, а рядом дно выше -> здесь углубление, туда
+    //     оседает нанос.
     // Сколько за тик суммарно вымыло, столько же и раздаётся по
-    // углублениям (ниже). Раньше вымытое возвращалось в мир иначе: оно
-    // сыпалось в восемь СЛУЧАЙНЫХ клеток карты, в том числе прямо в воду и
-    // в русло, поднимая там дно, — отсюда бугры под водой и пороги в
-    // старательно выглаженном при генерации русле.
+    // углублениям.
     float totalEroded = 0.0f;
     std::vector<float> depositCapacity(cellCount, 0.0f);
-    std::vector<bool> receivedWater(cellCount, false);
     float totalCapacity = 0.0f;
 
     for (std::size_t i = 0; i < cellCount; ++i) {
-        if (flowTarget[i] < 0) {
+        const float delta = depthDelta[i] / static_cast<float>(kPoolCells);
+        if (delta == 0.0f) {
             continue;
         }
-        const std::size_t j = static_cast<std::size_t>(flowTarget[i]);
-        const float amount = flowAmount[i] * inflowScale[j];
-        if (amount <= 0.0f) {
+        nextWaterDepth[i] += delta;
+
+        if (delta >= 0.0f || std::isinf(lowestNeighborBed[i])) {
+            continue; // приняла воду (или не с кем было делиться) — не размываем
+        }
+        // Размываем только там, где вода идёт НЕ по готовому руслу: если
+        // дно клетки уже ниже соседского, вода и так течёт туда по уклону
+        // самого рельефа, и углублять нечего.
+        if (terrainHeight[i] > lowestNeighborBed[i]) {
             continue;
         }
 
-        nextWaterDepth[i] -= amount;
-        nextWaterDepth[j] += amount;
-        // Нанос оседает только туда, куда вода этим тиком реально пришла, —
-        // намерения из 5.1 для этого мало: приём мог быть отмасштабирован в
-        // ноль (5.2), и тогда никакого потока, несущего породу, не было.
-        receivedWater[j] = true;
+        // Разная почва вымывается по-разному: каменистая и утрамбованная
+        // сопротивляются размыву, рыхлая уходит легко.
+        const float softness = (1.0f - rockiness[i]) * (1.0f - compaction[i]);
 
-        if (terrainHeight[i] <= terrainHeight[j]) {
-            // Разная почва вымывается по-разному: каменистая и
-            // утрамбованная сопротивляются размыву, рыхлая уходит легко.
-            const float softness = (1.0f - rockiness[i]) * (1.0f - compaction[i]);
+        // Потолок выемки. Без него клетка под постоянным источником
+        // размывается каждый тик без остановки — высота уезжает в минус, и
+        // появляется бездонная яма, никак не связанная с рельефом вокруг.
+        // Ограничиваем глубину относительно самого низкого соседа, с
+        // которым клетка делится водой. Считаем от снимка (terrainHeight),
+        // а не от накопителя, чтобы результат не зависел от порядка обхода
+        // клеток — как и всё остальное в этом шаге.
+        const float erosionFloor = lowestNeighborBed[i] - maxErosionDepth;
+        const float allowedErosion = std::max(0.0f, terrainHeight[i] - erosionFloor);
+        const float erosion = std::min(-delta * soilErosionRate * softness, allowedErosion);
 
-            // Потолок выемки. Без него клетка под постоянным источником
-            // размывается каждый тик без остановки — высота уезжает в
-            // минус, и появляется бездонная яма, никак не связанная с
-            // рельефом вокруг. Ограничиваем глубину относительно соседа,
-            // с которым клетка обменивается водой: ниже, чем на
-            // maxErosionDepth под ним, размыть нельзя. Считаем от снимка
-            // (terrainHeight), а не от накопителя, чтобы результат не
-            // зависел от порядка обхода клеток — как и всё остальное в
-            // этом шаге.
-            const float erosionFloor = terrainHeight[j] - maxErosionDepth;
-            const float allowedErosion = std::max(0.0f, terrainHeight[i] - erosionFloor);
-            const float erosion = std::min(amount * soilErosionRate * softness, allowedErosion);
-
-            nextTerrainHeight[i] -= erosion;
-            totalEroded += erosion;
-        }
+        nextTerrainHeight[i] -= erosion;
+        totalEroded += erosion;
     }
 
-    // Ёмкость углублений: клетку разрешено поднять максимум до дна самого
-    // низкого из отправителей — ровно "засыпать ступеньку вровень", и ни
-    // крупицей выше. Тот же приём "самый низкий отправитель", что и у воды
-    // выше: нанос не может создать новый бугор, а значит и новую рябь.
+    // Ёмкость углублений: клетку, принявшую воду, разрешено поднять
+    // максимум до дна самого низкого из её соседей — ровно "засыпать
+    // ступеньку вровень", и ни крупицей выше. Нанос не может создать новый
+    // бугор, а значит и новую рябь.
     for (std::size_t j = 0; j < cellCount; ++j) {
-        if (!receivedWater[j] || entities[j] == entt::null) {
+        if (entities[j] == entt::null || depthDelta[j] <= 0.0f || std::isinf(lowestNeighborBed[j])) {
             continue;
         }
-        const float capacity = std::max(0.0f, lowestSenderBed[j] - terrainHeight[j]);
+        const float capacity = std::max(0.0f, lowestNeighborBed[j] - terrainHeight[j]);
         depositCapacity[j] = capacity;
         totalCapacity += capacity;
     }
 
     if (totalEroded > 0.0f && totalCapacity > 0.0f) {
         // Наноса больше, чем углублений, — излишку просто некуда осесть, и
-        // он уходит с карты, как вода за край (kEdgeDrainRate ниже):
-        // Область — открытый кусок мира, а не замкнутый сосуд, и требовать
-        // от неё точного баланса почвы не за чем.
+        // он уходит с карты, как вода за край: Область — открытый кусок
+        // мира, а не замкнутый сосуд, и требовать от неё точного баланса
+        // почвы не за чем (02_CorePrinciples.md, п.12b).
         const float scale = std::min(1.0f, totalEroded / totalCapacity);
         for (std::size_t j = 0; j < cellCount; ++j) {
             if (depositCapacity[j] > 0.0f) {
@@ -498,20 +432,11 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // читают снимок (waterDepth/isWaterSource), а не друг друга и не
     // результат течения, поэтому порядок клеток не важен.
     //
-    // Все три величины — свойства мира (06_GameLoop.md, п.1a) и вместе
-    // образуют баланс воды: сколько приносят источники и дожди, столько же
-    // в равновесии должны уносить испарение и сток за край (5c ниже).
-    // waterSourceStrength — АБСОЛЮТНАЯ величина, не множитель испарения:
-    // раньше была множителем, и при маленьком испарении источник не мог
-    // угнаться за собственным оттоком через течение выше — глубина
-    // проседала почти до нуля независимо от того, насколько увеличивали
-    // "силу". ---
+    // Вместе они образуют баланс воды: сколько приносят источники и дожди,
+    // столько же в равновесии уносят испарение и провал за край (5c ниже). ---
     for (std::size_t i = 0; i < cellCount; ++i) {
         if (waterDepth[i] > 0.0f) {
             nextWaterDepth[i] -= waterEvaporationRate;
-        }
-        if (isWaterSource[i]) {
-            nextWaterDepth[i] += waterSourceStrength;
         }
     }
 
@@ -552,23 +477,26 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
     }
 
-    // --- 5c. Сток за край карты: у тайлов на самой границе Области —
-    // доля глубины уходит "за карту" независимо от испарения/течения. Без
-    // этого края ведут себя как стенки: течение толкает воду к краю, а
-    // деваться ей там некуда, и она просто копится. Доля (не абсолютная
-    // величина) — убыль сама замедляется по мере обмеления, "не быстро"
-    // получается без отдельного потолка. Уходит только подвижная вода: то,
-    // что удерживает почва (kWaterRetention), за край не утекает по той же
-    // причине, по которой не течёт к соседям. ---
+    // --- 5c. Источники и край мира — две границы Области, и обе жёстко
+    // задают состояние своих клеток, а не правят его понемногу. Поэтому
+    // они идут последними: что бы ни насчитали течение, испарение и дождь
+    // выше, здесь оно переписывается набело.
+    //
+    // Источник (ледяная шапка на вершине или родник) — столб воды
+    // постоянной глубины: сколько бы из него ни вытекло, к следующему тику
+    // он снова полон. Край карты — обрыв в пустоту (kVoidHeight,
+    // docs/01_Cosmology.md): нулевая высота, нулевая глубина, всё натёкшее
+    // падает вниз и в мир не возвращается. Край сильнее источника: родник,
+    // выпавший на самую границу, всё равно осыпается в космос. ---
     for (std::size_t i = 0; i < cellCount; ++i) {
-        const float mobileDepth = waterDepth[i] - kWaterRetention;
-        if (mobileDepth <= 0.0f) {
-            continue;
+        if (isWaterSource[i]) {
+            nextWaterDepth[i] = waterSourceDepth;
         }
         const int x = static_cast<int>(i) % width;
         const int y = static_cast<int>(i) / width;
         if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
-            nextWaterDepth[i] -= mobileDepth * kEdgeDrainRate;
+            nextTerrainHeight[i] = kVoidHeight;
+            nextWaterDepth[i] = 0.0f;
         }
     }
 
@@ -663,10 +591,8 @@ void appendHydrologyConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kCompactionSoftenRate", kCompactionSoftenRate});
     out.push_back({g, "kWaterMinDepth", kWaterMinDepth});
     out.push_back({g, "kWaterRetention", kWaterRetention});
-    out.push_back({g, "kWaterSlopeBoost", kWaterSlopeBoost});
-    out.push_back({g, "kBedSlopeWeight", kBedSlopeWeight});
-    out.push_back({g, "kJoinWaterBonus", kJoinWaterBonus});
-    out.push_back({g, "kEdgeDrainRate", kEdgeDrainRate});
+    out.push_back({g, "kPoolCells", static_cast<float>(kPoolCells)});
+    out.push_back({g, "kVoidHeight", kVoidHeight});
     out.push_back({g, "kMineralMoistureThreshold", kMineralMoistureThreshold});
     out.push_back({g, "kMineralSlopeThreshold", static_cast<float>(kMineralSlopeThreshold)});
     out.push_back({g, "kRainDurationTicks", static_cast<float>(kRainDurationTicks)});

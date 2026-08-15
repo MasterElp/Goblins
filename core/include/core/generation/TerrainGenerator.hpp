@@ -24,6 +24,12 @@ struct GenerationStats {
     // при штатных параметрах должно быть 0 (см. kMaxLateralPerStep).
     int riverPathsCapped = 0;
     int pondComponentsPlaced = 0;
+    // Сколько клеток оказалось выше ледниковой отметки
+    // (TerrainParams::iceCapHeight). Ноль — в этом мире ледников нет вовсе,
+    // и реки начинаются просто с высшей точки карты; такое возможно при
+    // сильно сглаженном рельефе и само по себе не ошибка, но в консоли это
+    // видно сразу, а не через "почему у мира один исток".
+    int iceCapCells = 0;
 
     double heightmapMs = 0.0;
     double riverMs = 0.0;

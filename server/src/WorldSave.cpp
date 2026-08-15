@@ -133,11 +133,10 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["time"] = {{"tick", time->tick}};
         }
         if (const auto* worldProperties = registry.try_get<WorldPropertiesComponent>(entity)) {
-            record["world_properties"] = {{"water_source_strength", worldProperties->waterSourceStrength},
+            record["world_properties"] = {{"water_source_depth", worldProperties->waterSourceDepth},
                                           {"water_evaporation_rate", worldProperties->waterEvaporationRate},
                                           {"rain_interval_ticks", worldProperties->rainIntervalTicks},
                                           {"rain_amount", worldProperties->rainAmount},
-                                          {"water_flow_rate", worldProperties->waterFlowRate},
                                           {"soil_erosion_rate", worldProperties->soilErosionRate},
                                           {"max_erosion_depth", worldProperties->maxErosionDepth},
                                           {"plant_mutation_rate", worldProperties->plantMutationRate},
@@ -221,8 +220,8 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         }
         if (record.contains("world_properties")) {
             parsed.hasWorldProperties = true;
-            parsed.worldProperties.waterSourceStrength =
-                record["world_properties"].value("water_source_strength", 0.05f);
+            parsed.worldProperties.waterSourceDepth =
+                record["world_properties"].value("water_source_depth", 2.0f);
             // Умолчания — как в WorldPropertiesComponent: у мира,
             // сохранённого до появления этих полей, будут они, а не нули
             // (нулевое испарение при работающих источниках залило бы такой
@@ -232,8 +231,6 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.worldProperties.rainIntervalTicks =
                 record["world_properties"].value("rain_interval_ticks", 400);
             parsed.worldProperties.rainAmount = record["world_properties"].value("rain_amount", 0.05f);
-            parsed.worldProperties.waterFlowRate =
-                record["world_properties"].value("water_flow_rate", 0.3f);
             parsed.worldProperties.soilErosionRate =
                 record["world_properties"].value("soil_erosion_rate", 0.05f);
             parsed.worldProperties.maxErosionDepth =

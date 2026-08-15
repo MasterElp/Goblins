@@ -38,15 +38,12 @@ namespace goblins {
 //                              "mineral_pending","stress"},
 //                   "genome": {"species": N, "<черта>": V, ...},
 //                   "time": {"tick": N},
-//                   "world_properties": {"mineral_moisture_threshold": T,
+//                   "world_properties": {"water_source_depth": S,
 //                                         "water_evaporation_rate": R,
-//                                         "water_source_strength": S,
-//                                         "water_flow_rate": F,
-//                                         "water_slope_boost": B,
+//                                         "rain_interval_ticks": RI,
+//                                         "rain_amount": RA,
 //                                         "soil_erosion_rate": E,
 //                                         "max_erosion_depth": D,
-//                                         "erosion_spread_rate": SP,
-//                                         "edge_drain_rate": G,
 //                                         "plant_mutation_rate": M,
 //                                         "humus_decay_rate": H,
 //                                         "plant_random_seed": P},
@@ -60,12 +57,11 @@ namespace goblins {
 // Entity, что и "time" — 06_GameLoop.md, п.1a) — свойства мира, выбранные
 // один раз при генерации и не меняющиеся во время симуляции. У старых
 // файлов без этого поля (или без отдельных полей внутри него) действуют
-// значения по умолчанию (mineral_moisture_threshold = 0.5,
-// water_evaporation_rate = 0.00004, water_source_strength = 0.05,
-// water_flow_rate = 0.3, water_slope_boost = 5,
-// soil_erosion_rate = 0.05,
-// max_erosion_depth = 0.5, erosion_spread_rate = 0.05,
-// edge_drain_rate = 0.01) — World::reset выставляет их сам.
+// значения по умолчанию (water_source_depth = 2, water_evaporation_rate =
+// 0.0002, rain_interval_ticks = 400, rain_amount = 0.05,
+// soil_erosion_rate = 0.05, max_erosion_depth = 0.5,
+// plant_mutation_rate = 0.06, humus_decay_rate = 0.02) — World::reset
+// выставляет их сам.
 //
 // "water_source" (WaterSourceComponent) — тег, как "impassable": сам
 // факт наличия и есть данные, отсутствие поля у старых файлов означает

@@ -49,9 +49,15 @@ struct TerrainConfig {
     float noise_frequency = 0.02f;
     int noise_octaves = 4;
 
-    // Насколько твёрдая земля (каменистость и утрамбованность вместе)
-    // поднимает рельеф — вода такие участки огибает.
-    float hardness_height_bump = 0.6f;
+    // Насколько высота рельефа делает почву твёрдой: горы и их подножия —
+    // преимущественно камень и слежавшийся грунт. Связь именно такая, а не
+    // обратная ("камень поднимает рельеф", как было раньше) — см.
+    // core::TerrainParams::mountainHardness.
+    float mountain_hardness = 0.6f;
+
+    // Высота, выше которой лежат вечные ледяные шапки — бесконечные
+    // источники воды, и там же истоки рек (docs/01_Cosmology.md).
+    float ice_cap_height = 0.75f;
 
     int river_count = 3;
     float river_width = 3.0f;
@@ -67,13 +73,13 @@ struct TerrainConfig {
     float minerals_average = 10.0f;
 
     // Источники воды (WaterSourceComponent): сколько "родников" в
-    // случайных точках карты (плюс автоматически — по одному на исток
-    // каждой реки). water_source_strength — абсолютный приток (глубина за
-    // тик) и свойство мира (core::WorldPropertiesComponent), не текущий
-    // параметр симуляции: генерация выбирает его один раз, во время самой
-    // симуляции он не меняется.
+    // случайных точках карты (плюс автоматически — ледяная шапка на каждой
+    // вершине выше ice_cap_height). water_source_depth — глубина СТОЛБА
+    // воды источника и свойство мира (core::WorldPropertiesComponent), не
+    // текущий параметр симуляции: источник всегда стоит на этой глубине,
+    // сколько бы из него ни вытекло.
     int water_source_count = 3;
-    float water_source_strength = 0.05f;
+    float water_source_depth = 2.0f;
 
     // Отток воды и дожди — вторая половина баланса воды, см.
     // core::TerrainParams::waterEvaporationRate.
@@ -81,21 +87,16 @@ struct TerrainConfig {
     int rain_interval_ticks = 400;
     float rain_amount = 0.05f;
 
-    // Доля разницы уровней поверхности, перетекающая к самому низкому
-    // соседу за тик на ровном месте — тоже свойство мира, см.
-    // core::TerrainParams::waterFlowRate.
-    float water_flow_rate = 0.3f;
-
     // Эрозия: скорость вымывания породы потоком и потолок выемки
     // относительно соседа — тоже свойства мира, см.
     // core::TerrainParams::soilErosionRate/maxErosionDepth.
     float soil_erosion_rate = 0.05f;
     float max_erosion_depth = 0.5f;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, noise_frequency, noise_octaves, hardness_height_bump,
-                                    river_count, river_width, river_sinuosity, river_depth, pond_depth,
-                                    minerals_average, water_source_count, water_source_strength,
-                                    water_evaporation_rate, rain_interval_ticks, rain_amount, water_flow_rate,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, noise_frequency, noise_octaves, mountain_hardness,
+                                    ice_cap_height, river_count, river_width, river_sinuosity, river_depth, pond_depth,
+                                    minerals_average, water_source_count, water_source_depth,
+                                    water_evaporation_rate, rain_interval_ticks, rain_amount,
                                     soil_erosion_rate, max_erosion_depth)
 
 // Зеркало core::PlantParams (core/generation/PlantParams.hpp) — по той же

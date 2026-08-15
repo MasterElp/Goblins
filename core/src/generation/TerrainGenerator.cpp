@@ -104,18 +104,22 @@ constexpr int kRiverAttemptMultiplier = 100;  // maxAttempts = riverCount * 100,
 constexpr float kMergeProbability = 0.5f;     // при столкновении с уже принятой рекой — шанс слиться, а не отклонить путь
 constexpr float kMergeMarginFraction = 0.15f; // не сливаемся у самого истока целевой реки (первые 15% её длины)
 
-// Минимальный уклон русла: на сколько уровень воды ГАРАНТИРОВАННО
-// понижается на каждый сэмпл пути от истока к устью. Без него русло —
-// просто траншея постоянной глубины, вырезанная в шумном рельефе: она
-// наследует все его бугры и ямы, вода из истока стекает в ближайший
-// локальный минимум внутри траншеи и стоит там, потому что "вниз по
-// руслу" физически не существует. Не параметр: это условие того, что река
-// вообще течёт, а не ручка внешнего вида.
+// Минимальное падение уровня воды на один сэмпл пути. Уклон русла считается
+// геометрически — от истока (ледник на вершине) ровно до устья (край мира,
+// kVoidHeight), поделённое на длину пути: получается плавный ровный спуск на
+// всю длину реки, а не заданная извне крутизна, которая на длинном пути
+// уводит русло далеко ниже края карты, а на коротком не успевает спуститься.
 //
-// Уклон прямо задаёт скорость течения: в HydrologySystem доля переноса
-// равна waterFlowRate + уклон * kWaterSlopeBoost. При 0.01 вклад уклона
-// был 0.05 — на фоне waterFlowRate почти незаметный, и река еле ползла.
-constexpr float kRiverBedSlope = 0.03f;
+// Эта константа — только нижняя страховка на вырожденный случай (исток
+// оказался почти на уровне устья): без неё профиль перестал бы строго
+// убывать, и вода встала бы в локальных ямах вместо того, чтобы течь.
+constexpr float kRiverBedSlope = 0.002f;
+
+// Берег: насколько земля вдоль русла поднимается НАД уровнем воды в нём.
+// Река должна течь в русле, а не растекаться вширь по первой попавшейся
+// низине рядом; вода в HydrologySystem не может подняться выше собственного
+// уровня, поэтому берег такой высоты держит её сам, без отдельных запретов.
+constexpr float kRiverBankHeight = 1.0f;
 
 // Берег: насколько уровень воды в русле идёт НИЖЕ окрестной земли.
 //
@@ -426,19 +430,45 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             rockiness[i] = normalize01(rockNoise.GetNoise(fx, fy));
             compaction[i] = normalize01(compactionNoise.GetNoise(fx, fy));
 
-            // Каменистые и утрамбованные участки физически выше — вода их
-            // естественно огибает, поэтому там река не может
-            // самостоятельно возникнуть (без ручных исключений).
-            // Каменистость и утрамбованность здесь — одно и то же
-            // свойство "твёрдая земля" (та же пара, что даёт мягкость
-            // почвы при эрозии в HydrologySystem), поэтому и подъём у них
-            // общий, а не два независимых.
-            const float baseHeight = normalize01(heightNoise.GetNoise(fx, fy));
-            const float hardness = (rockiness[i] + compaction[i]) * 0.5f;
-            elevation[i] = baseHeight + hardness * params.hardnessHeightBump;
+            // Высота — чистый рельеф, без вклада почвы. Связь между
+            // твёрдостью и высотой идёт в обратную сторону (см. ниже):
+            // это гора делает почву каменистой, а не каменистость
+            // поднимает гору.
+            elevation[i] = normalize01(heightNoise.GetNoise(fx, fy));
+
+            // Горы и их подножия — преимущественно камень и слежавшийся
+            // грунт: чем выше рельеф, тем сильнее собственный шум
+            // каменистости/утрамбованности подтягивается к самой высоте.
+            // На mountainHardness = 0 остаётся прежний независимый шум, на
+            // 1 — твёрдость почти повторяет рельеф.
+            const float lift = std::clamp(params.mountainHardness, 0.0f, 1.0f);
+            rockiness[i] = rockiness[i] * (1.0f - lift) + elevation[i] * lift;
+            compaction[i] = compaction[i] * (1.0f - lift) + elevation[i] * lift;
         }
     }
     stats.heightmapMs = elapsedMs(heightmapStart);
+
+    // --- 1a. Ледники: вершины выше params.iceCapHeight. Вечные ледяные
+    // шапки — бесконечные источники воды (docs/01_Cosmology.md), и оттуда же
+    // берёт начало каждая река: исток на горе, устье на краю мира. Раньше
+    // река шла от случайной точки на одном краю карты к случайной точке на
+    // другом — то есть текла ниоткуда в никуда и вверх по рельефу ничуть не
+    // реже, чем вниз.
+    std::vector<int> iceCapCells;
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        if (elevation[i] >= params.iceCapHeight) {
+            iceCapCells.push_back(static_cast<int>(i));
+        }
+    }
+    // Рельеф этого мира мог вообще не дотянуть до ледниковой отметки —
+    // ледников тогда нет, но рекам всё равно нужно откуда-то начинаться:
+    // берём просто самую высокую точку карты.
+    std::vector<int> riverHeadCells = iceCapCells;
+    if (riverHeadCells.empty() && cellCount > 0) {
+        riverHeadCells.push_back(static_cast<int>(
+            std::distance(elevation.begin(), std::max_element(elevation.begin(), elevation.end()))));
+    }
+    stats.iceCapCells = static_cast<int>(iceCapCells.size());
 
     // --- 1b. Реки: пути + вырезание русла в elevation, ДО Priority-Flood ---
     // Карвинг делается раньше заливки впадин, чтобы пруды и реки
@@ -464,7 +494,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     stats.riversRequested = std::max(0, params.riverCount);
     {
         std::uniform_int_distribution<int> edgeDist(0, 3);
-        std::uniform_int_distribution<int> destOffsetDist(1, 3);
+        std::uniform_int_distribution<int> headDist(0, static_cast<int>(riverHeadCells.size()) - 1);
         std::uniform_real_distribution<float> wanderDist(0.0f, kMaxWander);
         std::uniform_real_distribution<float> mergeRoll(0.0f, 1.0f);
 
@@ -483,10 +513,12 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             }
             ++attempts;
 
-            const int sourceEdge = edgeDist(riverRng);
-            const int destEdge = (sourceEdge + destOffsetDist(riverRng)) % 4;
-            const PathPoint p0 = edgePoint(sourceEdge, pickEdgeCoordinate(riverRng, edgeLength(sourceEdge, width, height)),
-                                            width, height);
+            // Исток — случайная точка ледника (или самая высокая точка
+            // карты, если ледников нет), устье — случайная точка на краю
+            // мира: река всегда течёт с горы к обрыву, а не поперёк карты.
+            const int headCell = riverHeadCells[static_cast<std::size_t>(headDist(riverRng))];
+            const PathPoint p0{static_cast<float>(headCell % width), static_cast<float>(headCell / width)};
+            const int destEdge = edgeDist(riverRng);
             const PathPoint p1 = edgePoint(destEdge, pickEdgeCoordinate(riverRng, edgeLength(destEdge, width, height)),
                                             width, height);
 
@@ -605,6 +637,15 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             continue;
         }
         surfaceProfile.assign(river.centerline.size(), 0.0f);
+        // Уклон — геометрический: весь перепад от истока до края мира,
+        // размазанный по длине пути. Река спускается плавно и приходит к
+        // устью ровно на уровень обрыва (kVoidHeight), а не проваливается
+        // намного ниже него (тогда у самого края образуется ступенька, за
+        // которой вода копится озером вместо того, чтобы падать в пустоту).
+        const std::size_t headIdx = index(river.centerline.front().x, river.centerline.front().y);
+        const float headCeiling = elevation[headIdx] - kRiverFreeboard;
+        const float steps = static_cast<float>(std::max<std::size_t>(1, river.centerline.size() - 1));
+        const float perSample = std::max(kRiverBedSlope, (headCeiling - kVoidHeight) / steps);
         for (std::size_t s = 0; s < river.centerline.size(); ++s) {
             const std::size_t centerIdx = index(river.centerline[s].x, river.centerline[s].y);
             // Земля минус запас на берег — вода нигде не стоит вровень с
@@ -613,7 +654,9 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             // берег ниже неё.
             const float ceiling =
                 std::min(elevation[centerIdx] - kRiverFreeboard, riverSurface[centerIdx]);
-            surfaceProfile[s] = s == 0 ? ceiling : std::min(ceiling, surfaceProfile[s - 1] - kRiverBedSlope);
+            const float descended = s == 0 ? ceiling : std::min(ceiling, surfaceProfile[s - 1] - perSample);
+            // Ниже края мира река не опускается: там уже пустота.
+            surfaceProfile[s] = std::max(descended, kVoidHeight);
         }
         for (const auto& [idx, cell] : river.footprint) {
             const std::size_t i = static_cast<std::size_t>(idx);
@@ -623,6 +666,35 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const float depth = params.riverDepth * cell.falloff * cell.depthMul;
             elevation[i] = std::min(elevation[i], surface - depth);
             riverSurface[i] = std::min(riverSurface[i], surface);
+        }
+    }
+
+    // Берега: земля вплотную к руслу поднимается минимум на kRiverBankHeight
+    // над уровнем воды в нём. Отдельным проходом ПОСЛЕ всех рек — иначе
+    // берег одной реки успел бы подняться поперёк русла другой, ещё не
+    // вырезанного (порядок обхода стал бы причиной, чего быть не должно —
+    // 02_CorePrinciples.md, п.12a).
+    //
+    // Без берегов русло — просто канава в шумном рельефе: рядом всегда
+    // найдётся клетка чуть ниже кромки воды, вода уходит туда с первого же
+    // тика и расползается вширь, вместо того чтобы идти по руслу.
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        if (std::isinf(riverSurface[i])) {
+            continue;
+        }
+        const int x = static_cast<int>(i) % width;
+        const int y = static_cast<int>(i) / width;
+        for (int dir = 0; dir < 8; ++dir) {
+            const int nx = x + kDx8[dir];
+            const int ny = y + kDy8[dir];
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+                continue;
+            }
+            const std::size_t ni = index(nx, ny);
+            if (!std::isinf(riverSurface[ni])) {
+                continue; // сосед — тоже русло, между водой берега не бывает
+            }
+            elevation[ni] = std::max(elevation[ni], riverSurface[i] + kRiverBankHeight);
         }
     }
     stats.riverMs = elapsedMs(riverStageStart); // путь+карвинг вместе — единая "стадия рек" для диагностики
@@ -772,31 +844,53 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
         waterDepth[i] = std::max(waterDepth[i], std::max(0.0f, riverSurface[i] - elevation[i]));
     }
 
-    // --- 4b. Источники воды: исток каждой реки — автоматически, плюс
-    // waterSourceCount "родников" в случайных точках карты. Отмечаются
-    // здесь, ДО расчёта влажности ниже, — родник на сухой земле сразу
-    // получает небольшую глубину и участвует в distanceToWater наравне с
-    // любой другой водой, а не появляется только через десятки тиков
-    // накопления инфлоу (HydrologySystem). Сам постоянный инфлоу — уже не
-    // здесь, а в HydrologySystem каждый тик (генерация лишь помечает
-    // тайл, WaterSourceComponent).
+    // --- 4b. Источники воды: ледяные шапки на всех вершинах выше
+    // params.iceCapHeight плюс waterSourceCount "родников" в случайных
+    // точках карты (docs/01_Cosmology.md). Отмечаются здесь, ДО расчёта
+    // влажности ниже, — источник сразу стоит полным столбом и участвует в
+    // distanceToWater наравне с любой другой водой, а не наливается
+    // десятки тиков.
+    //
+    // Источник — не приток известной мощности, а столб воды постоянной
+    // глубины: HydrologySystem каждый тик просто ставит его глубину
+    // обратно на params.waterSourceDepth, сколько бы из него ни вытекло.
     std::vector<bool> isWaterSource(cellCount, false);
-    for (const auto& river : acceptedRivers) {
-        if (!river.centerline.empty()) {
-            const auto& head = river.centerline.front();
-            isWaterSource[index(head.x, head.y)] = true;
-        }
+    for (int idx : iceCapCells) {
+        isWaterSource[static_cast<std::size_t>(idx)] = true;
     }
     {
         std::mt19937 sourceRng(seed + 20);
         std::uniform_int_distribution<int> xDist(0, width - 1);
         std::uniform_int_distribution<int> yDist(0, height - 1);
         for (int n = 0; n < params.waterSourceCount; ++n) {
-            const std::size_t i = index(xDist(sourceRng), yDist(sourceRng));
-            isWaterSource[i] = true;
-            if (waterDepth[i] <= 0.0f) {
-                waterDepth[i] = params.riverDepth * 0.3f;
-            }
+            isWaterSource[index(xDist(sourceRng), yDist(sourceRng))] = true;
+        }
+    }
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        if (isWaterSource[i]) {
+            waterDepth[i] = std::max(waterDepth[i], params.waterSourceDepth);
+        }
+    }
+
+    // --- 4c. Край мира: обрыв в пустоту (docs/01_Cosmology.md). Нулевая
+    // высота, никакой воды — и последним, после всех рек, прудов и
+    // источников, чтобы ни одна из этих стадий не могла оставить на самой
+    // границе ступеньку или лужу. HydrologySystem держит то же условие
+    // каждый тик.
+    for (int x = 0; x < width; ++x) {
+        for (int y : {0, height - 1}) {
+            const std::size_t i = index(x, y);
+            elevation[i] = kVoidHeight;
+            waterDepth[i] = 0.0f;
+            isWaterSource[i] = false;
+        }
+    }
+    for (int y = 0; y < height; ++y) {
+        for (int x : {0, width - 1}) {
+            const std::size_t i = index(x, y);
+            elevation[i] = kVoidHeight;
+            waterDepth[i] = 0.0f;
+            isWaterSource[i] = false;
         }
     }
 
@@ -874,11 +968,10 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // (создан в World::reset/конструкторе) — значения по умолчанию
     // просто перезаписываются выбором этой генерации.
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
-    worldProperties.waterSourceStrength = params.waterSourceStrength;
+    worldProperties.waterSourceDepth = params.waterSourceDepth;
     worldProperties.waterEvaporationRate = params.waterEvaporationRate;
     worldProperties.rainIntervalTicks = params.rainIntervalTicks;
     worldProperties.rainAmount = params.rainAmount;
-    worldProperties.waterFlowRate = params.waterFlowRate;
     worldProperties.soilErosionRate = params.soilErosionRate;
     worldProperties.maxErosionDepth = params.maxErosionDepth;
 
@@ -917,6 +1010,8 @@ void appendTerrainConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kMergeMarginFraction", kMergeMarginFraction});
     out.push_back({g, "kRiverBedSlope", kRiverBedSlope});
     out.push_back({g, "kRiverFreeboard", kRiverFreeboard});
+    out.push_back({g, "kRiverBankHeight", kRiverBankHeight});
+    out.push_back({g, "kVoidHeight", kVoidHeight});
     out.push_back({g, "kMinPondDepth", kMinPondDepth});
     out.push_back({g, "kRiverStageDeadlineMs", static_cast<float>(kRiverStageDeadlineMs)});
     out.push_back({g, "kMaxRiverPathSamples", static_cast<float>(kMaxRiverPathSamples)});

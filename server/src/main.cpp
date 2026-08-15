@@ -34,7 +34,8 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     goblins::TerrainParams params;
     params.noiseFrequency = config.noise_frequency;
     params.noiseOctaves = config.noise_octaves;
-    params.hardnessHeightBump = config.hardness_height_bump;
+    params.mountainHardness = config.mountain_hardness;
+    params.iceCapHeight = config.ice_cap_height;
     params.riverCount = config.river_count;
     params.riverWidth = config.river_width;
     params.riverSinuosity = config.river_sinuosity;
@@ -42,11 +43,10 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.pondDepth = config.pond_depth;
     params.mineralsAverage = config.minerals_average;
     params.waterSourceCount = config.water_source_count;
-    params.waterSourceStrength = config.water_source_strength;
+    params.waterSourceDepth = config.water_source_depth;
     params.waterEvaporationRate = config.water_evaporation_rate;
     params.rainIntervalTicks = config.rain_interval_ticks;
     params.rainAmount = config.rain_amount;
-    params.waterFlowRate = config.water_flow_rate;
     params.soilErosionRate = config.soil_erosion_rate;
     params.maxErosionDepth = config.max_erosion_depth;
     return params;
@@ -158,9 +158,13 @@ void printPlantStats(const goblins::World& world) {
 // другое.
 void printGenerationStats(const goblins::GenerationStats& stats) {
     std::cout << std::fixed << std::setprecision(1);
-    std::cout << "Terrain generated in " << stats.totalMs << "ms (heightmap " << stats.heightmapMs << "ms, rivers "
-               << stats.riverMs << "ms [" << stats.riversPlaced << "/" << stats.riversRequested << " placed, "
-               << stats.riverAttemptsUsed << "/" << stats.riverAttemptsMax << " attempts";
+    std::cout << "Terrain generated in " << stats.totalMs << "ms (heightmap " << stats.heightmapMs << "ms ["
+               << stats.iceCapCells << " ice-cap cells";
+    if (stats.iceCapCells == 0) {
+        std::cout << ", none above ice_cap_height -- all rivers start from the single highest point";
+    }
+    std::cout << "], rivers " << stats.riverMs << "ms [" << stats.riversPlaced << "/" << stats.riversRequested
+               << " placed, " << stats.riverAttemptsUsed << "/" << stats.riverAttemptsMax << " attempts";
     if (stats.riverTimedOut) {
         std::cout << ", TIMED OUT -- hit kRiverStageDeadlineMs, investigate river/noise parameters";
     }
