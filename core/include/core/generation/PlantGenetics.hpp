@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/Random.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 
@@ -135,17 +136,10 @@ inline constexpr float kAdvantageBudgetShare = 0.45f;
 // не уползает поколение за поколением к краю диапазона.
 inline constexpr float kSpeciesBand = 0.12f;
 
-// --- Детерминированная случайность ---
-//
-// Системы не хранят состояния между тиками (05_Entity.md, п.3), поэтому
-// PlantSystem не может держать собственный генератор: вместо этого он
-// каждый раз смешивает номер тика, координаты клетки и seed мира
-// (WorldPropertiesComponent::plantRandomSeed) в число и раскручивает
-// отсюда. Тот же приём и в генерации — один механизм на оба случая.
-std::uint64_t mixSeed(std::uint64_t a, std::uint64_t b);
-
-// Следующее случайное число в [0, 1) от состояния state (state меняется).
-float randomUnit(std::uint64_t& state);
+// Случайность (mixSeed/randomUnit) — общая для всего проекта, см.
+// core/Random.hpp: системе запрещено хранить генератор между тиками
+// (05_Entity.md, п.3), поэтому она каждый раз собирает его заново из seed
+// мира, номера тика и координат клетки.
 
 // Набор архетипов видов травы: count видов (обрезается до
 // [kMinGrassSpecies, kMaxGrassSpecies]), у каждого — свой расклад одного

@@ -3,7 +3,6 @@
 #include <random>
 
 #include "core/components/ImpassableComponent.hpp"
-#include "core/components/PositionComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 
 namespace goblins {
@@ -48,9 +47,10 @@ void scatterBoulders(World& world, int count, unsigned seed) {
         }
 
         const auto boulder = world.registry().create();
-        world.registry().emplace<PositionComponent>(boulder, PositionComponent{x, y});
+        // Непроходимость — до размещения: World читает её у самого Entity
+        // (см. World::place), а не получает флагом.
         world.registry().emplace<ImpassableComponent>(boulder);
-        world.area().place(boulder, x, y, /*impassable=*/true);
+        world.place(boulder, x, y);
 
         ++placed;
     }

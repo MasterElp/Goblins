@@ -153,10 +153,9 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
                             : grownTo;
 
         const auto entity = world.registry().create();
-        world.registry().emplace<PositionComponent>(entity, PositionComponent{x, y});
         world.registry().emplace<PlantComponent>(entity, plant);
         world.registry().emplace<PlantGenomeComponent>(entity, genome);
-        world.area().place(entity, x, y, /*impassable=*/false);
+        world.place(entity, x, y);
 
         ++planted;
     }

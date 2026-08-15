@@ -576,9 +576,6 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         }
 
         const auto entity = world.registry().create();
-        if (parsed.hasPosition) {
-            world.registry().emplace<PositionComponent>(entity, parsed.position);
-        }
         if (parsed.hasSoil) {
             world.registry().emplace<SoilComponent>(entity, parsed.soil);
             // Высота всегда идёт в паре с почвой на террейн-Entity, как и
@@ -604,8 +601,12 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         }
         if (parsed.hasPosition) {
             // Индекс размещения Area в файле не хранится — он
-            // восстанавливается из позиций, как при генерации.
-            world.area().place(entity, parsed.position.x, parsed.position.y, parsed.impassable);
+            // восстанавливается из позиций, как при генерации. Отсюда же
+            // Entity получает и сам PositionComponent: позиция и место в
+            // Area выставляются только вместе (World::place), поэтому
+            // размещение идёт последним — ImpassableComponent к этому
+            // моменту уже на месте.
+            world.place(entity, parsed.position.x, parsed.position.y);
         }
     }
 

@@ -3,7 +3,9 @@
 #include <entt/entt.hpp>
 
 #include "core/Area.hpp"
+#include "core/components/ImpassableComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
+#include "core/components/PositionComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 
@@ -56,8 +58,50 @@ public:
 
     entt::entity worldEntity() const { return worldEntity_; }
 
-    Area& area() { return area_; }
     const Area& area() const { return area_; }
+
+    // --- Размещение Entity в пространстве ---
+    //
+    // Единственный вход: и PositionComponent, и список Entity на тайле
+    // (Area) описывают одно и то же, поэтому изменяться они могут только
+    // вместе. Отсюда и то, что Area наружу отдаёт лишь чтение — по
+    // отдельности эти две стороны разъезжались бы молча (см. комментарий
+    // в Area.hpp).
+    //
+    // Непроходимость не передаётся параметром, а читается у самого Entity
+    // (ImpassableComponent): свойство принадлежит Entity, а не вызову
+    // (04_WorldModel.md, п.4), и передаваемый руками флаг мог разойтись с
+    // компонентом. Компонент, значит, добавляется ДО размещения.
+    //
+    // Проверить, свободен ли тайл (area().isBlocked), — задача
+    // вызывающего: Area не решает, кого куда можно ставить, и World тоже.
+
+    // Поставить Entity на тайл: выдаёт ему PositionComponent и
+    // регистрирует на тайле.
+    void place(entt::entity entity, int x, int y) {
+        registry_.emplace_or_replace<PositionComponent>(entity, PositionComponent{x, y});
+        area_.place(entity, x, y, registry_.all_of<ImpassableComponent>(entity));
+    }
+
+    // Перенести Entity на другой тайл. Понадобится всему, что движется;
+    // сейчас — гарантия, что снятие со старого тайла нельзя забыть.
+    void moveTo(entt::entity entity, int x, int y) {
+        if (const auto* position = registry_.try_get<PositionComponent>(entity)) {
+            area_.remove(entity, position->x, position->y);
+        }
+        place(entity, x, y);
+    }
+
+    // Убрать Entity из мира: снять с тайла и уничтожить.
+    void despawn(entt::entity entity) {
+        if (!registry_.valid(entity)) {
+            return;
+        }
+        if (const auto* position = registry_.try_get<PositionComponent>(entity)) {
+            area_.remove(entity, position->x, position->y);
+        }
+        registry_.destroy(entity);
+    }
 
 private:
     entt::registry registry_;

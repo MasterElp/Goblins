@@ -123,14 +123,25 @@ void PlantSystem(World& world, CommandQueue& commands) {
     // "тонет или нет" принимается для каждого растения отдельно, ниже.
     std::vector<float> waterAt(cellCount, 0.0f);
     std::vector<unsigned char> occupied(cellCount, 0);
+    // Почва СОСЕДНИХ клеток — именно снимком, снятым до того, как хоть
+    // одно растение начало пить и есть. Растение правит почву только своей
+    // клетки (на тайле оно одно), а вот выбирая, куда уронить семя, оно
+    // смотрит на соседей — и если смотреть на живые компоненты, то видно
+    // уже объеденную теми соседями почву, которых EnTT просто хранит
+    // раньше в памяти. Порядок хранения — деталь реализации, а не событие
+    // мира: он давал бы устойчивое преимущество одним растениям перед
+    // другими, и это было бы не случайностью, а перекосом.
+    std::vector<SoilComponent> soilAt(cellCount);
 
-    for (const auto entity : registry.view<PositionComponent, SoilComponent>()) {
-        const auto& position = registry.get<const PositionComponent>(entity);
+    auto terrainView = registry.view<PositionComponent, SoilComponent>();
+    for (const auto entity : terrainView) {
+        const auto& position = terrainView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
             continue;
         }
         const std::size_t i = index(position.x, position.y);
         terrain[i] = entity;
+        soilAt[i] = terrainView.get<SoilComponent>(entity);
         if (const auto* water = registry.try_get<const WaterComponent>(entity)) {
             waterAt[i] = water->depth;
         }
@@ -249,8 +260,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
                         break;
                     }
                 }
-                w.area().remove(entity, x, y);
-                w.registry().destroy(entity);
+                w.despawn(entity);
             });
             continue;
         }
@@ -263,10 +273,12 @@ void PlantSystem(World& world, CommandQueue& commands) {
 
         // Случайность собирается из seed мира, номера тика и координат
         // клетки: система не хранит генератор между тиками (05_Entity.md,
-        // п.3), а результат при этом воспроизводим и не зависит от порядка
-        // обхода Entity. Координаты, а не идентификатор Entity, потому что
-        // при загрузке мира идентификаторы выдаются заново, а координаты —
-        // те же.
+        // п.3), а исход не зависит от порядка обхода Entity. Второе — не
+        // про повторяемость прогонов (мир недетерминирован,
+        // 02_CorePrinciples.md, п.12a), а про то, что место в памяти не
+        // должно быть причиной события в мире. Координаты, а не
+        // идентификатор Entity, потому что при загрузке мира
+        // идентификаторы выдаются заново, а координаты — те же.
         std::uint64_t random = mixSeed(plantSeed, mixSeed(tick, static_cast<std::uint64_t>(i)));
         if (randomUnit(random) >= genome.seedChance * plant.growth) {
             continue;
@@ -285,8 +297,8 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // (у потомка он уже свой, слегка отличный от родительского).
         // Выбор — рулеткой по пригодности: чаще, но не всегда, семя
         // ложится в лучшую из соседних клеток, поэтому луг сам ползёт в
-        // сторону подходящей почвы, но не превращается в строгий
-        // детерминированный фронт.
+        // сторону подходящей почвы, но не превращается в ровный
+        // наступающий фронт.
         std::size_t candidates[8];
         float weights[8];
         int candidateCount = 0;
@@ -304,7 +316,10 @@ void PlantSystem(World& world, CommandQueue& commands) {
                 world.area().isBlocked(nx, ny)) {
                 continue;
             }
-            const auto& targetSoil = registry.get<const SoilComponent>(terrain[j]);
+            // Почва соседа — из снимка начала тика (см. soilAt выше), а
+            // не живая: иначе увиденное зависело бы от того, кого EnTT
+            // хранит раньше.
+            const auto& targetSoil = soilAt[j];
             if (targetSoil.minerals <= 0) {
                 continue; // расти не на чем: своей крупицы семечку хватит лишь на первые проценты роста
             }
@@ -390,10 +405,11 @@ void PlantSystem(World& world, CommandQueue& commands) {
                 }
             }
             if (blocked) {
-                // Семя не проросло — но крупица минералов, которую отдал
-                // ему родитель, не должна пропасть из мира: она остаётся
-                // в почве той клетки, куда семя упало (минералы только
-                // ходят по кругу, см. заголовок системы).
+                // Семя не проросло — крупица минералов, которую отдал
+                // ему родитель, остаётся в почве той клетки, куда семя
+                // упало. Не потому, что вещество обязано сохраняться (мир
+                // открыт, 02_CorePrinciples.md, п.12b), а потому, что
+                // упавшему семени просто некуда деться, кроме земли.
                 for (const auto tile : w.area().cellAt(targetX, targetY).entities) {
                     if (auto* soilComponent = w.registry().try_get<SoilComponent>(tile)) {
                         soilComponent->minerals += seedling.minerals;
@@ -404,10 +420,9 @@ void PlantSystem(World& world, CommandQueue& commands) {
             }
 
             const auto entity = w.registry().create();
-            w.registry().emplace<PositionComponent>(entity, PositionComponent{targetX, targetY});
             w.registry().emplace<PlantComponent>(entity, seedling);
             w.registry().emplace<PlantGenomeComponent>(entity, child);
-            w.area().place(entity, targetX, targetY, /*impassable=*/false);
+            w.place(entity, targetX, targetY);
         });
     }
 

@@ -79,12 +79,17 @@ struct GenerationStats {
 //      Постоянная подпитка этих тайлов и испарение воды со всех
 //      водных тайлов — тоже не здесь, а в HydrologySystem каждый тик.
 //   7. Свойства мира (WorldPropertiesComponent на World Entity,
-//      06_GameLoop.md, п.1a) — выбираются здесь один раз (например,
-//      mineralMoistureThreshold, waterEvaporationRate) и дальше не
-//      меняются System-ами.
+//      06_GameLoop.md, п.1a) — выбираются здесь один раз (сила
+//      источников, испарение, дожди, скорость течения и эрозии) и дальше
+//      не меняются System-ами.
 //
-// Все числовые пороги и коэффициенты — в params (TerrainParams.hpp), ни
-// одного зашитого значения внутри .cpp.
+// В params (TerrainParams.hpp) — только те числа, которые меняют видимый
+// результат и которые осмысленно крутить от мира к миру. Всё остальное —
+// форма самих законов (параметры fBm, уклон дна русла, пороги) — живёт
+// константами в .cpp рядом с местом использования и не тянется через
+// конфигурацию, сеть и файл сохранения ради того, чтобы никогда не быть
+// изменённым (06_GameLoop.md, п.1a). Увидеть их можно в оверлее клиента —
+// см. core/Diagnostics.hpp и appendTerrainConstants в конце .cpp.
 //
 // Создаёт один терраформирующий Entity на тайл: PositionComponent +
 // SoilComponent + HeightComponent, и WaterComponent/WaterSourceComponent —

@@ -33,17 +33,6 @@ constexpr int kSpeciesAttempts = 200;
 
 using Allocation = std::array<float, kGrassTraitCount>;
 
-std::uint64_t nextState(std::uint64_t& state) {
-    // splitmix64: дешёвый и без состояния между вызовами, кроме самого
-    // state — ровно то, что нужно системе, которой запрещено хранить
-    // состояние между тиками (05_Entity.md, п.3).
-    state += 0x9E3779B97F4A7C15ull;
-    std::uint64_t z = state;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-    return z ^ (z >> 31);
-}
-
 // Случайная величина, распределённая как Gamma(2): даёт неравномерный, но
 // и не вырожденный расклад бюджета — обычно у вида два-три конька и
 // несколько слабых мест, а не "всё поровну" (как дало бы равномерное) и
@@ -123,16 +112,6 @@ float speciesDistance(const Allocation& a, const Allocation& b) {
 }
 
 } // namespace
-
-std::uint64_t mixSeed(std::uint64_t a, std::uint64_t b) {
-    std::uint64_t state = a ^ (b * 0x9E3779B97F4A7C15ull);
-    return nextState(state);
-}
-
-float randomUnit(std::uint64_t& state) {
-    // 24 старших бита -> [0, 1): float всё равно не различает больше.
-    return static_cast<float>(nextState(state) >> 40) * (1.0f / 16777216.0f);
-}
 
 std::vector<PlantGenomeComponent> makeGrassSpecies(int count, std::uint64_t seed) {
     count = std::clamp(count, kMinGrassSpecies, kMaxGrassSpecies);

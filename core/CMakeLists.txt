@@ -1,5 +1,6 @@
 add_library(core STATIC
     src/Diagnostics.cpp
+    src/Simulation.cpp
     src/systems/TimeSystem.cpp
     src/systems/HydrologySystem.cpp
     src/systems/PlantSystem.cpp

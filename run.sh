@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linux/macOS. На Windows используй run.bat.
+# Запуск сервера и клиента. На Windows — из Git Bash или WSL.
 set -e
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

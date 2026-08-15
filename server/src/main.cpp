@@ -9,6 +9,7 @@
 
 #include "config/Config.hpp"
 #include "core/GameLoop.hpp"
+#include "core/Simulation.hpp"
 #include "core/World.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
@@ -18,31 +19,13 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/WaterComponent.hpp"
-#include "core/generation/BoulderScatter.hpp"
-#include "core/generation/GrassSeeding.hpp"
 #include "core/generation/PlantGenetics.hpp"
-#include "core/generation/TerrainGenerator.hpp"
-#include "core/systems/HydrologySystem.hpp"
-#include "core/systems/PlantSystem.hpp"
-#include "core/systems/TimeSystem.hpp"
 #include "server/ConsoleHotkeyWatcher.hpp"
 #include "server/NetworkServer.hpp"
 #include "server/WorldSave.hpp"
 #include "Version.hpp"
 
 namespace {
-
-// Один seed на весь мир (RegenerationRequest::seed) расходится по стадиям
-// генерации со смещением на константу — так террейн, булыжники и трава не
-// получают буквально одно и то же число (иначе разные миры с "непохожими"
-// seed'ами террейна могли бы давать подозрительно похожую расстановку
-// камней или травы, если seed различался только в младших битах). Само
-// смещение никакого смысла не несёт, кроме "не совпадать" — держим его
-// подальше от внутренних смещений generateTerrain (seed, seed+1, seed+2,
-// seed+4, seed+10, seed+20), чтобы разные стадии генерации точно не
-// столкнулись на одном и том же числе.
-constexpr unsigned kBoulderSeedOffset = 1000;
-constexpr unsigned kPlantSeedOffset = 2000;
 
 // core не знает о JSON/конфигурации (07_TechStack.md, п.6), поэтому
 // именно server переносит значения из ServerConfig::TerrainConfig в
@@ -80,22 +63,17 @@ goblins::PlantParams toPlantParams(const goblins::PlantConfig& config) {
     return params;
 }
 
-// Генерация мира с нуля: полный сброс (World::reset — пустой registry,
-// свежая Область заданного размера, нулевой тик), затем почва/вода,
-// булыжники и трава. Один и тот же путь и для нового мира из меню, и для
-// Regenerate на экране генерации — сгенерированный мир всегда начинается
-// с тика 0, каким бы ни был предыдущий.
-goblins::GenerationStats generateWorld(goblins::World& world, const goblins::AreaSize& area,
-                                        const goblins::RegenerationRequest& request) {
-    world.reset(area.width, area.height);
-    const auto stats = generateTerrain(world, request.seed, toTerrainParams(request.terrain));
-    scatterBoulders(world, request.boulder_count, request.seed + kBoulderSeedOffset);
-    // Заселение растительностью — следующий этап генерации
-    // (02_CorePrinciples.md, п.5), и он именно последний: трава должна
-    // видеть уже готовые водоёмы и уже расставленные непроходимые
-    // объекты, чтобы не сесть на воду и не занять чужой тайл.
-    seedGrass(world, toPlantParams(request.plants), request.seed + kPlantSeedOffset);
-    return stats;
+// Перенос запроса на генерацию (JSON-структура сервера) в параметры мира
+// (core). Сам конвейер генерации — этапы и их порядок — живёт в core
+// (core::generateWorld, 02_CorePrinciples.md, п.5): это закон мира, а не
+// решение транспортного слоя. Здесь остаётся только перекладывание полей.
+goblins::WorldGenParams toWorldGenParams(const goblins::RegenerationRequest& request) {
+    goblins::WorldGenParams params;
+    params.seed = request.seed;
+    params.terrain = toTerrainParams(request.terrain);
+    params.boulderCount = request.boulder_count;
+    params.plants = toPlantParams(request.plants);
+    return params;
 }
 
 // Мир, в котором нет ни одного размещённого Entity — это мир до первой
@@ -267,9 +245,10 @@ int main(int argc, char** argv) {
     bool tickLoggingEnabled = true;
     constexpr std::uint64_t kTickLogInterval = 10;
 
-    loop.addSystem(goblins::TimeSystem);
-    loop.addSystem(goblins::HydrologySystem);
-    loop.addSystem(goblins::PlantSystem);
+    // Законы мира и их порядок — в core (core::addDefaultSystems),
+    // не здесь: сервер запускает мир, а не решает, по каким правилам тот
+    // живёт.
+    goblins::addDefaultSystems(loop);
     loop.onTickComplete = [&](const goblins::World& w) {
         const auto& time = w.registry().get<const goblins::TimeComponent>(w.worldEntity());
         if (tickLoggingEnabled && time.tick % kTickLogInterval == 0) {
@@ -337,7 +316,8 @@ int main(int argc, char** argv) {
                 // гарантирует сброс буфера, если stdout не line-buffered
                 // (например, при перенаправлении в файл).
                 std::cout << "Creating a new world (seed=" << request.seed << ")...\n" << std::flush;
-                const auto genStats = generateWorld(world, config.area, request);
+                const auto genStats =
+                    goblins::generateWorld(world, config.area.width, config.area.height, toWorldGenParams(request));
                 printGenerationStats(genStats);
                 printWorldStats(world, request.boulder_count);
                 printPlantStats(world);
@@ -428,7 +408,8 @@ int main(int argc, char** argv) {
             // параметрами запроса всё равно попадёт в консоль и укажет,
             // что именно регенерировалось перед зависанием.
             std::cout << "Regenerating (seed=" << request->seed << ")...\n" << std::flush;
-            const auto genStats = generateWorld(world, config.area, *request);
+            const auto genStats =
+                goblins::generateWorld(world, config.area.width, config.area.height, toWorldGenParams(*request));
 
             network.setCurrentGenerationConfig(*request);
             // Перегенерированный мир — уже не тот, что лежит в файле, из

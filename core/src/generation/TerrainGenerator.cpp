@@ -855,7 +855,6 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
                 std::max(0, static_cast<int>(std::lround(mineralsNoise01 * params.mineralsAverage * 2.0f)));
 
             const auto entity = world.registry().create();
-            world.registry().emplace<PositionComponent>(entity, PositionComponent{x, y});
             world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, rockiness[i], compaction[i], minerals});
             world.registry().emplace<HeightComponent>(entity, HeightComponent{elevation[i]});
             if (waterDepth[i] > 0.0f) {
@@ -864,7 +863,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             if (isWaterSource[i]) {
                 world.registry().emplace<WaterSourceComponent>(entity);
             }
-            world.area().place(entity, x, y, /*impassable=*/false);
+            world.place(entity, x, y);
         }
     }
     stats.entityMs = elapsedMs(entityStart);
