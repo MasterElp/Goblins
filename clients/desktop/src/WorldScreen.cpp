@@ -558,16 +558,35 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         const bool hoverIsSource =
             std::any_of(snapshot.waterSources.begin(), snapshot.waterSources.end(),
                         [&](const auto& s) { return s.first == hoverX && s.second == hoverY; });
-        const std::string tileLabel =
-            TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d%s%s%s%s", hoverX, hoverY,
-                       snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi], snapshot.minerals[hi],
-                       snapshot.waterDepth[hi] > 0.0f ? TextFormat("  water %.2f", snapshot.waterDepth[hi]) : "",
-                       hoverIsSource ? "  [source]" : "",
-                       snapshot.plantSpeciesAt[hi] >= 0
-                           ? TextFormat("  grass sp%d %.0f%%", snapshot.plantSpeciesAt[hi],
-                                        snapshot.plantGrowth[hi] * 100.0f)
-                           : "",
-                       snapshot.humus[hi] > 0 ? TextFormat("  humus %d", snapshot.humus[hi]) : "");
+        // Подпись собирается по кускам, а не одним TextFormat со вложенными
+        // TextFormat внутри: у raylib на все вызовы всего четыре
+        // прокручиваемых буфера (MAX_TEXTFORMAT_BUFFERS), и пятый
+        // вложенный вызов затёр бы строку, которую внешний ещё не
+        // прочитал. Здесь результат каждого вызова копируется в строку
+        // сразу же, поэтому необязательных кусков может быть сколько
+        // угодно.
+        std::string tileLabel = TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d", hoverX, hoverY,
+                                            snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi],
+                                            snapshot.minerals[hi]);
+        if (snapshot.waterDepth[hi] > 0.0f) {
+            tileLabel += TextFormat("  water %.2f", snapshot.waterDepth[hi]);
+        }
+        if (hoverIsSource) {
+            tileLabel += "  [source]";
+        }
+        if (snapshot.plantSpeciesAt[hi] >= 0) {
+            tileLabel +=
+                TextFormat("  grass sp%d %.0f%%", snapshot.plantSpeciesAt[hi], snapshot.plantGrowth[hi] * 100.0f);
+        }
+        // Семя — отдельной пометкой, а не вместо травы: под стоящим
+        // растением обычно лежит его же семя, и клетка одинаково честно и
+        // занята, и засеяна.
+        if (snapshot.seedSpeciesAt[hi] >= 0) {
+            tileLabel += TextFormat("  seed sp%d", snapshot.seedSpeciesAt[hi]);
+        }
+        if (snapshot.humus[hi] > 0) {
+            tileLabel += TextFormat("  humus %d", snapshot.humus[hi]);
+        }
         const int labelWidth = MeasureText(tileLabel.c_str(), 16);
         DrawText(tileLabel.c_str(), viewportW - labelWidth - 12, bottomInfoY, 16, cursorColor);
 

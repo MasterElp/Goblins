@@ -276,6 +276,9 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // Развитость приходит целыми процентами — внутри клиента удобнее
         // долей 0..1, как и остальные слои.
         working_.plantGrowth = decodeScaled(layers, "growth", cellCount, 0.01f);
+        // Семена — тем же способом, что и растения: -1 значит "семени в
+        // клетке нет".
+        working_.seedSpeciesAt = decodeInts(layers, "seeds", cellCount, -1);
 
         if (json.contains("plant_species")) {
             working_.plantSpecies.clear();
@@ -364,6 +367,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "minerals", working_.minerals, [](int raw) { return raw; });
         applyChangedCells(json, "humus", working_.humus, [](int raw) { return raw; });
         applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
+        applyChangedCells(json, "seeds", working_.seedSpeciesAt, [](int raw) { return raw; });
         // Стадо приходит целиком и только когда сдвинулось (см. протокол в
         // server/NetworkServer.hpp), поэтому не накладывается по клеткам, а
         // заменяет прежний список.

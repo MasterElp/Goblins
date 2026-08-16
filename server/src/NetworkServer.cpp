@@ -19,6 +19,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/SeedComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -88,8 +89,12 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     growth.assign(count, 0);
     rockiness.assign(count, 0);
     // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
-    // массиве выражается значением-заглушкой.
+    // массиве выражается значением-заглушкой. Семена — отдельным слоем и
+    // тем же способом: семя лежит в той же клетке, где стоит растение
+    // (обычно его родитель), и одним слоем эти два состояния клетки
+    // выразить нельзя.
     species.assign(count, -1);
+    seeds.assign(count, -1);
     // Животные — список, а не слой (см. NetworkServer.hpp): он собирается
     // заново на каждый снимок, поэтому здесь только очищается.
     herbivores.clear();
@@ -268,6 +273,14 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
             out.growth[i] = growthPercent(plant.growth);
         });
 
+    // Семена (SeedComponent) — вид того, что из семени вырастет, или -1.
+    // Возраст и срок покоя по сети не идут: клиенту нужно знать, что в
+    // клетке лежит семя, а не сколько ему осталось спать.
+    registry.view<const PositionComponent, const SeedComponent, const PlantGenomeComponent>().each(
+        [&](const PositionComponent& pos, const SeedComponent& /*seed*/, const PlantGenomeComponent& genome) {
+            out.seeds[static_cast<std::size_t>(pos.y) * width + pos.x] = genome.species;
+        });
+
     // Животные — разреженным списком, а не слоем: на одной клетке их может
     // стоять несколько, и плотный массив по определению не смог бы этого
     // выразить. Сортируем по клетке и виду, чтобы порядок в списке не
@@ -415,6 +428,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
     message["layers"]["humus"] = layers.humus;
     message["layers"]["species"] = layers.species;
     message["layers"]["growth"] = layers.growth;
+    message["layers"]["seeds"] = layers.seeds;
 
     return message.dump();
 }
@@ -434,6 +448,7 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
         {"humus", {&previous.humus, &current.humus}},
         {"species", {&previous.species, &current.species}},
         {"growth", {&previous.growth, &current.growth}},
+        {"seeds", {&previous.seeds, &current.seeds}},
     };
     for (const auto& [name, arrays] : layers) {
         auto pairs = changedCells(*arrays.first, *arrays.second);

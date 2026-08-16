@@ -23,6 +23,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/SeedComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -132,6 +133,13 @@ struct ParsedEntity {
     PlantComponent plant{};
     PlantGenomeComponent genome{};
 
+    // Лежащее в клетке семя (SeedComponent) — тот же геном, но без
+    // состояния растения: оно ещё не проросло. Растением и семенем
+    // одновременно Entity быть не может, поэтому геном у них общий —
+    // parsed.genome выше.
+    bool hasSeed = false;
+    SeedComponent seed{};
+
     // Живое травоядное — Entity с состоянием, геномом, желаниями и
     // постоянным идентификатором. Все четыре обязательно вместе: без
     // генома животное не смогло бы ни расти, ни принести потомство, без
@@ -212,6 +220,12 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                {"minerals", plant->minerals},
                                {"mineral_pending", plant->mineralPending},
                                {"stress", plant->stress}};
+        }
+        // Лежащее семя — не растение (см. SeedComponent), но геном у него
+        // такой же, и пишется он общей веткой ниже: "genome" есть и у
+        // растения, и у семени.
+        if (const auto* seed = registry.try_get<SeedComponent>(entity)) {
+            record["seed"] = {{"age", seed->age}, {"moisture", seed->moisture}, {"minerals", seed->minerals}};
         }
         if (const auto* genome = registry.try_get<PlantGenomeComponent>(entity)) {
             record["genome"] = genomeToJson(*genome, kGrassTraits);
@@ -372,6 +386,20 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             // втихую менять состояние мира при загрузке.
             if (!record.contains("genome")) {
                 outError = "plant entity has no genome";
+                return false;
+            }
+            parsed.genome = genomeFromJson<PlantGenomeComponent>(record["genome"], kGrassTraits);
+        }
+        if (record.contains("seed")) {
+            parsed.hasSeed = true;
+            parsed.seed.age = record["seed"].value("age", 0.0f);
+            parsed.seed.moisture = record["seed"].value("moisture", 0.0f);
+            parsed.seed.minerals = record["seed"].value("minerals", 0);
+            // Геном обязателен по той же причине, что и у растения: из
+            // семени без генома нечему было бы прорасти, а "средний геном"
+            // втихую изменил бы состояние мира при загрузке.
+            if (!record.contains("genome")) {
+                outError = "seed entity has no genome";
                 return false;
             }
             parsed.genome = genomeFromJson<PlantGenomeComponent>(record["genome"], kGrassTraits);
@@ -717,6 +745,10 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         }
         if (parsed.hasPlant) {
             world.registry().emplace<PlantComponent>(entity, parsed.plant);
+            world.registry().emplace<PlantGenomeComponent>(entity, parsed.genome);
+        }
+        if (parsed.hasSeed) {
+            world.registry().emplace<SeedComponent>(entity, parsed.seed);
             world.registry().emplace<PlantGenomeComponent>(entity, parsed.genome);
         }
         if (parsed.hasHerbivore) {

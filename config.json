@@ -4,16 +4,21 @@
         "width": 100
     },
     "boulder_count": 16,
+    "herbivores": {
+        "count": 40,
+        "mutation_rate": 0.05999999865889549,
+        "species": 2
+    },
     "host": "127.0.0.1",
     "plants": {
         "grass_coverage": 0.05999999865889549,
-        "grass_species": 3,
+        "grass_species": 7,
         "humus_decay_rate": 0.019999999552965164,
         "mutation_rate": 0.15140844881534576
     },
     "port": 9002,
     "saves_dir": "saves",
-    "seed": 284037,
+    "seed": 347143,
     "snapshot_interval_ms": 100,
     "terrain": {
         "max_erosion_depth": 1.5281691551208496,
@@ -23,16 +28,16 @@
         "noise_frequency": 0.019999999552965164,
         "noise_octaves": 4,
         "pond_depth": 2.2300469875335693,
-        "rain_amount": 0.007746479008346796,
+        "rain_amount": 0.02464788779616356,
         "rain_interval_ticks": 400,
         "river_count": 2,
         "river_depth": 0.8873239159584045,
         "river_sinuosity": 0.7159624695777893,
         "river_width": 5.002347469329834,
         "soil_erosion_rate": 0.22652582824230194,
-        "water_evaporation_rate": 0.0014084507711231709,
-        "water_source_count": 8,
-        "water_source_depth": 1.0
+        "water_evaporation_rate": 0.001490610302425921,
+        "water_source_count": 10,
+        "water_source_depth": 2.1126761436462402
     },
     "tick_interval_ms": 200
 }

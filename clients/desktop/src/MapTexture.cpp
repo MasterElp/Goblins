@@ -37,6 +37,13 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
         if (layers.plants && state.humus[i] > 0) {
             color = TileColors::humus(color, state.humus[i]);
         }
+        // Семя — под травой, как и перегной: чаще всего оно и лежит под
+        // своим родителем, и тогда сверху видно именно растение. Само
+        // семя видно там, где клетка пуста, — то есть там, где оно ждёт
+        // своего часа.
+        if (layers.plants && state.seedSpeciesAt[i] >= 0) {
+            color = TileColors::seed(color, state.seedSpeciesAt[i]);
+        }
         if (layers.plants && state.plantSpeciesAt[i] >= 0) {
             color = TileColors::plant(color, state.plantSpeciesAt[i], state.plantGrowth[i]);
         }

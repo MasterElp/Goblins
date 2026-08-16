@@ -5,6 +5,7 @@
 #include "core/components/HerbivoreComponent.hpp"
 #include "core/components/HerbivoreGenomeComponent.hpp"
 #include "core/components/HerbivoreSpeciesComponent.hpp"
+#include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/TimeComponent.hpp"
@@ -21,11 +22,16 @@ std::vector<int> countPlants(const World& world) {
     const auto& registry = world.registry();
     const auto& archetypes = registry.get<const PlantSpeciesComponent>(world.worldEntity()).archetypes;
     std::vector<int> counts(archetypes.size(), 0);
-    registry.view<const PlantGenomeComponent>().each([&](const PlantGenomeComponent& genome) {
-        if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
-            ++counts[static_cast<std::size_t>(genome.species)];
-        }
-    });
+    // Именно живые растения: геном есть и у лежащего в клетке семени
+    // (SeedComponent), но семя — ещё не растение, и считать его в
+    // численности вида значило бы рисовать на графике то, чего на лугу
+    // не видно.
+    registry.view<const PlantComponent, const PlantGenomeComponent>().each(
+        [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) {
+            if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
+                ++counts[static_cast<std::size_t>(genome.species)];
+            }
+        });
     return counts;
 }
 

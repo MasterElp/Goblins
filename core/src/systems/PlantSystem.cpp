@@ -11,6 +11,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/SeedComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -76,6 +77,18 @@ constexpr float kSeedlingGrowth = 0.02f;
 // мёртвых мест.
 constexpr float kSeedMinFit = 0.25f;
 constexpr float kSeedMoistureMargin = 0.5f;
+
+// Семя, оставленное в своей же клетке (когда ронять потомка некуда),
+// лежит не вечно: сперва спит положенный геному срок
+// (PlantGenomeComponent::seedDormancy), потом столько тиков сторожит
+// клетку, а не дождавшись — гниёт, и его крупица уходит в перегной.
+// Окно ожидания — общее для всех, а не черта генома: иначе плата за
+// "долго лежащее семя" уходила бы в тот же бюджет, что и срок покоя, и
+// два числа тянули бы одну и ту же верёвку с разных концов. Величина
+// соразмерна жизни травы (сотни тиков): семя переживает родителя, но не
+// несколько поколений подряд — семенной банк в мире есть, вечного
+// семенного банка нет.
+constexpr float kSeedWaitTicks = 400.0f;
 
 // Намерение посеять: собирается при обходе растений, исполняется после
 // него. Отдельный шаг нужен потому, что на одну свободную клетку могут
@@ -152,6 +165,17 @@ void PlantSystem(World& world, CommandQueue& commands) {
         const auto& position = registry.get<const PositionComponent>(entity);
         if (world.area().inBounds(position.x, position.y)) {
             occupied[index(position.x, position.y)] = 1;
+        }
+    }
+
+    // Где уже лежит семя. Отдельно от occupied: семя не занимает клетку
+    // для растения (оно лежит в земле под ним, обычно как раз под своим
+    // родителем) — но второму семени места в клетке нет.
+    std::vector<unsigned char> seeded(cellCount, 0);
+    for (const auto entity : registry.view<SeedComponent, PositionComponent>()) {
+        const auto& position = registry.get<const PositionComponent>(entity);
+        if (world.area().inBounds(position.x, position.y)) {
+            seeded[index(position.x, position.y)] = 1;
         }
     }
 
@@ -330,7 +354,37 @@ void PlantSystem(World& world, CommandQueue& commands) {
             totalWeight += targetFit;
             ++candidateCount;
         }
+        // --- Ронять некуда: семя остаётся в своей клетке ---
+        // Все восемь соседей заняты, залиты или не годятся потомку. Семя
+        // от этого не пропадает: оно ложится в ту же клетку, где стоит
+        // родитель, и ждёт там своего часа (SeedComponent) — пока
+        // родитель не умрёт от старости, не будет съеден или не сгинет от
+        // стресса. Именно так вид держит занятое место за собой: на
+        // заросшем лугу свободных клеток нет вовсе, и без семян
+        // освободившуюся клетку занимал бы только тот, кто случайно
+        // окажется рядом в нужный тик.
         if (candidateCount == 0 || totalWeight <= 0.0f) {
+            if (seeded[i] != 0) {
+                continue; // одна клетка — одно семя; бросок пропал впустую, но и цена не уплачена
+            }
+            seeded[i] = 1;
+
+            // Цена та же, что и у семени, брошенного в соседнюю клетку:
+            // семя есть семя, и растению всё равно, куда оно упало.
+            plant.growth = std::max(0.0f, plant.growth - kSeedGrowthCost);
+            --plant.minerals;
+
+            SeedComponent seed;
+            seed.moisture = std::min(plant.moisture * kSeedMoistureShare, child.moistureCapacity);
+            seed.minerals = 1; // та самая крупица родителя: минералы не появляются из ниоткуда
+            plant.moisture -= seed.moisture;
+
+            commands.enqueue([child, seed, x = position.x, y = position.y](World& w) {
+                const auto entity = w.registry().create();
+                w.registry().emplace<SeedComponent>(entity, seed);
+                w.registry().emplace<PlantGenomeComponent>(entity, child);
+                w.place(entity, x, y);
+            });
             continue;
         }
 
@@ -421,6 +475,92 @@ void PlantSystem(World& world, CommandQueue& commands) {
         });
     }
 
+    // --- 2c. Семена: покой, прорастание, гниение ---
+    // Семя ничего не делает: не растёт, не пьёт, не тянет минералы из
+    // почвы и не подлежит объеданию (у него нет PlantComponent). Оно
+    // только считает тики и смотрит, не освободилась ли клетка.
+    auto seeds = registry.view<SeedComponent, PlantGenomeComponent, PositionComponent>();
+    for (const auto entity : seeds) {
+        auto& seed = seeds.get<SeedComponent>(entity);
+        const auto& genome = seeds.get<PlantGenomeComponent>(entity);
+        const auto& position = seeds.get<PositionComponent>(entity);
+        if (!world.area().inBounds(position.x, position.y)) {
+            continue;
+        }
+        const std::size_t i = index(position.x, position.y);
+
+        seed.age += 1.0f;
+
+        // Не дождалось. Крупица минералов уходит в перегной той же
+        // клетки — туда же, куда её вернуло бы и проросшее из этого семени
+        // растение, только без промежуточной жизни.
+        if (seed.age >= genome.seedDormancy + kSeedWaitTicks) {
+            commands.enqueue([entity, x = position.x, y = position.y](World& w) {
+                if (!w.registry().valid(entity)) {
+                    return;
+                }
+                int minerals = 0;
+                if (const auto* rotting = w.registry().try_get<const SeedComponent>(entity)) {
+                    minerals = rotting->minerals;
+                }
+                depositHumus(w, x, y, minerals);
+                w.despawn(entity);
+            });
+            continue;
+        }
+
+        if (seed.age < genome.seedDormancy) {
+            continue; // ещё спит: срок покоя — черта генома (seed_dormancy)
+        }
+
+        // Клетка ещё занята растением (обычно тем самым родителем) — семя
+        // просто ждёт дальше. Растение, умершее на этом же тике, в снимке
+        // occupied всё ещё стоит: его Entity исчезнет только при
+        // разрешении очереди команд, поэтому семя займёт клетку тиком
+        // позже, а не в тот же миг.
+        if (occupied[i] != 0 || waterAt[i] > genome.waterTolerance || terrain[i] == entt::null ||
+            world.area().isBlocked(position.x, position.y)) {
+            continue;
+        }
+
+        PlantComponent seedling;
+        seedling.growth = kSeedlingGrowth;
+        seedling.moisture = seed.moisture;
+        seedling.minerals = seed.minerals;
+
+        commands.enqueue([entity, genome, seedling, x = position.x, y = position.y](World& w) {
+            if (!w.registry().valid(entity)) {
+                return;
+            }
+            // Клетку могли занять, пока команда ждала очереди: например,
+            // семя соседнего растения легло сюда тем же тиком (его команда
+            // встала в очередь раньше). Проверяем заново — иначе на клетке
+            // оказалось бы два растения.
+            bool blocked = w.area().isBlocked(x, y);
+            for (const auto tile : w.area().cellAt(x, y).entities) {
+                if (w.registry().all_of<PlantComponent>(tile)) {
+                    blocked = true;
+                    break;
+                }
+                const auto* water = w.registry().try_get<const WaterComponent>(tile);
+                if (water != nullptr && water->depth > genome.waterTolerance) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) {
+                return; // семя остаётся лежать и попробует на следующем тике
+            }
+
+            // Семя не порождает растение, а САМО им становится: тот же
+            // Entity, тот же геном, то же место — меняется лишь набор
+            // компонентов (02_CorePrinciples.md, п.3). Отдельная сущность
+            // "проросток" миру не нужна.
+            w.registry().emplace<PlantComponent>(entity, seedling);
+            w.registry().remove<SeedComponent>(entity);
+        });
+    }
+
     // --- 3. Перегной: разложение и возврат минералов в почву ---
     // Ровно те крупицы, что растение при жизни вынуло из этой клетки,
     // возвращаются в неё же — по humusDecayRate за тик. Пока перегной
@@ -474,6 +614,7 @@ void appendPlantSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kSeedlingGrowth", kSeedlingGrowth});
     out.push_back({g, "kSeedMinFit", kSeedMinFit});
     out.push_back({g, "kSeedMoistureMargin", kSeedMoistureMargin});
+    out.push_back({g, "kSeedWaitTicks", kSeedWaitTicks});
 }
 
 } // namespace goblins

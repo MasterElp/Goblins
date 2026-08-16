@@ -23,6 +23,7 @@
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
+#include "core/components/SeedComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/generation/HerbivoreGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
@@ -137,15 +138,21 @@ void printPlantStats(const goblins::World& world) {
         return;
     }
 
+    // Геном есть и у семени (SeedComponent), но семя — ещё не растение,
+    // поэтому численность вида считается по PlantComponent, а семена
+    // показываются отдельным числом: это семенной банк луга, а не его
+    // население.
     std::vector<int> population(archetypes.size(), 0);
     std::size_t plants = 0;
-    world.registry().view<const goblins::PlantGenomeComponent>().each(
-        [&](const goblins::PlantGenomeComponent& genome) {
+    world.registry().view<const goblins::PlantComponent, const goblins::PlantGenomeComponent>().each(
+        [&](const goblins::PlantComponent& /*plant*/, const goblins::PlantGenomeComponent& genome) {
             ++plants;
             if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < population.size()) {
                 ++population[static_cast<std::size_t>(genome.species)];
             }
         });
+    std::size_t seeds = 0;
+    world.registry().view<const goblins::SeedComponent>().each([&](const goblins::SeedComponent&) { ++seeds; });
 
     std::size_t humusTiles = 0;
     long long humusMinerals = 0;
@@ -154,7 +161,8 @@ void printPlantStats(const goblins::World& world) {
         humusMinerals += humus.minerals;
     });
 
-    std::cout << "Grass species: " << archetypes.size() << ", plants: " << plants << ", humus: " << humusTiles
+    std::cout << "Grass species: " << archetypes.size() << ", plants: " << plants << ", seeds: " << seeds
+               << ", humus: " << humusTiles
                << " tiles (" << humusMinerals << " minerals waiting to return)\n";
     std::cout << std::fixed;
     for (const auto& archetype : archetypes) {
