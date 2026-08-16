@@ -82,6 +82,24 @@ struct WorldState {
     };
     std::vector<Herbivore> herbivores;
 
+    // Летопись численности, как её ведёт сервер (server/PopulationHistory.hpp):
+    // на такой-то тик — сколько клеток занимал каждый вид травы и сколько
+    // было особей каждого вида травоядных. Приходит целиком в world_init и
+    // дописывается дельтами. Клиент её только показывает (график по
+    // клавише H) и сам в неё ничего не добавляет: смесь того, что помнит
+    // мир, с тем, что успел увидеть этот конкретный клиент, была бы уже не
+    // летописью мира.
+    struct PopulationPoint {
+        std::uint64_t tick = 0;
+        std::vector<int> plants;
+        std::vector<int> herbivores;
+    };
+    std::vector<PopulationPoint> populationHistory;
+    // Шаг между точками в тиках: сервер удваивает его, когда прореживает
+    // летопись. Клиенту нужен только для подписи под графиком — чтобы
+    // прореживание не выглядело как замедлившееся время.
+    std::uint64_t populationInterval = 0;
+
     // Параметры, которыми сгенерирован текущий мир — стартовая точка для
     // панели настроек генерации.
     goblins::RegenerationRequest generation{};
@@ -177,6 +195,10 @@ private:
     void handleMessage(const std::string& payload);
     // Разбор списка животных: он одинаков в world_init и в world_delta.
     void applyHerbivores(const nlohmann::json& message);
+    // Разбор летописи численности — тоже общий для world_init и дельты.
+    // replace — заменить накопленное, а не дописать к нему (world_init:
+    // мир построен заново, и прежняя летопись к нему не относится).
+    void applyPopulationHistory(const nlohmann::json& message, bool replace);
     // Опубликовать working_ как новый неизменяемый снимок. Единственное
     // место, где состояние копируется.
     void publishState();

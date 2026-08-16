@@ -43,6 +43,21 @@ std::vector<float> decodeScaled(const nlohmann::json& layers, const char* key, s
     return result;
 }
 
+// Массив целых из сообщения сервера: точки летописи приходят массивами
+// (см. протокол в server/NetworkServer.hpp). Данные извне — нечисло на
+// месте счётчика не должно ронять разбор всего сообщения.
+std::vector<int> decodeIntArray(const nlohmann::json& json) {
+    std::vector<int> result;
+    if (!json.is_array()) {
+        return result;
+    }
+    result.reserve(json.size());
+    for (const auto& value : json) {
+        result.push_back(value.is_number() ? value.get<int>() : 0);
+    }
+    return result;
+}
+
 std::vector<int> decodeInts(const nlohmann::json& layers, const char* key, std::size_t cellCount, int fallback) {
     std::vector<int> result(cellCount, fallback);
     if (!layers.contains(key)) {
@@ -168,6 +183,48 @@ void NetworkClient::applyHerbivores(const nlohmann::json& message) {
     }
 }
 
+// Летопись численности — общий разбор для world_init и дельты (см.
+// протокол в server/NetworkServer.hpp). Отсутствие ключа означает "новых
+// точек нет", а не "летописи не стало": заменить её целиком сервер просит
+// явным "full".
+void NetworkClient::applyPopulationHistory(const nlohmann::json& message, bool replace) {
+    if (replace) {
+        working_.populationHistory.clear();
+        working_.populationInterval = 0;
+    }
+    if (!message.contains("history") || !message["history"].is_object()) {
+        return;
+    }
+    const auto& history = message["history"];
+
+    // "full" — сервер прорядил летопись (изменились все точки разом, а не
+    // добавились новые) и прислал её целиком.
+    if (!replace && history.value("full", false)) {
+        working_.populationHistory.clear();
+    }
+    working_.populationInterval = history.value("interval", working_.populationInterval);
+
+    if (!history.contains("points") || !history["points"].is_array()) {
+        return;
+    }
+    for (const auto& entry : history["points"]) {
+        if (!entry.is_array() || entry.size() < 3 || !entry[0].is_number_unsigned()) {
+            continue;
+        }
+        WorldState::PopulationPoint point;
+        point.tick = entry[0].get<std::uint64_t>();
+        // Время в летописи может только идти вперёд: точка не новее
+        // последней — это либо повтор (дельта разошлась с точкой отсчёта
+        // сервера), либо мусор, и на оси времени она дала бы скачок назад.
+        if (!working_.populationHistory.empty() && point.tick <= working_.populationHistory.back().tick) {
+            continue;
+        }
+        point.plants = decodeIntArray(entry[1]);
+        point.herbivores = decodeIntArray(entry[2]);
+        working_.populationHistory.push_back(std::move(point));
+    }
+}
+
 void NetworkClient::handleMessage(const std::string& payload) {
     const auto json = nlohmann::json::parse(payload, nullptr, /*allow_exceptions=*/false);
     if (json.is_discarded()) {
@@ -254,6 +311,11 @@ void NetworkClient::handleMessage(const std::string& payload) {
             }
         }
         applyHerbivores(json);
+        // Летопись — заменой, а не дополнением: world_init означает, что
+        // мир построен заново (регенерация, загрузка), и накопленное
+        // относится к другому миру. Старый сервер её вовсе не пришлёт —
+        // тогда график просто окажется пустым.
+        applyPopulationHistory(json, /*replace=*/true);
 
         if (json.contains("terrain")) {
             working_.generation.terrain = json["terrain"].get<goblins::TerrainConfig>();
@@ -306,6 +368,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // server/NetworkServer.hpp), поэтому не накладывается по клеткам, а
         // заменяет прежний список.
         applyHerbivores(json);
+        applyPopulationHistory(json, /*replace=*/false);
         publishState();
     } else if (type == "pause_state") {
         working_.paused = json.value("paused", working_.paused);

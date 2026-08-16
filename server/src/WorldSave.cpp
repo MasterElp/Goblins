@@ -550,8 +550,9 @@ std::vector<WorldSaveInfo> listWorldSaves(const std::filesystem::path& directory
     return worlds;
 }
 
-bool saveWorld(const World& world, const RegenerationRequest& generation, const std::string& name,
-               const std::filesystem::path& directory, WorldSaveInfo& outInfo, std::string& outError) {
+bool saveWorld(const World& world, const RegenerationRequest& generation, const PopulationHistory& history,
+               const std::string& name, const std::filesystem::path& directory, WorldSaveInfo& outInfo,
+               std::string& outError) {
     if (!isValidWorldName(name)) {
         outError = "invalid world name '" + name + "'";
         return false;
@@ -583,6 +584,10 @@ bool saveWorld(const World& world, const RegenerationRequest& generation, const 
     json["version"] = kWorldSaveFormatVersion;
     json["info"] = info;
     json["generation"] = generation;
+    // Летопись численности — рядом с миром, а не в отдельном файле: она
+    // описывает жизнь именно этого мира, и разъехаться с ним (удалили мир,
+    // осталась летопись) не должна.
+    json["history"] = history.toJson();
     json["entities"] = buildEntitiesJson(world);
 
     // Пишем во временный файл и переименовываем поверх: прерванное на
@@ -615,7 +620,8 @@ bool saveWorld(const World& world, const RegenerationRequest& generation, const 
 }
 
 bool loadWorld(World& world, const std::string& name, const std::filesystem::path& directory,
-               RegenerationRequest& outGeneration, WorldSaveInfo& outInfo, std::string& outError) {
+               RegenerationRequest& outGeneration, PopulationHistory& outHistory, WorldSaveInfo& outInfo,
+               std::string& outError) {
     if (!isValidWorldName(name)) {
         outError = "invalid world name '" + name + "'";
         return false;
@@ -738,6 +744,12 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
 
     world.registry().get<TimeComponent>(world.worldEntity()).tick = tick;
     info.tick = tick;
+
+    // Летопись — последней, вместе с самим миром: у файла без неё (старое
+    // сохранение) она просто окажется пустой и начнётся заново с этого
+    // тика. Битые точки внутри неё мир загрузить не мешают — это
+    // наблюдение за миром, а не сам мир (см. PopulationHistory::fromJson).
+    outHistory.fromJson(json.contains("history") ? json["history"] : nlohmann::json::object());
 
     outGeneration = generation;
     outInfo = info;

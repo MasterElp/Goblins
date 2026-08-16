@@ -95,10 +95,10 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     herbivores.clear();
 }
 
-NetworkServer::NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused,
-                              ServerConfig baseConfig, std::string configPath,
+NetworkServer::NetworkServer(const World& world, const PopulationHistory& history, const std::string& host, int port,
+                              std::atomic<bool>& paused, ServerConfig baseConfig, std::string configPath,
                               std::filesystem::path savesDirectory)
-    : world_(world), server_(port, host), paused_(paused), baseConfig_(std::move(baseConfig)),
+    : world_(world), history_(history), server_(port, host), paused_(paused), baseConfig_(std::move(baseConfig)),
       configPath_(std::move(configPath)), savesDirectory_(std::move(savesDirectory)) {
     server_.setOnClientMessageCallback(
         [this](std::shared_ptr<ix::ConnectionState> /*state*/,
@@ -193,6 +193,18 @@ void NetworkServer::publish(bool force) {
     sentValid_ = true;
     sentTick_ = world_.registry().get<const TimeComponent>(world_.worldEntity()).tick;
     sentPaused_ = paused_.load();
+    // Точка отсчёта для летописи двигается только теперь, вместе с
+    // остальным состоянием: пропущенная рассылка (клиент не разгрёб
+    // очередь) не должна проглотить точки — они уйдут следующей дельтой.
+    // Пустая летопись отправленной не считается: первая точка мира стоит
+    // на нулевом тике, и "новее нуля" её бы не пропустило.
+    if (history_.points().empty()) {
+        sentHistoryValid_ = false;
+    } else {
+        sentHistoryTick_ = history_.points().back().tick;
+        sentHistoryInterval_ = history_.interval();
+        sentHistoryValid_ = true;
+    }
     lastPublish_ = now;
     if (full) {
         // Снимаем флаг только теперь, когда world_init действительно
@@ -385,6 +397,15 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
 
     message["herbivores"] = herbivoresToJson(layers.herbivores);
 
+    // Летопись численности — целиком: world_init по определению содержит
+    // всё, из чего клиент строит картину мира с нуля, а прошлое мира —
+    // такая же его часть, как текущая карта. Клиент заменяет ею свою
+    // ("full"), а не дописывает: мир мог смениться (регенерация,
+    // загрузка), и сшивать две летописи было бы враньём.
+    auto history = history_.toJson();
+    history["full"] = true;
+    message["history"] = std::move(history);
+
     message["layers"]["rockiness"] = layers.rockiness;
     message["layers"]["moisture"] = layers.moisture;
     message["layers"]["compaction"] = layers.compaction;
@@ -429,6 +450,19 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
     if (previous.herbivores != current.herbivores) {
         anyChange = true;
         message["herbivores"] = herbivoresToJson(current.herbivores);
+    }
+
+    // Летопись — только точки новее отправленных. Прореживание меняет все
+    // точки разом (см. PopulationHistory::thin), и узнаётся оно по
+    // изменившемуся шагу: тогда клиенту уходит вся летопись целиком.
+    // Новых точек без нового тика не бывает (точка пишется по завершении
+    // тика, до рассылки), поэтому сама по себе летопись поводом отправить
+    // дельту не считается — anyChange она не взводит.
+    const bool historyFull = !sentHistoryValid_ || history_.interval() != sentHistoryInterval_;
+    auto history = historyFull ? history_.toJson() : history_.toJson(sentHistoryTick_);
+    if (historyFull || !history["points"].empty()) {
+        history["full"] = historyFull;
+        message["history"] = std::move(history);
     }
 
     const auto tick = world_.registry().get<const TimeComponent>(world_.worldEntity()).tick;

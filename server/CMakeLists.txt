@@ -1,6 +1,7 @@
 add_executable(server
     src/main.cpp
     src/NetworkServer.cpp
+    src/PopulationHistory.cpp
     src/WorldSave.cpp
 )
 

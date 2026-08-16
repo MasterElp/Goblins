@@ -28,6 +28,7 @@
 #include "core/generation/PlantGenetics.hpp"
 #include "server/ConsoleHotkeyWatcher.hpp"
 #include "server/NetworkServer.hpp"
+#include "server/PopulationHistory.hpp"
 #include "server/WorldSave.hpp"
 #include "Version.hpp"
 
@@ -286,7 +287,16 @@ int main(int argc, char** argv) {
     // Сетевой слой (07_TechStack.md, п.4): core ничего о нём не знает,
     // NetworkServer — часть server, читает состояние world через
     // публичный интерфейс World. Адрес и порт — из конфигурации.
-    goblins::NetworkServer network(world, config.host, config.port, loop.paused, config, configPath, savesDirectory);
+    // Летопись численности видов — не часть мира и не система тика: мир
+    // от неё не меняется (02_CorePrinciples.md, п.1), она лишь смотрит на
+    // него после каждого тика. Живёт здесь, рядом с миром и циклом,
+    // потому что писать её и сохранять на диск — дело сервера, а не ядра
+    // и не сетевого слоя; NetworkServer и WorldSave получают её только на
+    // чтение.
+    goblins::PopulationHistory populationHistory;
+
+    goblins::NetworkServer network(world, populationHistory, config.host, config.port, loop.paused, config, configPath,
+                                    savesDirectory);
 
     goblins::RegenerationRequest generationConfig;
     generationConfig.seed = config.seed;
@@ -321,6 +331,11 @@ int main(int argc, char** argv) {
         if (tickLoggingEnabled && time.tick % kTickLogInterval == 0) {
             std::cout << "Tick #" << time.tick << std::endl;
         }
+        // Летопись — до рассылки: точка этого тика должна уехать клиентам
+        // вместе с самим тиком, а не отстать от него на одно сообщение.
+        // Пишется она не каждый тик, а раз в PopulationHistory::interval()
+        // — решает это она сама.
+        populationHistory.record(w);
         // Изменения мира — клиенту после каждого тика: HydrologySystem
         // непрерывно меняет почву/воду, и клиент должен видеть это
         // постепенное изменение вживую, а не только после регенерации.
@@ -390,6 +405,12 @@ int main(int argc, char** argv) {
                 printPlantStats(world);
                 printHerbivoreStats(world);
 
+                // У нового мира летопись своя и начинается с нулевого
+                // тика: сшивать её с летописью прежнего мира значило бы
+                // врать о том, что было.
+                populationHistory.clear();
+                populationHistory.record(world);
+
                 network.setCurrentWorldName("");
                 worldReady = true;
             } else {
@@ -398,7 +419,12 @@ int main(int argc, char** argv) {
                 goblins::RegenerationRequest generation;
                 goblins::WorldSaveInfo info;
                 std::string error;
-                if (goblins::loadWorld(world, start->worldName, savesDirectory, generation, info, error)) {
+                // Летопись загружается вместе с миром (она лежит в том же
+                // файле). Если её там нет — старое сохранение, — record
+                // ниже заведёт её заново с текущего тика мира.
+                if (goblins::loadWorld(world, start->worldName, savesDirectory, generation, populationHistory, info,
+                                        error)) {
+                    populationHistory.record(world);
                     // Параметры генерации — из файла мира: панель на
                     // экране World Generation должна показывать, чем
                     // сгенерирован именно загруженный мир.
@@ -450,7 +476,8 @@ int main(int argc, char** argv) {
 
                 goblins::WorldSaveInfo info;
                 std::string error;
-                if (goblins::saveWorld(world, network.currentGenerationConfig(), name, savesDirectory, info, error)) {
+                if (goblins::saveWorld(world, network.currentGenerationConfig(), populationHistory, name,
+                                        savesDirectory, info, error)) {
                     network.setCurrentWorldName(info.name);
                     std::cout << "World saved as '" << info.name << "' (tick " << info.tick << ").\n";
                     network.broadcastNotice(
@@ -479,6 +506,11 @@ int main(int argc, char** argv) {
             std::cout << "Regenerating (seed=" << request->seed << ")...\n" << std::flush;
             const auto genStats =
                 goblins::generateWorld(world, config.area.width, config.area.height, toWorldGenParams(*request));
+
+            // Мир создан заново — летопись прежнего к нему не относится
+            // (как и при "New world" выше).
+            populationHistory.clear();
+            populationHistory.record(world);
 
             network.setCurrentGenerationConfig(*request);
             // Перегенерированный мир — уже не тот, что лежит в файле, из

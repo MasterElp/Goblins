@@ -15,6 +15,7 @@
 #include "core/World.hpp"
 #include "core/components/DesireComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
+#include "server/PopulationHistory.hpp"
 #include "world/WorldSaveInfo.hpp"
 
 namespace goblins {
@@ -42,7 +43,7 @@ struct SaveWorldRequest {
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 14):
+// Протокол (версия 15):
 //   Состояние мира уходит клиенту двумя разными сообщениями, потому что
 //   оно состоит из двух разных по природе частей. Полный world_init —
 //   всё, включая то, что между регенерациями не меняется вообще
@@ -83,6 +84,18 @@ struct SaveWorldRequest {
 //              бы и дороже, и лживее (на одном тайле их может стоять
 //              несколько). Поэтому — список, целиком, и в world_init, и в
 //              дельте (см. ниже)
+//      "history": {"interval": N, "full": true,
+//                  "points": [[тик, [трава по видам], [животные по видам]], ...]}
+//              -- летопись численности (server/PopulationHistory.hpp):
+//              сколько клеток занимал каждый вид травы и сколько было
+//              особей каждого вида на такой-то тик. Ведёт её сервер с
+//              первого тика мира и кладёт в файл сохранения, поэтому
+//              клиент видит всю жизнь мира, а не время своего наблюдения.
+//              Точки — массивами, а не объектами: их до тысячи, и имена
+//              полей весили бы больше самих чисел. "interval" — шаг между
+//              точками в тиках; он удваивается, когда точек становится
+//              больше потолка и летопись прореживается вдвое. "full"
+//              значит "замени свою летопись этой" (в world_init всегда).
 //      "layers": {"rockiness", "moisture", "compaction", "minerals",
 //                 "height", "water", "humus", "species", "growth"}}
 //              -- плоские массивы целых, row-major, по одному значению на
@@ -110,6 +123,13 @@ struct SaveWorldRequest {
 //      описывала бы почти весь список — при десятках животных это дешевле
 //      и проще, чем ключи и сравнения по идентификаторам. Не изменился —
 //      не отправляется.
+//      Летопись ("history") в дельте — только точки новее последней
+//      отправленной, с "full": false: клиент их дописывает. Исключение —
+//      прореживание летописи (PopulationHistory::thin, при нём меняется
+//      "interval"): тогда меняются все точки разом, и дельта несёт всю
+//      летопись с "full": true, а клиент заменяет ею свою. Случается это
+//      раз в сотни точек, поэтому дешевле, чем поддерживать одинаковое
+//      прореживание на обеих сторонах.
 //   Сервер -> клиент, сразу при подключении и после каждого сохранения:
 //     {"type": "world_list", "current": "имя текущего мира",
 //      "worlds": [WorldSaveInfo, ...]}  -- см. shared/world/WorldSaveInfo.hpp
@@ -168,8 +188,12 @@ public:
     // savesDirectory — каталог сохранённых миров: сам сетевой слой
     // только читает из него список миров (list_worlds), запись мира
     // делает main.cpp с потока GameLoop.
-    NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused,
-                  ServerConfig baseConfig, std::string configPath, std::filesystem::path savesDirectory);
+    // history — летопись численности видов; ведёт её main.cpp (после
+    // каждого тика, на потоке GameLoop), сетевой слой только читает её
+    // при сборке сообщений — как и сам world_.
+    NetworkServer(const World& world, const PopulationHistory& history, const std::string& host, int port,
+                  std::atomic<bool>& paused, ServerConfig baseConfig, std::string configPath,
+                  std::filesystem::path savesDirectory);
 
     // Возвращает false, если порт не удалось занять — например, он уже
     // используется другим процессом.
@@ -325,6 +349,7 @@ private:
     bool clientsAreBehind();
 
     const World& world_;
+    const PopulationHistory& history_;
     ix::WebSocketServer server_;
     std::atomic<bool>& paused_;
     std::atomic<std::uint64_t> pauseCommandCount_{0};
@@ -365,6 +390,16 @@ private:
     // равно должен идти), и не нужна, когда не изменилось вообще ничего.
     std::uint64_t sentTick_ = 0;
     bool sentPaused_ = true;
+    // Летопись, отправленная последней: тик её последней точки и шаг
+    // между точками. Шаг сравнивается не для красоты — при прореживании
+    // (PopulationHistory::thin) меняются все точки разом, а не
+    // добавляются новые, и дописать такую летопись клиенту нечем.
+    // sentHistoryValid_ отличает "мы уже что-то отправляли" от "летопись
+    // была пуста": иначе первая же точка на нулевом тике не прошла бы
+    // проверку "новее отправленного".
+    std::uint64_t sentHistoryTick_ = 0;
+    std::uint64_t sentHistoryInterval_ = 0;
+    bool sentHistoryValid_ = false;
 };
 
 } // namespace goblins

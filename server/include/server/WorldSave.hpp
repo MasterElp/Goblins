@@ -6,6 +6,7 @@
 
 #include "config/Config.hpp"
 #include "core/World.hpp"
+#include "server/PopulationHistory.hpp"
 #include "world/WorldSaveInfo.hpp"
 
 namespace goblins {
@@ -27,6 +28,8 @@ namespace goblins {
 //   {"format": "goblins_world", "version": 1,
 //    "info": WorldSaveInfo,
 //    "generation": RegenerationRequest,
+//    "history": {"interval": N,
+//                "points": [[тик, [трава по видам], [животные по видам]], ...]},
 //    "entities": [ {"position": {"x","y"},
 //                   "soil": {"moisture","rockiness","compaction","minerals"},
 //                   "height": H,
@@ -100,6 +103,13 @@ namespace goblins {
 // выдаётся заново (он всего лишь ключ случайности, а мир недетерминирован,
 // 02_CorePrinciples.md, п.12a).
 //
+// "history" (server/PopulationHistory.hpp) — летопись численности видов,
+// добавлена без смены версии формата: у мира из старого файла её просто
+// нет, и она начинается заново с момента загрузки. Это единственная часть
+// файла, которая не является состоянием мира: сам мир от неё не зависит и
+// без неё живёт ровно так же — но потерять её вместе с закрытием сервера
+// значило бы, что смотреть на длинную жизнь мира негде.
+//
 // Сохраняется полное состояние мира — все Entity со всеми компонентами,
 // включая World Entity с TimeComponent (запись с ключом "time"), а не
 // только seed'ы генерации: мир после N тиков уже не восстанавливается
@@ -137,8 +147,9 @@ std::vector<WorldSaveInfo> listWorldSaves(const std::filesystem::path& directory
 // Запись атомарная (через временный файл + rename): прерванное
 // сохранение не портит предыдущую версию мира. created_at существующего
 // файла сохраняется — мир "создан" один раз, а сохраняется многократно.
-bool saveWorld(const World& world, const RegenerationRequest& generation, const std::string& name,
-               const std::filesystem::path& directory, WorldSaveInfo& outInfo, std::string& outError);
+bool saveWorld(const World& world, const RegenerationRequest& generation, const PopulationHistory& history,
+               const std::string& name, const std::filesystem::path& directory, WorldSaveInfo& outInfo,
+               std::string& outError);
 
 // Загружает мир из `<directory>/<name>.json`: сбрасывает world (включая
 // размер Области — у сохранения он свой) и заполняет его заново.
@@ -148,7 +159,8 @@ bool saveWorld(const World& world, const RegenerationRequest& generation, const 
 // применяется к world: при ошибке (битый файл, координаты вне Области)
 // мир остаётся нетронутым, а не наполовину загруженным.
 bool loadWorld(World& world, const std::string& name, const std::filesystem::path& directory,
-               RegenerationRequest& outGeneration, WorldSaveInfo& outInfo, std::string& outError);
+               RegenerationRequest& outGeneration, PopulationHistory& outHistory, WorldSaveInfo& outInfo,
+               std::string& outError);
 
 // Удаляет `<directory>/<name>.json`. Только файловый ввод-вывод, ECS
 // registry не трогает — в отличие от saveWorld/loadWorld, можно вызывать

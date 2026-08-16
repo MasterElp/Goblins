@@ -250,10 +250,18 @@ struct ClientConfig {
     // Панель параметров генерации на экране мира. По умолчанию закрыта:
     // 460px справа нужны, только когда параметры действительно крутят.
     bool show_generation_panel = false;
+
+    // График численности видов по времени (клавиша H) — полоса по нижнему
+    // краю карты. Тоже по умолчанию закрыт: он занимает треть высоты окна,
+    // а нужен не всегда. Сохраняется только сам факт "показан или нет" —
+    // накопленная история не сохраняется нигде, она живёт ровно столько,
+    // сколько клиент наблюдает за миром (см. PopulationGraph.hpp).
+    bool show_population_graph = false;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
                                     fullscreen, show_rockiness, show_compaction, show_moisture, show_minerals,
-                                    show_height, show_plants, show_herbivores, zoom, show_generation_panel)
+                                    show_height, show_plants, show_herbivores, zoom, show_generation_panel,
+                                    show_population_graph)
 
 namespace detail {
 

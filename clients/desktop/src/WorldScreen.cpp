@@ -13,6 +13,7 @@
 
 #include "ConstantsOverlay.hpp"
 #include "MapTexture.hpp"
+#include "PopulationGraph.hpp"
 #include "TileColors.hpp"
 
 namespace WorldScreen {
@@ -29,6 +30,9 @@ constexpr float kZoomStep = 1.1f;
 // Ширина панели генерации, когда она открыта. То же число, что было на
 // отдельном экране генерации — под ним подобраны ширины ползунков.
 constexpr float kPanelWidth = 460.0f;
+// Полоса подсказки по клавишам вдоль нижнего края — под ней ничего не
+// рисуется, поэтому график популяции упирается именно в неё.
+constexpr float kHintHeight = 26.0f;
 
 } // namespace
 
@@ -53,6 +57,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     static bool showPlants = true;
     static bool showHerbivores = true;
     static bool panelOpen = false;
+    static bool showGraph = false;
     if (!initialized) {
         zoom = config.zoom;
         showRockiness = config.show_rockiness;
@@ -63,6 +68,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         showPlants = config.show_plants;
         showHerbivores = config.show_herbivores;
         panelOpen = config.show_generation_panel;
+        showGraph = config.show_population_graph;
         initialized = true;
     }
     static bool confirmingExit = false;
@@ -90,6 +96,15 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     const int viewportW = panelOpen ? std::max(1, static_cast<int>(panelX)) : screenW;
     const int viewportH = screenH - kHudHeight;
 
+    // График популяции — полосой по нижнему краю карты, а не оверлеем во
+    // весь экран, как константы: кривая нужна рядом с картой (просело
+    // стадо — тут же видно, где именно объеден луг). Высота от окна, но с
+    // потолком и полом: на низком окне график съел бы карту, на высоком —
+    // растянулся бы без пользы.
+    const float graphHeight = std::clamp(static_cast<float>(screenH) * 0.30f, 150.0f, 260.0f);
+    const Rectangle graphBounds{0.0f, static_cast<float>(screenH) - kHintHeight - graphHeight,
+                                static_cast<float>(viewportW), graphHeight};
+
     const Color backgroundColor{28, 28, 32, 255};
     const Color boulderColor{70, 66, 62, 255};
     const Color hudColor{18, 18, 20, 255};
@@ -111,8 +126,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     const Vector2 mouse = GetMousePosition();
     // Колесо над панелью настроек прокручивает её саму (GuiScrollPanel), а
     // не меняет масштаб карты — иначе одно движение колеса делало бы сразу
-    // два несвязанных действия.
-    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW);
+    // два несвязанных действия. Полоса графика популяции — по той же
+    // причине не карта: под ней курсор читает точку истории, а не тайл, и
+    // подсвечивать сквозь неё клетку (и уж тем более зумить) незачем.
+    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW) &&
+                              !(showGraph && CheckCollisionPointRec(mouse, graphBounds));
 
     // Пока открыт диалог подтверждения выхода или диалог сохранения, мир
     // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —
@@ -217,6 +235,19 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         if (IsKeyPressed(KEY_SEVEN)) {
             showHerbivores = !showHerbivores;
             config.show_herbivores = showHerbivores;
+            goblins::saveClientConfig(configPath, config);
+        }
+
+        // График численности видов по времени. Отдельная клавиша, а не
+        // слой карты: слои 1-7 отвечают на вопрос "что сейчас на этой
+        // клетке", а график — "что было со всем миром до сих пор", и
+        // держать их в одном ряду значило бы путать эти два вопроса.
+        // Летопись при этом ведёт сервер, а не этот экран, — она приходит
+        // вместе с состоянием мира и не зависит от того, показан ли
+        // график и открыт ли вообще клиент.
+        if (IsKeyPressed(KEY_H)) {
+            showGraph = !showGraph;
+            config.show_population_graph = showGraph;
             goblins::saveClientConfig(configPath, config);
         }
 
@@ -501,11 +532,24 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
     if (modalOpen) GuiUnlock();
 
+    // График — после карты и панели, но до подписей по нижнему краю: они
+    // должны ложиться поверх него (см. bottomInfoY ниже), а не под него.
+    // Чтение значений под курсором отключается вместе с остальным вводом,
+    // пока открыт модальный диалог.
+    if (showGraph) {
+        PopulationGraph::draw(snapshot, graphBounds, !modalOpen);
+    }
+
     // Подсказка по клавишам — по нижнему краю слева, мелким приглушённым
     // текстом: в верхней полосе её теснят имя мира и кнопки, а нужна она
     // редко.
-    DrawText("WASD-scroll  Wheel-zoom  F-fit  1-7-layers  P-pause  G-params  C-constants  Esc-menu", 10,
+    DrawText("WASD-scroll  Wheel-zoom  F-fit  1-7-layers  P-pause  G-params  H-graphs  C-constants  Esc-menu", 10,
              screenH - 20, 14, mutedColor);
+
+    // Строка с параметрами тайла под курсором (и сообщение сервера рядом с
+    // ней) — над графиком, когда он открыт: иначе они оказались бы под
+    // его подложкой и читались бы только по краям.
+    const int bottomInfoY = showGraph ? static_cast<int>(graphBounds.y) - 22 : screenH - 42;
 
     // Параметры тайла под курсором — по нижнему краю справа (над панелью
     // настроек, если она открыта, места нет — поэтому от края карты).
@@ -525,7 +569,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                            : "",
                        snapshot.humus[hi] > 0 ? TextFormat("  humus %d", snapshot.humus[hi]) : "");
         const int labelWidth = MeasureText(tileLabel.c_str(), 16);
-        DrawText(tileLabel.c_str(), viewportW - labelWidth - 12, screenH - 42, 16, cursorColor);
+        DrawText(tileLabel.c_str(), viewportW - labelWidth - 12, bottomInfoY, 16, cursorColor);
 
         // Животные под курсором — отдельной строкой над строкой тайла: их
         // на клетке может быть несколько, и втискивать их в подпись самого
@@ -545,7 +589,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             }
             if (!animalsLabel.empty()) {
                 const int animalsWidth = MeasureText(animalsLabel.c_str(), 16);
-                DrawText(animalsLabel.c_str(), viewportW - animalsWidth - 12, screenH - 62, 16,
+                DrawText(animalsLabel.c_str(), viewportW - animalsWidth - 12, bottomInfoY - 20, 16,
                          Color{235, 195, 120, 255});
             }
         }
@@ -554,7 +598,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // Результат сохранения (или ошибка загрузки, если мир так и не
     // открылся) — единственное место, где клиент об этом узнаёт.
     if (hasFreshNotice(snapshot)) {
-        DrawText(snapshot.notice.c_str(), 10, screenH - 42, 16,
+        DrawText(snapshot.notice.c_str(), 10, bottomInfoY, 16,
                  snapshot.noticeIsError ? Color{230, 110, 110, 255} : textColor);
     }
 
