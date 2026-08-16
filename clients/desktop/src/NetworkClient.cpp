@@ -148,23 +148,25 @@ void NetworkClient::sendSaveGenerationConfig(const goblins::RegenerationRequest&
 // разбирается одним местом. Отсутствие ключа означает "стадо не менялось",
 // а не "животных не стало": пустой список сервер шлёт явным пустым
 // массивом.
-void NetworkClient::applyHerbivores(const nlohmann::json& message) {
-    if (!message.contains("herbivores") || !message["herbivores"].is_array()) {
+void NetworkClient::applyAnimals(const nlohmann::json& message) {
+    if (!message.contains("animals") || !message["animals"].is_array()) {
         return;
     }
-    working_.herbivores.clear();
-    for (const auto& animal : message["herbivores"]) {
+    working_.animals.clear();
+    for (const auto& animal : message["animals"]) {
         if (!animal.is_object()) {
             continue;
         }
-        WorldState::Herbivore parsed;
+        WorldState::Animal parsed;
         parsed.x = animal.value("x", 0);
         parsed.y = animal.value("y", 0);
         parsed.species = animal.value("species", 0);
         parsed.growth = animal.value("growth", 0) * 0.01f;
+        parsed.health = animal.value("health", 100) * 0.01f;
+        parsed.predator = animal.value("kind", std::string{}) == "predator";
         parsed.sex = animal.value("sex", std::string{});
         parsed.desire = animal.value("desire", std::string{});
-        working_.herbivores.push_back(std::move(parsed));
+        working_.animals.push_back(std::move(parsed));
     }
 }
 
@@ -219,6 +221,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // Развитость приходит целыми процентами — внутри клиента удобнее
         // долей 0..1, как и остальные слои.
         working_.plantGrowth = decodeScaled(layers, "growth", cellCount, 0.01f);
+        working_.carcass = decodeScaled(layers, "carcass", cellCount, milliScale_);
 
         if (json.contains("plant_species")) {
             working_.plantSpecies.clear();
@@ -236,11 +239,11 @@ void NetworkClient::handleMessage(const std::string& payload) {
             }
         }
 
-        // Виды травоядных и само стадо — тем же способом, что и трава
+        // Виды животных и само поголовье — тем же способом, что и трава
         // выше: клиент не знает состава генома и не должен.
-        if (json.contains("herbivore_species")) {
-            working_.herbivoreSpecies.clear();
-            for (const auto& archetype : json["herbivore_species"]) {
+        auto readSpecies = [](const nlohmann::json& list) {
+            std::vector<std::vector<std::pair<std::string, float>>> species;
+            for (const auto& archetype : list) {
                 if (!archetype.is_object()) {
                     continue;
                 }
@@ -250,23 +253,33 @@ void NetworkClient::handleMessage(const std::string& payload) {
                         traits.emplace_back(name, value.get<float>());
                     }
                 }
-                working_.herbivoreSpecies.push_back(std::move(traits));
+                species.push_back(std::move(traits));
+            }
+            return species;
+        };
+        if (json.contains("animal_species") && json["animal_species"].is_object()) {
+            const auto& lists = json["animal_species"];
+            if (lists.contains("herbivores")) {
+                working_.herbivoreSpecies = readSpecies(lists["herbivores"]);
+            }
+            if (lists.contains("predators")) {
+                working_.predatorSpecies = readSpecies(lists["predators"]);
             }
         }
-        applyHerbivores(json);
+        applyAnimals(json);
 
-        if (json.contains("terrain")) {
-            working_.generation.terrain = json["terrain"].get<goblins::TerrainConfig>();
+        // Параметры генерации — одним объектом (см. протокол в
+        // server/NetworkServer.hpp): панель настроек строится из него
+        // целиком.
+        if (json.contains("generation")) {
+            try {
+                working_.generation = json["generation"].get<goblins::RegenerationRequest>();
+                working_.hasGeneration = true;
+            } catch (const nlohmann::json::exception&) {
+                // Битые параметры — не повод не показать мир: панель
+                // останется с прежними значениями.
+            }
         }
-        working_.generation.seed = json.value("seed", working_.generation.seed);
-        working_.generation.boulder_count = json.value("boulder_count", working_.generation.boulder_count);
-        if (json.contains("plants")) {
-            working_.generation.plants = json["plants"].get<goblins::PlantConfig>();
-        }
-        if (json.contains("herbivores") && json["herbivores"].is_object()) {
-            working_.generation.herbivores = json["herbivores"].get<goblins::HerbivoreConfig>();
-        }
-        working_.hasGeneration = true;
 
         // Константы ядра — никогда не меняются, но приходят с каждым
         // world_init: перечитываем целиком, это дешевле и честнее, чем
@@ -301,11 +314,12 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "growth", working_.plantGrowth, [](int raw) { return raw * 0.01f; });
         applyChangedCells(json, "minerals", working_.minerals, [](int raw) { return raw; });
         applyChangedCells(json, "humus", working_.humus, [](int raw) { return raw; });
+        applyChangedCells(json, "carcass", working_.carcass, toFraction);
         applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
-        // Стадо приходит целиком и только когда сдвинулось (см. протокол в
-        // server/NetworkServer.hpp), поэтому не накладывается по клеткам, а
-        // заменяет прежний список.
-        applyHerbivores(json);
+        // Поголовье приходит целиком и только когда сдвинулось (см.
+        // протокол в server/NetworkServer.hpp), поэтому не накладывается по
+        // клеткам, а заменяет прежний список.
+        applyAnimals(json);
         publishState();
     } else if (type == "pause_state") {
         working_.paused = json.value("paused", working_.paused);

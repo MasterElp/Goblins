@@ -34,9 +34,9 @@ void appendHydrologyConstants(std::vector<ConstantInfo>& out);
 void appendPlantSystemConstants(std::vector<ConstantInfo>& out);
 void appendPlantGeneticsConstants(std::vector<ConstantInfo>& out);
 void appendGrassSeedingConstants(std::vector<ConstantInfo>& out);
-void appendHerbivoreSystemConstants(std::vector<ConstantInfo>& out);
-void appendHerbivoreGeneticsConstants(std::vector<ConstantInfo>& out);
-void appendHerbivoreSeedingConstants(std::vector<ConstantInfo>& out);
+void appendAnimalSystemConstants(std::vector<ConstantInfo>& out);
+void appendAnimalGeneticsConstants(std::vector<ConstantInfo>& out);
+void appendAnimalSeedingConstants(std::vector<ConstantInfo>& out);
 
 // Все константы ядра разом, в порядке стадий игрового цикла
 // (06_GameLoop.md, п.3): генерация террейна, затем гидрология, затем

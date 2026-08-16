@@ -11,11 +11,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/components/AnimalComponent.hpp"
+#include "core/components/AnimalGenomeComponent.hpp"
+#include "core/components/AnimalSpeciesComponent.hpp"
+#include "core/components/CarcassComponent.hpp"
 #include "core/components/DesireComponent.hpp"
 #include "core/components/HeightComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
-#include "core/components/HerbivoreGenomeComponent.hpp"
-#include "core/components/HerbivoreSpeciesComponent.hpp"
 #include "core/components/HumusComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
@@ -23,12 +25,13 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/PredatorComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
-#include "core/generation/HerbivoreGenetics.hpp"
+#include "core/generation/AnimalGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "platform/ExecutablePath.hpp"
 
@@ -123,8 +126,8 @@ struct ParsedEntity {
     // травоядных живут там же и по тем же правилам.
     bool hasPlantSpecies = false;
     std::vector<PlantGenomeComponent> plantSpecies;
-    bool hasHerbivoreSpecies = false;
-    std::vector<HerbivoreGenomeComponent> herbivoreSpecies;
+    bool hasAnimalSpecies = false;
+    AnimalSpeciesComponent animalSpecies{};
 
     // Живое растение — Entity с состоянием и геномом (оба обязательно
     // вместе: растение без генома не смогло бы ни расти, ни дать потомка).
@@ -132,16 +135,23 @@ struct ParsedEntity {
     PlantComponent plant{};
     PlantGenomeComponent genome{};
 
-    // Живое травоядное — Entity с состоянием, геномом, желаниями и
-    // постоянным идентификатором. Все четыре обязательно вместе: без
+    // Живое животное — Entity с телом, геномом, желаниями, постоянным
+    // идентификатором и тегом диеты. Всё это обязательно вместе: без
     // генома животное не смогло бы ни расти, ни принести потомство, без
     // идентификатора у него не было бы ключа случайности (см.
-    // IdentityComponent), а желания — то, чем оно занято прямо сейчас.
-    bool hasHerbivore = false;
-    HerbivoreComponent herbivore{};
-    HerbivoreGenomeComponent herbivoreGenome{};
+    // IdentityComponent), желания — то, чем оно занято прямо сейчас, а без
+    // диеты оно не знало бы, что для него еда.
+    bool hasAnimal = false;
+    bool predator = false;
+    AnimalComponent animal{};
+    AnimalGenomeComponent animalGenome{};
     DesireComponent desire{};
     std::uint64_t identity = 0;
+
+    // Падаль лежит на терраформирующем Entity тайла, рядом с почвой,
+    // водой и перегноем (см. CarcassComponent).
+    bool hasCarcass = false;
+    CarcassComponent carcass{};
 
     // Перегной лежит на терраформирующем Entity тайла, рядом с почвой и
     // водой (см. HumusComponent), поэтому это признак того же самого
@@ -180,12 +190,20 @@ nlohmann::json buildEntitiesJson(const World& world) {
             }
             record["plant_species"] = std::move(archetypes);
         }
-        if (const auto* herbivoreSpecies = registry.try_get<HerbivoreSpeciesComponent>(entity)) {
-            auto archetypes = nlohmann::json::array();
-            for (const auto& archetype : herbivoreSpecies->archetypes) {
-                archetypes.push_back(genomeToJson(archetype, kHerbivoreTraits));
+        if (const auto* animalSpecies = registry.try_get<AnimalSpeciesComponent>(entity)) {
+            auto herbivores = nlohmann::json::array();
+            for (const auto& archetype : animalSpecies->herbivores) {
+                herbivores.push_back(genomeToJson(archetype, kHerbivoreTraits));
             }
-            record["herbivore_species"] = std::move(archetypes);
+            auto predators = nlohmann::json::array();
+            for (const auto& archetype : animalSpecies->predators) {
+                predators.push_back(genomeToJson(archetype, kPredatorTraits));
+            }
+            // Два списка под одним ключом, потому что и в мире это один
+            // компонент: у травоядных и хищников свои таблицы черт, но
+            // виды и тех, и других — одно свойство мира.
+            record["animal_species"] = {{"herbivores", std::move(herbivores)},
+                                         {"predators", std::move(predators)}};
         }
         if (const auto* position = registry.try_get<PositionComponent>(entity)) {
             record["position"] = {{"x", position->x}, {"y", position->y}};
@@ -216,21 +234,32 @@ nlohmann::json buildEntitiesJson(const World& world) {
         if (const auto* genome = registry.try_get<PlantGenomeComponent>(entity)) {
             record["genome"] = genomeToJson(*genome, kGrassTraits);
         }
-        if (const auto* animal = registry.try_get<HerbivoreComponent>(entity)) {
-            record["herbivore"] = {{"age", animal->age},
-                                    {"growth", animal->growth},
-                                    {"sex", sexName(animal->sex)},
-                                    {"energy", animal->energy},
-                                    {"water", animal->water},
-                                    {"protein", animal->protein},
-                                    {"protein_pending", animal->proteinPending},
-                                    {"dung", animal->dung},
-                                    {"dung_pending", animal->dungPending},
-                                    {"step_progress", animal->stepProgress},
-                                    {"stress", animal->stress}};
+        if (const auto* animal = registry.try_get<AnimalComponent>(entity)) {
+            record["animal"] = {{"age", animal->age},
+                                 {"growth", animal->growth},
+                                 {"sex", sexName(animal->sex)},
+                                 {"energy", animal->energy},
+                                 {"water", animal->water},
+                                 {"protein", animal->protein},
+                                 {"protein_pending", animal->proteinPending},
+                                 {"dung", animal->dung},
+                                 {"dung_pending", animal->dungPending},
+                                 {"health", animal->health},
+                                 {"step_progress", animal->stepProgress},
+                                 {"stress", animal->stress}};
         }
-        if (const auto* genome = registry.try_get<HerbivoreGenomeComponent>(entity)) {
-            record["herbivore_genome"] = genomeToJson(*genome, kHerbivoreTraits);
+        if (const auto* genome = registry.try_get<AnimalGenomeComponent>(entity)) {
+            // Черты пишутся по таблице своей диеты: у хищника их на одну
+            // больше, и вписывать травоядному чужие поля было бы ложью о
+            // том, из чего он состоит.
+            record["animal_genome"] = registry.all_of<PredatorComponent>(entity)
+                                           ? genomeToJson(*genome, kPredatorTraits)
+                                           : genomeToJson(*genome, kHerbivoreTraits);
+        }
+        if (const auto* carcass = registry.try_get<CarcassComponent>(entity)) {
+            record["carcass"] = {{"meat", carcass->meat},
+                                  {"protein", carcass->protein},
+                                  {"protein_pending", carcass->proteinPending}};
         }
         if (const auto* desire = registry.try_get<DesireComponent>(entity)) {
             record["desire"] = {{"hunger", desire->hunger},
@@ -249,6 +278,14 @@ nlohmann::json buildEntitiesJson(const World& world) {
         }
         if (registry.all_of<WaterSourceComponent>(entity)) {
             record["water_source"] = true;
+        }
+        // Диета — такой же тег без данных, как impassable: сам факт
+        // наличия и есть данные.
+        if (registry.all_of<HerbivoreComponent>(entity)) {
+            record["herbivore"] = true;
+        }
+        if (registry.all_of<PredatorComponent>(entity)) {
+            record["predator"] = true;
         }
 
         entities.push_back(std::move(record));
@@ -316,12 +353,35 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 }
             }
         }
-        if (record.contains("herbivore_species") && record["herbivore_species"].is_array()) {
-            parsed.hasHerbivoreSpecies = true;
+        if (record.contains("animal_species") && record["animal_species"].is_object()) {
+            parsed.hasAnimalSpecies = true;
+            const auto& lists = record["animal_species"];
+            if (lists.contains("herbivores") && lists["herbivores"].is_array()) {
+                for (const auto& archetype : lists["herbivores"]) {
+                    if (archetype.is_object()) {
+                        parsed.animalSpecies.herbivores.push_back(
+                            genomeFromJson<AnimalGenomeComponent>(archetype, kHerbivoreTraits));
+                    }
+                }
+            }
+            if (lists.contains("predators") && lists["predators"].is_array()) {
+                for (const auto& archetype : lists["predators"]) {
+                    if (archetype.is_object()) {
+                        parsed.animalSpecies.predators.push_back(
+                            genomeFromJson<AnimalGenomeComponent>(archetype, kPredatorTraits));
+                    }
+                }
+            }
+        } else if (record.contains("herbivore_species") && record["herbivore_species"].is_array()) {
+            // Файл, сохранённый до появления хищников: там виды травоядных
+            // лежали отдельным ключом и списком. Читаем их как список
+            // травоядных — мир от этого не меняется, а хищников в нём
+            // просто нет.
+            parsed.hasAnimalSpecies = true;
             for (const auto& archetype : record["herbivore_species"]) {
                 if (archetype.is_object()) {
-                    parsed.herbivoreSpecies.push_back(
-                        genomeFromJson<HerbivoreGenomeComponent>(archetype, kHerbivoreTraits));
+                    parsed.animalSpecies.herbivores.push_back(
+                        genomeFromJson<AnimalGenomeComponent>(archetype, kHerbivoreTraits));
                 }
             }
         }
@@ -359,6 +419,12 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.humus.minerals = record["humus"].value("minerals", 0);
             parsed.humus.pending = record["humus"].value("pending", 0.0f);
         }
+        if (record.contains("carcass")) {
+            parsed.hasCarcass = true;
+            parsed.carcass.meat = record["carcass"].value("meat", 0.0f);
+            parsed.carcass.protein = record["carcass"].value("protein", 0);
+            parsed.carcass.proteinPending = record["carcass"].value("protein_pending", 0.0f);
+        }
         if (record.contains("plant")) {
             parsed.hasPlant = true;
             parsed.plant.age = record["plant"].value("age", 0.0f);
@@ -376,35 +442,52 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             }
             parsed.genome = genomeFromJson<PlantGenomeComponent>(record["genome"], kGrassTraits);
         }
-        if (record.contains("herbivore")) {
-            parsed.hasHerbivore = true;
-            const auto& animal = record["herbivore"];
-            parsed.herbivore.age = animal.value("age", 0.0f);
-            parsed.herbivore.growth = animal.value("growth", 0.0f);
-            parsed.herbivore.sex = sexFromName(animal.value("sex", std::string("female")));
-            parsed.herbivore.energy = animal.value("energy", 0.0f);
-            parsed.herbivore.water = animal.value("water", 0.0f);
-            parsed.herbivore.protein = animal.value("protein", 0);
-            parsed.herbivore.proteinPending = animal.value("protein_pending", 0.0f);
-            parsed.herbivore.dung = animal.value("dung", 0);
-            parsed.herbivore.dungPending = animal.value("dung_pending", 0.0f);
-            parsed.herbivore.stepProgress = animal.value("step_progress", 0.0f);
-            parsed.herbivore.stress = animal.value("stress", 0.0f);
+        // Диета — тег, как impassable. Отдельная сложность только одна: в
+        // файлах, сохранённых до появления хищников, под ключом "herbivore"
+        // лежал ОБЪЕКТ с телом животного, а не признак диеты. Различаем их
+        // по типу значения — так старый мир открывается как открывался, а
+        // новый пишется без оглядки на прошлое.
+        const bool legacyBody = record.contains("herbivore") && record["herbivore"].is_object();
+        parsed.predator = record.value("predator", false);
+
+        const char* bodyKey = record.contains("animal") ? "animal" : (legacyBody ? "herbivore" : nullptr);
+        if (bodyKey != nullptr) {
+            parsed.hasAnimal = true;
+            const auto& animal = record[bodyKey];
+            parsed.animal.age = animal.value("age", 0.0f);
+            parsed.animal.growth = animal.value("growth", 0.0f);
+            parsed.animal.sex = sexFromName(animal.value("sex", std::string("female")));
+            parsed.animal.energy = animal.value("energy", 0.0f);
+            parsed.animal.water = animal.value("water", 0.0f);
+            parsed.animal.protein = animal.value("protein", 0);
+            parsed.animal.proteinPending = animal.value("protein_pending", 0.0f);
+            parsed.animal.dung = animal.value("dung", 0);
+            parsed.animal.dungPending = animal.value("dung_pending", 0.0f);
+            // У животного из старого файла целости тела нет — ран тогда
+            // никто не наносил, значит оно цело.
+            parsed.animal.health = animal.value("health", 1.0f);
+            parsed.animal.stepProgress = animal.value("step_progress", 0.0f);
+            parsed.animal.stress = animal.value("stress", 0.0f);
             // Геном обязателен по той же причине, что и у растения:
             // подставить "средний геном" значило бы втихую изменить
             // состояние мира при загрузке.
-            if (!record.contains("herbivore_genome")) {
-                outError = "herbivore entity has no genome";
+            const char* genomeKey = record.contains("animal_genome")
+                                         ? "animal_genome"
+                                         : (record.contains("herbivore_genome") ? "herbivore_genome" : nullptr);
+            if (genomeKey == nullptr) {
+                outError = "animal entity has no genome";
                 return false;
             }
-            parsed.herbivoreGenome =
-                genomeFromJson<HerbivoreGenomeComponent>(record["herbivore_genome"], kHerbivoreTraits);
+            parsed.animalGenome = parsed.predator
+                                       ? genomeFromJson<AnimalGenomeComponent>(record[genomeKey], kPredatorTraits)
+                                       : genomeFromJson<AnimalGenomeComponent>(record[genomeKey], kHerbivoreTraits);
 
             if (record.contains("desire")) {
                 const auto& desire = record["desire"];
                 parsed.desire.hunger = desire.value("hunger", 0.0f);
                 parsed.desire.thirst = desire.value("thirst", 0.0f);
                 parsed.desire.mating = desire.value("mating", 0.0f);
+                parsed.desire.fear = desire.value("fear", 0.0f);
                 parsed.desire.current = desireFromName(desire.value("current", std::string("idle")));
             }
             // Постоянный идентификатор — единственное, что животное не может
@@ -425,7 +508,8 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         // Area не знает, куда его положить, а непроходимость становится
         // бессмысленной (04_WorldModel.md, п.4).
         if (!parsed.hasPosition && (parsed.hasSoil || parsed.hasWater || parsed.impassable || parsed.waterSource ||
-                                     parsed.hasPlant || parsed.hasHerbivore || parsed.hasHumus)) {
+                                     parsed.hasPlant || parsed.hasAnimal || parsed.hasHumus ||
+                                     parsed.hasCarcass)) {
             outError = "entity has world components but no position";
             return false;
         }
@@ -674,7 +758,7 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
 
     std::uint64_t tick = info.tick;
     for (const auto& parsed : entities) {
-        if (parsed.hasTime || parsed.hasWorldProperties || parsed.hasPlantSpecies || parsed.hasHerbivoreSpecies) {
+        if (parsed.hasTime || parsed.hasWorldProperties || parsed.hasPlantSpecies || parsed.hasAnimalSpecies) {
             // World Entity уже существует (создан в reset, со значениями
             // по умолчанию для свойств мира) — у мира он один, поэтому
             // эта запись просто уточняет его данные, а не создаёт второй
@@ -688,9 +772,8 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             if (parsed.hasPlantSpecies) {
                 world.registry().get<PlantSpeciesComponent>(world.worldEntity()).archetypes = parsed.plantSpecies;
             }
-            if (parsed.hasHerbivoreSpecies) {
-                world.registry().get<HerbivoreSpeciesComponent>(world.worldEntity()).archetypes =
-                    parsed.herbivoreSpecies;
+            if (parsed.hasAnimalSpecies) {
+                world.registry().get<AnimalSpeciesComponent>(world.worldEntity()) = parsed.animalSpecies;
             }
             continue;
         }
@@ -713,11 +796,22 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             world.registry().emplace<PlantComponent>(entity, parsed.plant);
             world.registry().emplace<PlantGenomeComponent>(entity, parsed.genome);
         }
-        if (parsed.hasHerbivore) {
-            world.registry().emplace<HerbivoreComponent>(entity, parsed.herbivore);
-            world.registry().emplace<HerbivoreGenomeComponent>(entity, parsed.herbivoreGenome);
+        if (parsed.hasAnimal) {
+            world.registry().emplace<AnimalComponent>(entity, parsed.animal);
+            world.registry().emplace<AnimalGenomeComponent>(entity, parsed.animalGenome);
             world.registry().emplace<DesireComponent>(entity, parsed.desire);
             world.registry().emplace<IdentityComponent>(entity, IdentityComponent{parsed.identity});
+            // Диета: без тега животное не знало бы, что для него еда.
+            // Хищник помечен явно, всё остальное живое — травоядное (в том
+            // числе животные из файлов, сохранённых до появления хищников).
+            if (parsed.predator) {
+                world.registry().emplace<PredatorComponent>(entity);
+            } else {
+                world.registry().emplace<HerbivoreComponent>(entity);
+            }
+        }
+        if (parsed.hasCarcass) {
+            world.registry().emplace<CarcassComponent>(entity, parsed.carcass);
         }
         if (parsed.impassable) {
             world.registry().emplace<ImpassableComponent>(entity);

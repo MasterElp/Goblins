@@ -1,9 +1,9 @@
 #include "core/Simulation.hpp"
 
+#include "core/generation/AnimalSeeding.hpp"
 #include "core/generation/BoulderScatter.hpp"
 #include "core/generation/GrassSeeding.hpp"
-#include "core/generation/HerbivoreSeeding.hpp"
-#include "core/systems/HerbivoreSystem.hpp"
+#include "core/systems/AnimalSystem.hpp"
 #include "core/systems/HydrologySystem.hpp"
 #include "core/systems/PlantSystem.hpp"
 #include "core/systems/TimeSystem.hpp"
@@ -17,7 +17,7 @@ namespace {
 // seed+4, seed+10, seed+20), чтобы стадии не столкнулись на одном числе.
 constexpr unsigned kBoulderSeedOffset = 1000;
 constexpr unsigned kPlantSeedOffset = 2000;
-constexpr unsigned kHerbivoreSeedOffset = 3000;
+constexpr unsigned kAnimalSeedOffset = 3000;
 
 } // namespace
 
@@ -37,9 +37,10 @@ GenerationStats generateWorld(World& world, int width, int height, const WorldGe
     seedGrass(world, params.plants, params.seed + kPlantSeedOffset);
 
     // 4. Появление животных — последним: травоядное выпускается туда, где
-    //    ему есть что есть, а значит трава к этому моменту должна уже
-    //    расти (02_CorePrinciples.md, п.5).
-    seedHerbivores(world, params.herbivores, params.seed + kHerbivoreSeedOffset);
+    //    ему есть что есть, а хищник — туда, где есть на кого охотиться,
+    //    поэтому и трава, и стадо к этому моменту должны уже стоять на
+    //    карте (02_CorePrinciples.md, п.5).
+    seedAnimals(world, params.animals, params.seed + kAnimalSeedOffset);
 
     return stats;
 }
@@ -58,7 +59,9 @@ void addDefaultSystems(GameLoop& loop) {
     // траву такой, какой она стала на этом тике, а то, что они с ней
     // сделали (объели, вытоптали), трава увидит на следующем — системы
     // разговаривают только состоянием компонентов (05_Entity.md, п.6).
-    loop.addSystem(HerbivoreSystem);
+    // Травоядные и хищники — одна система: животное у них одно, разная
+    // только диета (см. AnimalSystem.hpp).
+    loop.addSystem(AnimalSystem);
 }
 
 } // namespace goblins

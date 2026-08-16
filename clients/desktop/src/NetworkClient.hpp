@@ -57,6 +57,9 @@ struct WorldState {
     std::vector<int> plantSpeciesAt;
     std::vector<float> plantGrowth;
     std::vector<int> humus;
+    // Падаль — такое же состояние тайла, как перегной: сколько мяса на нём
+    // лежит (0 — туши нет).
+    std::vector<float> carcass;
 
     // Виды травы этого мира: для каждого — набор пар "имя черты ->
     // значение", как их прислал сервер. Именно пары, а не структура с
@@ -64,23 +67,28 @@ struct WorldState {
     // зависит только от протокола, 07_TechStack.md, п.6), поэтому новая
     // черта появится в клиенте сама, без правок здесь.
     std::vector<std::vector<std::pair<std::string, float>>> plantSpecies;
-    // Виды травоядных — тем же способом и по той же причине.
+    // Виды животных — тем же способом и по той же причине. Списка два:
+    // у травоядных и хищников свои таблицы черт, и индекс вида у каждой
+    // диеты свой.
     std::vector<std::vector<std::pair<std::string, float>>> herbivoreSpecies;
+    std::vector<std::vector<std::pair<std::string, float>>> predatorSpecies;
 
-    // Травоядные — списком, а не слоем по тайлам, как всё остальное выше:
+    // Животные — списком, а не слоем по тайлам, как всё остальное выше:
     // они подвижны, их десятки на десятки тысяч клеток, и на одной клетке
     // их может стоять несколько (плотный массив этого просто не выразил бы).
-    // Пол и желание приходят строками — клиент их только показывает и не
-    // должен знать, какие ещё бывают.
-    struct Herbivore {
+    // Диета, пол и желание приходят строками — клиент их только показывает
+    // и не должен знать, какие ещё бывают.
+    struct Animal {
         int x = 0;
         int y = 0;
         int species = 0;
         float growth = 0.0f;
+        float health = 1.0f;
+        bool predator = false;
         std::string sex;
         std::string desire;
     };
-    std::vector<Herbivore> herbivores;
+    std::vector<Animal> animals;
 
     // Параметры, которыми сгенерирован текущий мир — стартовая точка для
     // панели настроек генерации.
@@ -176,7 +184,7 @@ public:
 private:
     void handleMessage(const std::string& payload);
     // Разбор списка животных: он одинаков в world_init и в world_delta.
-    void applyHerbivores(const nlohmann::json& message);
+    void applyAnimals(const nlohmann::json& message);
     // Опубликовать working_ как новый неизменяемый снимок. Единственное
     // место, где состояние копируется.
     void publishState();

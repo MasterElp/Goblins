@@ -37,6 +37,11 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
         if (layers.plants && state.humus[i] > 0) {
             color = TileColors::humus(color, state.humus[i]);
         }
+        // Падаль — поверх перегноя и под травой: туша лежит на земле, а
+        // трава вокруг неё продолжает расти.
+        if (layers.animals && !state.carcass.empty() && state.carcass[i] > 0.0f) {
+            color = TileColors::carcass(color, state.carcass[i]);
+        }
         if (layers.plants && state.plantSpeciesAt[i] >= 0) {
             color = TileColors::plant(color, state.plantSpeciesAt[i], state.plantGrowth[i]);
         }

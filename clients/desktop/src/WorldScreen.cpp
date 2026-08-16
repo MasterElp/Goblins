@@ -51,7 +51,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     static bool showMinerals = true;
     static bool showHeight = true;
     static bool showPlants = true;
-    static bool showHerbivores = true;
+    static bool showAnimals = true;
     static bool panelOpen = false;
     if (!initialized) {
         zoom = config.zoom;
@@ -61,7 +61,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         showMinerals = config.show_minerals;
         showHeight = config.show_height;
         showPlants = config.show_plants;
-        showHerbivores = config.show_herbivores;
+        showAnimals = config.show_animals;
         panelOpen = config.show_generation_panel;
         initialized = true;
     }
@@ -211,12 +211,13 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             config.show_plants = showPlants;
             goblins::saveClientConfig(configPath, config);
         }
-        // Травоядные — отдельный выключатель, а не часть слоя травы: это
-        // не слой почвы, а объекты поверх карты (как булыжники и
-        // источники), и смотреть на луг без стада — обычное дело.
+        // Животные — отдельный выключатель, а не часть слоя травы: это не
+        // слой почвы, а объекты поверх карты (как булыжники и источники),
+        // и смотреть на луг без зверей — обычное дело. Падаль гаснет
+        // вместе с ними: она их след, а не свойство почвы.
         if (IsKeyPressed(KEY_SEVEN)) {
-            showHerbivores = !showHerbivores;
-            config.show_herbivores = showHerbivores;
+            showAnimals = !showAnimals;
+            config.show_animals = showAnimals;
             goblins::saveClientConfig(configPath, config);
         }
 
@@ -294,6 +295,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         layers.minerals = showMinerals;
         layers.height = showHeight;
         layers.plants = showPlants;
+        layers.animals = showAnimals;
         const Texture2D& mapTexture = mapCache.texture(snapshot, layers);
         DrawTexturePro(mapTexture,
                        Rectangle{0, 0, static_cast<float>(snapshot.areaWidth),
@@ -330,24 +332,28 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                              std::max(2.0f, tileSizeF * 0.35f), Color{130, 210, 255, 255});
         }
 
-        // Травоядные — поверх карты, а не в её текстуре: они не свойство
+        // Животные — поверх карты, а не в её текстуре: они не свойство
         // тайла, их может быть несколько на одной клетке, и меняются они
         // каждый тик (пересобирать из-за них всю текстуру мира было бы
         // дороже всего остального вместе взятого). Самка — кружок, самец —
         // квадрат: пол виден сразу, а на сильно отдалённой карте и то, и
-        // другое честно вырождается в точку.
-        if (showHerbivores) {
-            for (const auto& animal : snapshot.herbivores) {
+        // другое честно вырождается в точку. Хищник отличается цветом
+        // (красная палитра против охристой) и тем, что рисуется крупнее:
+        // на карте его должно быть видно первым.
+        if (showAnimals) {
+            for (const auto& animal : snapshot.animals) {
                 const float screenX = static_cast<float>(animal.x) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(animal.y) * tileSizeF - viewY + kHudHeight;
                 if (screenX + tileSize < 0 || screenX > viewportW || screenY + tileSize < kHudHeight ||
                     screenY > viewportH + kHudHeight) {
                     continue;
                 }
-                const Color color = TileColors::herbivoreSpecies(animal.species);
-                // Размер значка — от развитости: телёнок мельче взрослого,
-                // как и на самом деле.
-                const float radius = std::max(1.0f, tileSizeF * (0.22f + 0.16f * animal.growth));
+                const Color color = animal.predator ? TileColors::predatorSpecies(animal.species)
+                                                     : TileColors::herbivoreSpecies(animal.species);
+                // Размер значка — от развитости: детёныш мельче взрослого,
+                // как и на самом деле; хищник крупнее добычи.
+                const float scale = animal.predator ? 0.30f : 0.22f;
+                const float radius = std::max(1.0f, tileSizeF * (scale + 0.16f * animal.growth));
                 const float centerX = screenX + tileSizeF * 0.5f;
                 const float centerY = screenY + tileSizeF * 0.5f;
                 if (animal.sex == "male") {
@@ -363,6 +369,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 if (tileSizeF >= 8.0f) {
                     DrawCircleLines(static_cast<int>(centerX), static_cast<int>(centerY), radius + 1.0f,
                                     Color{30, 24, 18, 200});
+                }
+                // Раненого видно: полоска поверх значка. Она появляется
+                // только у пострадавшего — целому животному рисовать нечего.
+                if (animal.health < 0.99f && tileSizeF >= 6.0f) {
+                    const float barWidth = tileSizeF * 0.7f;
+                    DrawRectangle(static_cast<int>(centerX - barWidth * 0.5f), static_cast<int>(screenY + 1.0f),
+                                  std::max(1, static_cast<int>(barWidth * animal.health)), 2,
+                                  Color{220, 60, 50, 230});
                 }
             }
         }
@@ -393,7 +407,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         drawLayerLabel("[4] Minerals", showMinerals);
         drawLayerLabel("[5] Height", showHeight);
         drawLayerLabel("[6] Grass+Humus", showPlants);
-        drawLayerLabel("[7] Herbivores", showHerbivores);
+        drawLayerLabel("[7] Animals", showAnimals);
 
         // Виды травы: цвет, номер и текущая численность — сколько тайлов
         // занимает каждый вид прямо сейчас. Считается по тому же
@@ -418,13 +432,16 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             }
         }
 
-        // Стадо: сколько особей каждого вида и чем они сейчас заняты.
+        // Поголовье: сколько особей каждого вида и чем они сейчас заняты.
         // Желания в легенде не для красоты — по ним видно состояние мира
-        // целиком: стадо, поголовно ищущее еду, означает объеденный луг.
-        if (showHerbivores && !snapshot.herbivores.empty()) {
-            std::vector<int> population(std::max<std::size_t>(snapshot.herbivoreSpecies.size(), 1), 0);
+        // целиком: стадо, поголовно ищущее еду, означает объеденный луг, а
+        // стадо, поголовно бегущее, — что рядом ходят зубы.
+        if (showAnimals && !snapshot.animals.empty()) {
+            std::vector<int> herbivores(std::max<std::size_t>(snapshot.herbivoreSpecies.size(), 1), 0);
+            std::vector<int> predators(std::max<std::size_t>(snapshot.predatorSpecies.size(), 1), 0);
             std::map<std::string, int> desires;
-            for (const auto& animal : snapshot.herbivores) {
+            for (const auto& animal : snapshot.animals) {
+                auto& population = animal.predator ? predators : herbivores;
                 if (animal.species >= 0 && static_cast<std::size_t>(animal.species) < population.size()) {
                     ++population[static_cast<std::size_t>(animal.species)];
                 }
@@ -433,9 +450,15 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
             int legendX = 10;
             const int legendY = layerY + 40;
-            for (std::size_t s = 0; s < population.size(); ++s) {
+            for (std::size_t s = 0; s < herbivores.size(); ++s) {
                 DrawRectangle(legendX, legendY + 1, 10, 10, TileColors::herbivoreSpecies(static_cast<int>(s)));
-                const char* label = TextFormat("hb%zu %d", s, population[s]);
+                const char* label = TextFormat("hb%zu %d", s, herbivores[s]);
+                DrawText(label, legendX + 14, legendY, 14, layerOnColor);
+                legendX += 14 + MeasureText(label, 14) + 12;
+            }
+            for (std::size_t s = 0; s < predators.size(); ++s) {
+                DrawRectangle(legendX, legendY + 1, 10, 10, TileColors::predatorSpecies(static_cast<int>(s)));
+                const char* label = TextFormat("pr%zu %d", s, predators[s]);
                 DrawText(label, legendX + 14, legendY, 14, layerOnColor);
                 legendX += 14 + MeasureText(label, 14) + 12;
             }
@@ -531,17 +554,23 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // на клетке может быть несколько, и втискивать их в подпись самого
         // тайла (у которого всё по одному) значило бы врать о том, как
         // устроен мир.
-        if (showHerbivores) {
+        if (showAnimals) {
             std::string animalsLabel;
-            for (const auto& animal : snapshot.herbivores) {
+            if (!snapshot.carcass.empty() && snapshot.carcass[hi] > 0.0f) {
+                animalsLabel += TextFormat("carcass %.1f", snapshot.carcass[hi]);
+            }
+            for (const auto& animal : snapshot.animals) {
                 if (animal.x != hoverX || animal.y != hoverY) {
                     continue;
                 }
                 if (!animalsLabel.empty()) {
                     animalsLabel += "   ";
                 }
-                animalsLabel += TextFormat("hb%d %s %.0f%% -> %s", animal.species, animal.sex.c_str(),
-                                            animal.growth * 100.0f, animal.desire.c_str());
+                animalsLabel += TextFormat("%s%d %s %.0f%%%s -> %s", animal.predator ? "pr" : "hb", animal.species,
+                                            animal.sex.c_str(), animal.growth * 100.0f,
+                                            animal.health < 0.99f ? TextFormat(" hurt %.0f%%", animal.health * 100.0f)
+                                                                  : "",
+                                            animal.desire.c_str());
             }
             if (!animalsLabel.empty()) {
                 const int animalsWidth = MeasureText(animalsLabel.c_str(), 16);

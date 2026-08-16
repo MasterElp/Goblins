@@ -28,11 +28,15 @@ struct Layers {
     bool minerals = true;
     bool height = true;
     bool plants = true;
+    // Животные рисуются значками поверх текстуры (см. WorldScreen), но их
+    // выключатель влияет и на неё: падаль — состояние тайла, и гасить её
+    // надо вместе со зверями, а не вместе с травой.
+    bool animals = true;
 };
 
 inline bool operator==(const Layers& a, const Layers& b) {
     return a.rockiness == b.rockiness && a.compaction == b.compaction && a.moisture == b.moisture &&
-           a.minerals == b.minerals && a.height == b.height && a.plants == b.plants;
+           a.minerals == b.minerals && a.height == b.height && a.plants == b.plants && a.animals == b.animals;
 }
 inline bool operator!=(const Layers& a, const Layers& b) {
     return !(a == b);

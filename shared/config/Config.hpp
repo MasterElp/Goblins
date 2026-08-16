@@ -125,23 +125,33 @@ struct PlantConfig {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PlantConfig, grass_species, grass_coverage, mutation_rate,
                                     humus_decay_rate)
 
-// Зеркало core::HerbivoreParams (core/generation/HerbivoreParams.hpp) — по
-// той же причине, что TerrainConfig и PlantConfig выше. Имена и значения по
-// умолчанию должны совпадать с core::HerbivoreParams.
-struct HerbivoreConfig {
-    // Сколько видов травоядных в мире. Ядро обрежет значение до 1..8
-    // (core::kMinHerbivoreSpecies/kMaxHerbivoreSpecies).
-    int species = 2;
+// Зеркало core::AnimalParams (core/generation/AnimalParams.hpp) — по той же
+// причине, что TerrainConfig и PlantConfig выше. Имена и значения по
+// умолчанию должны совпадать с core::AnimalParams.
+//
+// Травоядные и хищники — одна секция, а не две: они появляются одним этапом
+// генерации и живут по одной системе, различаясь только диетой.
+struct AnimalConfig {
+    // Сколько видов каждой диеты в мире. Ядро обрежет значения к своим
+    // границам (1..8 травоядных, 1..6 хищников).
+    int herbivore_species = 2;
+    int predator_species = 1;
 
     // Сколько особей выпускается при генерации — штуки, а не доля карты:
-    // травоядных десятки, а не тысячи. Ноль — мир без животных.
-    int count = 40;
+    // животных десятки, а не тысячи. Хищников заметно меньше, чем добычи:
+    // иначе они выедят её раньше, чем она успеет расплодиться. Ноль в любой
+    // строке — мир без этого звена.
+    int herbivore_count = 120;
+    int predator_count = 10;
 
     // Свойство мира (core::WorldPropertiesComponent): выбирается при
-    // генерации, во время симуляции HerbivoreSystem его только читает.
+    // генерации, во время симуляции AnimalSystem его только читает. Одно на
+    // всех животных — это скорость наследственных изменений в этом мире, а
+    // не свойство диеты.
     float mutation_rate = 0.06f;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(HerbivoreConfig, species, count, mutation_rate)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AnimalConfig, herbivore_species, predator_species,
+                                    herbivore_count, predator_count, mutation_rate)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";
@@ -164,7 +174,7 @@ struct ServerConfig {
     int boulder_count = 40;
 
     PlantConfig plants{};
-    HerbivoreConfig herbivores{};
+    AnimalConfig animals{};
 
     // Целевой интервал тика. Сколько тиков выполнить — не настройка:
     // мир существует независимо от наблюдателя и тикает, пока сервер жив
@@ -186,7 +196,7 @@ struct ServerConfig {
     std::string saves_dir = "saves";
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, seed, terrain, boulder_count,
-                                    plants, herbivores, tick_interval_ms, snapshot_interval_ms,
+                                    plants, animals, tick_interval_ms, snapshot_interval_ms,
                                     saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
@@ -200,7 +210,7 @@ struct RegenerationRequest {
     TerrainConfig terrain{};
     int boulder_count = 40;
     PlantConfig plants{};
-    HerbivoreConfig herbivores{};
+    AnimalConfig animals{};
 };
 // ..._WITH_DEFAULT, а не строгий вариант, — по той же причине, что и у
 // структур конфигурации выше: этот запрос лежит внутри каждого файла
@@ -214,7 +224,7 @@ struct RegenerationRequest {
 // в этом случае подставит seed=54321, и старый мир на диске (сами Entity,
 // не "generation") от этого не пострадает, только надпись "чем
 // сгенерирован" в панели будет неточной для таких файлов.
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, seed, terrain, boulder_count, plants, herbivores)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, seed, terrain, boulder_count, plants, animals)
 
 struct ClientConfig {
     std::string host = "127.0.0.1";
@@ -244,7 +254,7 @@ struct ClientConfig {
     bool show_minerals = true;
     bool show_height = true;
     bool show_plants = true;
-    bool show_herbivores = true;
+    bool show_animals = true;
     float zoom = 1.0f;
 
     // Панель параметров генерации на экране мира. По умолчанию закрыта:
@@ -253,7 +263,7 @@ struct ClientConfig {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
                                     fullscreen, show_rockiness, show_compaction, show_moisture, show_minerals,
-                                    show_height, show_plants, show_herbivores, zoom, show_generation_panel)
+                                    show_height, show_plants, show_animals, zoom, show_generation_panel)
 
 namespace detail {
 
