@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/Humus.hpp"
 #include "core/components/HumusComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
@@ -239,27 +240,21 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // при разрешении очереди команд (05_Entity.md, п.5) — до конца
         // тика клетка считается занятой, и никто не посеет туда семя.
         if (plant.age >= genome.maxAge || plant.stress >= 1.0f) {
-            commands.enqueue([entity, x = position.x, y = position.y, minerals = plant.minerals](World& w) {
+            commands.enqueue([entity, x = position.x, y = position.y](World& w) {
                 if (!w.registry().valid(entity)) {
                     return;
                 }
-                // Перегной — не отдельный объект, а состояние тайла: он
-                // ложится на тот же терраформирующий Entity, что и почва
-                // с водой (см. HumusComponent). Если перегной там уже
-                // есть, минералы просто складываются.
-                if (minerals > 0) {
-                    for (const auto tile : w.area().cellAt(x, y).entities) {
-                        if (!w.registry().all_of<SoilComponent>(tile)) {
-                            continue;
-                        }
-                        if (auto* humus = w.registry().try_get<HumusComponent>(tile)) {
-                            humus->minerals += minerals;
-                        } else {
-                            w.registry().emplace<HumusComponent>(tile, HumusComponent{minerals, 0.0f});
-                        }
-                        break;
-                    }
+                // Сколько минералов уходит в перегной, читаем сейчас, а не
+                // берём снятым при постановке команды: пока она ждала
+                // очереди, тик успел доработать — например, растение
+                // объело травоядное (HerbivoreSystem идёт следом) и часть
+                // крупиц уже ушла в него. Со снятым числом эти крупицы
+                // легли бы в перегной ВТОРОЙ раз.
+                int minerals = 0;
+                if (const auto* dying = w.registry().try_get<const PlantComponent>(entity)) {
+                    minerals = dying->minerals;
                 }
+                depositHumus(w, x, y, minerals);
                 w.despawn(entity);
             });
             continue;

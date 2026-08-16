@@ -125,6 +125,24 @@ struct PlantConfig {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PlantConfig, grass_species, grass_coverage, mutation_rate,
                                     humus_decay_rate)
 
+// Зеркало core::HerbivoreParams (core/generation/HerbivoreParams.hpp) — по
+// той же причине, что TerrainConfig и PlantConfig выше. Имена и значения по
+// умолчанию должны совпадать с core::HerbivoreParams.
+struct HerbivoreConfig {
+    // Сколько видов травоядных в мире. Ядро обрежет значение до 1..8
+    // (core::kMinHerbivoreSpecies/kMaxHerbivoreSpecies).
+    int species = 2;
+
+    // Сколько особей выпускается при генерации — штуки, а не доля карты:
+    // травоядных десятки, а не тысячи. Ноль — мир без животных.
+    int count = 40;
+
+    // Свойство мира (core::WorldPropertiesComponent): выбирается при
+    // генерации, во время симуляции HerbivoreSystem его только читает.
+    float mutation_rate = 0.06f;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(HerbivoreConfig, species, count, mutation_rate)
+
 struct ServerConfig {
     std::string host = "127.0.0.1";
     int port = 9002;
@@ -146,6 +164,7 @@ struct ServerConfig {
     int boulder_count = 40;
 
     PlantConfig plants{};
+    HerbivoreConfig herbivores{};
 
     // Целевой интервал тика. Сколько тиков выполнить — не настройка:
     // мир существует независимо от наблюдателя и тикает, пока сервер жив
@@ -167,7 +186,7 @@ struct ServerConfig {
     std::string saves_dir = "saves";
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, seed, terrain, boulder_count,
-                                    plants, tick_interval_ms, snapshot_interval_ms,
+                                    plants, herbivores, tick_interval_ms, snapshot_interval_ms,
                                     saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
@@ -181,6 +200,7 @@ struct RegenerationRequest {
     TerrainConfig terrain{};
     int boulder_count = 40;
     PlantConfig plants{};
+    HerbivoreConfig herbivores{};
 };
 // ..._WITH_DEFAULT, а не строгий вариант, — по той же причине, что и у
 // структур конфигурации выше: этот запрос лежит внутри каждого файла
@@ -194,7 +214,7 @@ struct RegenerationRequest {
 // в этом случае подставит seed=54321, и старый мир на диске (сами Entity,
 // не "generation") от этого не пострадает, только надпись "чем
 // сгенерирован" в панели будет неточной для таких файлов.
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, seed, terrain, boulder_count, plants)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, seed, terrain, boulder_count, plants, herbivores)
 
 struct ClientConfig {
     std::string host = "127.0.0.1";
@@ -224,6 +244,7 @@ struct ClientConfig {
     bool show_minerals = true;
     bool show_height = true;
     bool show_plants = true;
+    bool show_herbivores = true;
     float zoom = 1.0f;
 
     // Панель параметров генерации на экране мира. По умолчанию закрыта:
@@ -232,7 +253,7 @@ struct ClientConfig {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
                                     fullscreen, show_rockiness, show_compaction, show_moisture, show_minerals,
-                                    show_height, show_plants, zoom, show_generation_panel)
+                                    show_height, show_plants, show_herbivores, zoom, show_generation_panel)
 
 namespace detail {
 

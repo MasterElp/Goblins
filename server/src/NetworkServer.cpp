@@ -8,7 +8,11 @@
 #include <ixwebsocket/IXNetSystem.h>
 #include <nlohmann/json.hpp>
 
+#include "core/components/DesireComponent.hpp"
 #include "core/components/HeightComponent.hpp"
+#include "core/components/HerbivoreComponent.hpp"
+#include "core/components/HerbivoreGenomeComponent.hpp"
+#include "core/components/HerbivoreSpeciesComponent.hpp"
 #include "core/components/HumusComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PlantComponent.hpp"
@@ -19,6 +23,7 @@
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
+#include "core/generation/HerbivoreGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "core/Diagnostics.hpp"
 #include "server/WorldSave.hpp"
@@ -85,6 +90,9 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
     // массиве выражается значением-заглушкой.
     species.assign(count, -1);
+    // Животные — список, а не слой (см. NetworkServer.hpp): он собирается
+    // заново на каждый снимок, поэтому здесь только очищается.
+    herbivores.clear();
 }
 
 NetworkServer::NetworkServer(const World& world, const std::string& host, int port, std::atomic<bool>& paused,
@@ -247,6 +255,42 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
             out.species[i] = genome.species;
             out.growth[i] = growthPercent(plant.growth);
         });
+
+    // Животные — разреженным списком, а не слоем: на одной клетке их может
+    // стоять несколько, и плотный массив по определению не смог бы этого
+    // выразить. Сортируем по клетке и виду, чтобы порядок в списке не
+    // зависел от того, в каком порядке EnTT хранит Entity: иначе дельта
+    // видела бы изменение там, где мир не менялся вовсе.
+    registry.view<const PositionComponent, const HerbivoreComponent, const HerbivoreGenomeComponent,
+                   const DesireComponent>()
+        .each([&](const PositionComponent& pos, const HerbivoreComponent& animal,
+                   const HerbivoreGenomeComponent& genome, const DesireComponent& desire) {
+            out.herbivores.push_back(LayerSnapshot::HerbivoreView{pos.x, pos.y, genome.species,
+                                                                  growthPercent(animal.growth), animal.sex,
+                                                                  desire.current});
+        });
+    std::sort(out.herbivores.begin(), out.herbivores.end(),
+              [](const LayerSnapshot::HerbivoreView& a, const LayerSnapshot::HerbivoreView& b) {
+                  if (a.y != b.y) return a.y < b.y;
+                  if (a.x != b.x) return a.x < b.x;
+                  if (a.species != b.species) return a.species < b.species;
+                  if (a.sex != b.sex) return a.sex < b.sex;
+                  if (a.desire != b.desire) return a.desire < b.desire;
+                  return a.growth < b.growth;
+              });
+}
+
+nlohmann::json NetworkServer::herbivoresToJson(const std::vector<LayerSnapshot::HerbivoreView>& herbivores) {
+    auto array = nlohmann::json::array();
+    for (const auto& animal : herbivores) {
+        array.push_back({{"x", animal.x},
+                          {"y", animal.y},
+                          {"species", animal.species},
+                          {"growth", animal.growth},
+                          {"sex", sexName(animal.sex)},
+                          {"desire", desireName(animal.desire)}});
+    }
+    return array;
 }
 
 std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
@@ -270,6 +314,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
         // вкомпилированные умолчания, молча затирая настройки растений с
         // сервера.
         message["plants"] = currentGenerationConfig_.plants;
+        message["herbivores"] = currentGenerationConfig_.herbivores;
     }
 
     // Константы законов мира (core/Diagnostics.hpp) — только для показа.
@@ -323,6 +368,23 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
     }
     message["plant_species"] = speciesJson;
 
+    // Виды травоядных — по тем же правилам, что и виды травы: клиенту
+    // нужны и цвет по индексу, и сами числа, а перечисляет их таблица черт,
+    // а не этот код.
+    auto herbivoreSpeciesJson = nlohmann::json::array();
+    for (const auto& archetype :
+         world_.registry().get<const HerbivoreSpeciesComponent>(world_.worldEntity()).archetypes) {
+        nlohmann::json record;
+        record["species"] = archetype.species;
+        for (const auto& trait : kHerbivoreTraits) {
+            record[trait.name] = archetype.*trait.gene;
+        }
+        herbivoreSpeciesJson.push_back(std::move(record));
+    }
+    message["herbivore_species"] = herbivoreSpeciesJson;
+
+    message["herbivores"] = herbivoresToJson(layers.herbivores);
+
     message["layers"]["rockiness"] = layers.rockiness;
     message["layers"]["moisture"] = layers.moisture;
     message["layers"]["compaction"] = layers.compaction;
@@ -358,6 +420,15 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
             anyChange = true;
             message[name] = std::move(pairs);
         }
+    }
+
+    // Список животных — целиком и только если изменился (см. протокол в
+    // NetworkServer.hpp): при десятках животных это дешевле, чем описывать
+    // перемещения ключами, а не изменился он ровно тогда, когда стадо
+    // стояло на месте.
+    if (previous.herbivores != current.herbivores) {
+        anyChange = true;
+        message["herbivores"] = herbivoresToJson(current.herbivores);
     }
 
     const auto tick = world_.registry().get<const TimeComponent>(world_.worldEntity()).tick;

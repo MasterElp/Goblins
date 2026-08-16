@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -14,11 +15,16 @@
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/TimeComponent.hpp"
+#include "core/components/DesireComponent.hpp"
+#include "core/components/HerbivoreComponent.hpp"
+#include "core/components/HerbivoreGenomeComponent.hpp"
+#include "core/components/HerbivoreSpeciesComponent.hpp"
 #include "core/components/HumusComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/WaterComponent.hpp"
+#include "core/generation/HerbivoreGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "server/ConsoleHotkeyWatcher.hpp"
 #include "server/NetworkServer.hpp"
@@ -63,6 +69,16 @@ goblins::PlantParams toPlantParams(const goblins::PlantConfig& config) {
     return params;
 }
 
+// И для травоядных — тем же переносом полей: core::HerbivoreParams не
+// JSON-структура (07_TechStack.md, п.6).
+goblins::HerbivoreParams toHerbivoreParams(const goblins::HerbivoreConfig& config) {
+    goblins::HerbivoreParams params;
+    params.species = config.species;
+    params.count = config.count;
+    params.mutationRate = config.mutation_rate;
+    return params;
+}
+
 // Перенос запроса на генерацию (JSON-структура сервера) в параметры мира
 // (core). Сам конвейер генерации — этапы и их порядок — живёт в core
 // (core::generateWorld, 02_CorePrinciples.md, п.5): это закон мира, а не
@@ -73,6 +89,7 @@ goblins::WorldGenParams toWorldGenParams(const goblins::RegenerationRequest& req
     params.terrain = toTerrainParams(request.terrain);
     params.boulderCount = request.boulder_count;
     params.plants = toPlantParams(request.plants);
+    params.herbivores = toHerbivoreParams(request.herbivores);
     return params;
 }
 
@@ -142,6 +159,56 @@ void printPlantStats(const goblins::World& world) {
     for (const auto& archetype : archetypes) {
         std::cout << "  sp" << archetype.species << " n=" << population[static_cast<std::size_t>(archetype.species)];
         for (const auto& trait : goblins::kGrassTraits) {
+            std::cout << " " << trait.name << "=" << std::setprecision(4) << archetype.*trait.gene;
+        }
+        std::cout << "\n";
+    }
+    std::cout << std::defaultfloat << "\n";
+}
+
+// Виды травоядных этого мира, их поголовье и то, чем стадо сейчас занято.
+// Желания печатаются рядом с численностью не для красоты: по ним сразу
+// видно, чего миру не хватает — стадо, поголовно занятое поиском еды, и
+// стадо, которому нечего хотеть, живут в очень разных мирах.
+void printHerbivoreStats(const goblins::World& world) {
+    const auto& archetypes =
+        world.registry().get<const goblins::HerbivoreSpeciesComponent>(world.worldEntity()).archetypes;
+    if (archetypes.empty()) {
+        std::cout << "Herbivore species: none (no animals in this world)\n\n";
+        return;
+    }
+
+    std::vector<int> population(archetypes.size(), 0);
+    std::vector<int> females(archetypes.size(), 0);
+    std::size_t animals = 0;
+    world.registry().view<const goblins::HerbivoreComponent, const goblins::HerbivoreGenomeComponent>().each(
+        [&](const goblins::HerbivoreComponent& animal, const goblins::HerbivoreGenomeComponent& genome) {
+            ++animals;
+            if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < population.size()) {
+                ++population[static_cast<std::size_t>(genome.species)];
+                if (animal.sex == goblins::Sex::Female) {
+                    ++females[static_cast<std::size_t>(genome.species)];
+                }
+            }
+        });
+
+    std::map<std::string, int> desires;
+    world.registry().view<const goblins::DesireComponent>().each([&](const goblins::DesireComponent& desire) {
+        ++desires[goblins::desireName(desire.current)];
+    });
+
+    std::cout << "Herbivore species: " << archetypes.size() << ", animals: " << animals << " (";
+    bool first = true;
+    for (const auto& [name, count] : desires) {
+        std::cout << (first ? "" : ", ") << name << " " << count;
+        first = false;
+    }
+    std::cout << ")\n";
+    std::cout << std::fixed;
+    for (const auto& archetype : archetypes) {
+        const auto index = static_cast<std::size_t>(archetype.species);
+        std::cout << "  hb" << archetype.species << " n=" << population[index] << " (f=" << females[index] << ")";
+        for (const auto& trait : goblins::kHerbivoreTraits) {
             std::cout << " " << trait.name << "=" << std::setprecision(4) << archetype.*trait.gene;
         }
         std::cout << "\n";
@@ -321,6 +388,7 @@ int main(int argc, char** argv) {
                 printGenerationStats(genStats);
                 printWorldStats(world, request.boulder_count);
                 printPlantStats(world);
+                printHerbivoreStats(world);
 
                 network.setCurrentWorldName("");
                 worldReady = true;
@@ -340,6 +408,7 @@ int main(int argc, char** argv) {
                                << info.area_width << "x" << info.area_height << ").\n";
                     printWorldStats(world, generation.boulder_count);
                     printPlantStats(world);
+                    printHerbivoreStats(world);
                     network.broadcastNotice("info", "World '" + info.name + "' loaded.");
                     worldReady = true;
                 } else {
@@ -425,6 +494,7 @@ int main(int argc, char** argv) {
             printGenerationStats(genStats);
             printWorldStats(world, request->boulder_count);
             printPlantStats(world);
+            printHerbivoreStats(world);
         }
 
         return true;

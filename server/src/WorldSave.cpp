@@ -11,8 +11,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/components/DesireComponent.hpp"
 #include "core/components/HeightComponent.hpp"
+#include "core/components/HerbivoreComponent.hpp"
+#include "core/components/HerbivoreGenomeComponent.hpp"
+#include "core/components/HerbivoreSpeciesComponent.hpp"
 #include "core/components/HumusComponent.hpp"
+#include "core/components/IdentityComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
@@ -23,6 +28,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
+#include "core/generation/HerbivoreGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "platform/ExecutablePath.hpp"
 
@@ -54,25 +60,33 @@ std::filesystem::path savePath(const std::filesystem::path& directory, const std
     return directory / (name + kExtension);
 }
 
-// Геном пишется и читается обходом таблицы черт (core::kGrassTraits), а не
-// перечислением полей: имена в файле — это имена черт, поэтому новая
-// черта попадает в сохранение сама. Отсутствующая в старом файле черта
-// берёт значение по умолчанию — та же логика, что и у "height"/"minerals"
-// (см. заголовок WorldSave.hpp): формат от этого не ломается и версию
-// поднимать не нужно.
-nlohmann::json genomeToJson(const PlantGenomeComponent& genome) {
+// Геном пишется и читается обходом таблицы черт (core::kGrassTraits для
+// травы, core::kHerbivoreTraits для травоядных), а не перечислением полей:
+// имена в файле — это имена черт, поэтому новая черта попадает в
+// сохранение сама. Отсутствующая в старом файле черта берёт значение по
+// умолчанию — та же логика, что и у "height"/"minerals" (см. заголовок
+// WorldSave.hpp): формат от этого не ломается и версию поднимать не нужно.
+//
+// Функции шаблонные по типу генома и его таблице: механика "геном — это
+// таблица черт" общая для всего живого (core/generation/Genetics.hpp), и
+// сериализация обязана быть общей ровно по той же причине — иначе у
+// второго существа завелась бы вторая, отдельно живущая копия того же
+// кода.
+template <typename Genome, std::size_t N>
+nlohmann::json genomeToJson(const Genome& genome, const genetics::Trait<Genome> (&traits)[N]) {
     nlohmann::json record;
     record["species"] = genome.species;
-    for (const auto& trait : kGrassTraits) {
+    for (const auto& trait : traits) {
         record[trait.name] = genome.*trait.gene;
     }
     return record;
 }
 
-PlantGenomeComponent genomeFromJson(const nlohmann::json& record) {
-    PlantGenomeComponent genome;
+template <typename Genome, std::size_t N>
+Genome genomeFromJson(const nlohmann::json& record, const genetics::Trait<Genome> (&traits)[N]) {
+    Genome genome;
     genome.species = record.value("species", 0);
-    for (const auto& trait : kGrassTraits) {
+    for (const auto& trait : traits) {
         genome.*trait.gene = record.value(trait.name, genome.*trait.gene);
     }
     return genome;
@@ -105,15 +119,29 @@ struct ParsedEntity {
     bool hasWorldProperties = false;
     WorldPropertiesComponent worldProperties{};
     // Виды травы — тоже данные World Entity (PlantSpeciesComponent, см.
-    // 06_GameLoop.md, п.1a): выбраны при генерации и не меняются.
+    // 06_GameLoop.md, п.1a): выбраны при генерации и не меняются. Виды
+    // травоядных живут там же и по тем же правилам.
     bool hasPlantSpecies = false;
     std::vector<PlantGenomeComponent> plantSpecies;
+    bool hasHerbivoreSpecies = false;
+    std::vector<HerbivoreGenomeComponent> herbivoreSpecies;
 
     // Живое растение — Entity с состоянием и геномом (оба обязательно
     // вместе: растение без генома не смогло бы ни расти, ни дать потомка).
     bool hasPlant = false;
     PlantComponent plant{};
     PlantGenomeComponent genome{};
+
+    // Живое травоядное — Entity с состоянием, геномом, желаниями и
+    // постоянным идентификатором. Все четыре обязательно вместе: без
+    // генома животное не смогло бы ни расти, ни принести потомство, без
+    // идентификатора у него не было бы ключа случайности (см.
+    // IdentityComponent), а желания — то, чем оно занято прямо сейчас.
+    bool hasHerbivore = false;
+    HerbivoreComponent herbivore{};
+    HerbivoreGenomeComponent herbivoreGenome{};
+    DesireComponent desire{};
+    std::uint64_t identity = 0;
 
     // Перегной лежит на терраформирующем Entity тайла, рядом с почвой и
     // водой (см. HumusComponent), поэтому это признак того же самого
@@ -141,14 +169,23 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           {"max_erosion_depth", worldProperties->maxErosionDepth},
                                           {"plant_mutation_rate", worldProperties->plantMutationRate},
                                           {"humus_decay_rate", worldProperties->humusDecayRate},
-                                          {"plant_random_seed", worldProperties->plantRandomSeed}};
+                                          {"plant_random_seed", worldProperties->plantRandomSeed},
+                                          {"animal_mutation_rate", worldProperties->animalMutationRate},
+                                          {"animal_random_seed", worldProperties->animalRandomSeed}};
         }
         if (const auto* plantSpecies = registry.try_get<PlantSpeciesComponent>(entity)) {
             auto archetypes = nlohmann::json::array();
             for (const auto& archetype : plantSpecies->archetypes) {
-                archetypes.push_back(genomeToJson(archetype));
+                archetypes.push_back(genomeToJson(archetype, kGrassTraits));
             }
             record["plant_species"] = std::move(archetypes);
+        }
+        if (const auto* herbivoreSpecies = registry.try_get<HerbivoreSpeciesComponent>(entity)) {
+            auto archetypes = nlohmann::json::array();
+            for (const auto& archetype : herbivoreSpecies->archetypes) {
+                archetypes.push_back(genomeToJson(archetype, kHerbivoreTraits));
+            }
+            record["herbivore_species"] = std::move(archetypes);
         }
         if (const auto* position = registry.try_get<PositionComponent>(entity)) {
             record["position"] = {{"x", position->x}, {"y", position->y}};
@@ -177,7 +214,32 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                {"stress", plant->stress}};
         }
         if (const auto* genome = registry.try_get<PlantGenomeComponent>(entity)) {
-            record["genome"] = genomeToJson(*genome);
+            record["genome"] = genomeToJson(*genome, kGrassTraits);
+        }
+        if (const auto* animal = registry.try_get<HerbivoreComponent>(entity)) {
+            record["herbivore"] = {{"age", animal->age},
+                                    {"growth", animal->growth},
+                                    {"sex", sexName(animal->sex)},
+                                    {"energy", animal->energy},
+                                    {"water", animal->water},
+                                    {"protein", animal->protein},
+                                    {"protein_pending", animal->proteinPending},
+                                    {"dung", animal->dung},
+                                    {"dung_pending", animal->dungPending},
+                                    {"step_progress", animal->stepProgress},
+                                    {"stress", animal->stress}};
+        }
+        if (const auto* genome = registry.try_get<HerbivoreGenomeComponent>(entity)) {
+            record["herbivore_genome"] = genomeToJson(*genome, kHerbivoreTraits);
+        }
+        if (const auto* desire = registry.try_get<DesireComponent>(entity)) {
+            record["desire"] = {{"hunger", desire->hunger},
+                                 {"thirst", desire->thirst},
+                                 {"mating", desire->mating},
+                                 {"current", desireName(desire->current)}};
+        }
+        if (const auto* identity = registry.try_get<IdentityComponent>(entity)) {
+            record["identity"] = identity->id;
         }
         // Тег-компонент без данных — в файле это просто признак наличия
         // (02_CorePrinciples.md, п.3: отсутствие компонента = отсутствие
@@ -241,12 +303,25 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("humus_decay_rate", 0.02f);
             parsed.worldProperties.plantRandomSeed =
                 record["world_properties"].value("plant_random_seed", 0u);
+            parsed.worldProperties.animalMutationRate =
+                record["world_properties"].value("animal_mutation_rate", 0.06f);
+            parsed.worldProperties.animalRandomSeed =
+                record["world_properties"].value("animal_random_seed", 0u);
         }
         if (record.contains("plant_species") && record["plant_species"].is_array()) {
             parsed.hasPlantSpecies = true;
             for (const auto& archetype : record["plant_species"]) {
                 if (archetype.is_object()) {
-                    parsed.plantSpecies.push_back(genomeFromJson(archetype));
+                    parsed.plantSpecies.push_back(genomeFromJson<PlantGenomeComponent>(archetype, kGrassTraits));
+                }
+            }
+        }
+        if (record.contains("herbivore_species") && record["herbivore_species"].is_array()) {
+            parsed.hasHerbivoreSpecies = true;
+            for (const auto& archetype : record["herbivore_species"]) {
+                if (archetype.is_object()) {
+                    parsed.herbivoreSpecies.push_back(
+                        genomeFromJson<HerbivoreGenomeComponent>(archetype, kHerbivoreTraits));
                 }
             }
         }
@@ -299,14 +374,58 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 outError = "plant entity has no genome";
                 return false;
             }
-            parsed.genome = genomeFromJson(record["genome"]);
+            parsed.genome = genomeFromJson<PlantGenomeComponent>(record["genome"], kGrassTraits);
+        }
+        if (record.contains("herbivore")) {
+            parsed.hasHerbivore = true;
+            const auto& animal = record["herbivore"];
+            parsed.herbivore.age = animal.value("age", 0.0f);
+            parsed.herbivore.growth = animal.value("growth", 0.0f);
+            parsed.herbivore.sex = sexFromName(animal.value("sex", std::string("female")));
+            parsed.herbivore.energy = animal.value("energy", 0.0f);
+            parsed.herbivore.water = animal.value("water", 0.0f);
+            parsed.herbivore.protein = animal.value("protein", 0);
+            parsed.herbivore.proteinPending = animal.value("protein_pending", 0.0f);
+            parsed.herbivore.dung = animal.value("dung", 0);
+            parsed.herbivore.dungPending = animal.value("dung_pending", 0.0f);
+            parsed.herbivore.stepProgress = animal.value("step_progress", 0.0f);
+            parsed.herbivore.stress = animal.value("stress", 0.0f);
+            // Геном обязателен по той же причине, что и у растения:
+            // подставить "средний геном" значило бы втихую изменить
+            // состояние мира при загрузке.
+            if (!record.contains("herbivore_genome")) {
+                outError = "herbivore entity has no genome";
+                return false;
+            }
+            parsed.herbivoreGenome =
+                genomeFromJson<HerbivoreGenomeComponent>(record["herbivore_genome"], kHerbivoreTraits);
+
+            if (record.contains("desire")) {
+                const auto& desire = record["desire"];
+                parsed.desire.hunger = desire.value("hunger", 0.0f);
+                parsed.desire.thirst = desire.value("thirst", 0.0f);
+                parsed.desire.mating = desire.value("mating", 0.0f);
+                parsed.desire.current = desireFromName(desire.value("current", std::string("idle")));
+            }
+            // Постоянный идентификатор — единственное, что животное не может
+            // восстановить само: он и есть его ключ случайности. Если файл
+            // его почему-то не несёт, выдаём новый из позиции и состояния —
+            // животное останется собой во всём, кроме прошлых бросков
+            // жребия, а мир и так недетерминирован
+            // (02_CorePrinciples.md, п.12a).
+            parsed.identity = record.value("identity", static_cast<std::uint64_t>(0));
+            if (parsed.identity == 0) {
+                parsed.identity = mixSeed(static_cast<std::uint64_t>(parsed.position.x * 73856093 +
+                                                                     parsed.position.y * 19349663),
+                                           static_cast<std::uint64_t>(outEntities.size()) + 1ull);
+            }
         }
 
         // Позиция — единственное, чем Entity привязан к тайлу; без неё
         // Area не знает, куда его положить, а непроходимость становится
         // бессмысленной (04_WorldModel.md, п.4).
         if (!parsed.hasPosition && (parsed.hasSoil || parsed.hasWater || parsed.impassable || parsed.waterSource ||
-                                     parsed.hasPlant || parsed.hasHumus)) {
+                                     parsed.hasPlant || parsed.hasHerbivore || parsed.hasHumus)) {
             outError = "entity has world components but no position";
             return false;
         }
@@ -555,7 +674,7 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
 
     std::uint64_t tick = info.tick;
     for (const auto& parsed : entities) {
-        if (parsed.hasTime || parsed.hasWorldProperties || parsed.hasPlantSpecies) {
+        if (parsed.hasTime || parsed.hasWorldProperties || parsed.hasPlantSpecies || parsed.hasHerbivoreSpecies) {
             // World Entity уже существует (создан в reset, со значениями
             // по умолчанию для свойств мира) — у мира он один, поэтому
             // эта запись просто уточняет его данные, а не создаёт второй
@@ -568,6 +687,10 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             }
             if (parsed.hasPlantSpecies) {
                 world.registry().get<PlantSpeciesComponent>(world.worldEntity()).archetypes = parsed.plantSpecies;
+            }
+            if (parsed.hasHerbivoreSpecies) {
+                world.registry().get<HerbivoreSpeciesComponent>(world.worldEntity()).archetypes =
+                    parsed.herbivoreSpecies;
             }
             continue;
         }
@@ -589,6 +712,12 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         if (parsed.hasPlant) {
             world.registry().emplace<PlantComponent>(entity, parsed.plant);
             world.registry().emplace<PlantGenomeComponent>(entity, parsed.genome);
+        }
+        if (parsed.hasHerbivore) {
+            world.registry().emplace<HerbivoreComponent>(entity, parsed.herbivore);
+            world.registry().emplace<HerbivoreGenomeComponent>(entity, parsed.herbivoreGenome);
+            world.registry().emplace<DesireComponent>(entity, parsed.desire);
+            world.registry().emplace<IdentityComponent>(entity, IdentityComponent{parsed.identity});
         }
         if (parsed.impassable) {
             world.registry().emplace<ImpassableComponent>(entity);

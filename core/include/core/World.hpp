@@ -3,6 +3,7 @@
 #include <entt/entt.hpp>
 
 #include "core/Area.hpp"
+#include "core/components/HerbivoreSpeciesComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
@@ -24,9 +25,11 @@ namespace goblins {
 // создаётся здесь же, с значениями по умолчанию, — гарантия, что он
 // существует всегда, даже до генерации/загрузки конкретного мира
 // (значения выставляет generateTerrain или WorldSave::loadWorld). По той
-// же причине здесь создаётся и пустой PlantSpeciesComponent (виды травы
-// этого мира, заполняет seedGrass): системе не нужно знать, был ли этап
-// заселения растительностью — она просто увидит, что видов нет.
+// же причине здесь создаются и пустые PlantSpeciesComponent /
+// HerbivoreSpeciesComponent (виды травы и виды травоядных этого мира,
+// заполняют seedGrass и seedHerbivores): системе не нужно знать, был ли
+// этап заселения растительностью и появлялись ли в мире животные — она
+// просто увидит, что видов нет.
 class World {
 public:
     explicit World(int width = 100, int height = 100)
@@ -35,6 +38,7 @@ public:
         registry_.emplace<TimeComponent>(worldEntity_);
         registry_.emplace<WorldPropertiesComponent>(worldEntity_);
         registry_.emplace<PlantSpeciesComponent>(worldEntity_);
+        registry_.emplace<HerbivoreSpeciesComponent>(worldEntity_);
     }
 
     // Полный сброс мира на месте: все Entity удаляются, Область
@@ -51,6 +55,7 @@ public:
         registry_.emplace<TimeComponent>(worldEntity_);
         registry_.emplace<WorldPropertiesComponent>(worldEntity_);
         registry_.emplace<PlantSpeciesComponent>(worldEntity_);
+        registry_.emplace<HerbivoreSpeciesComponent>(worldEntity_);
     }
 
     entt::registry& registry() { return registry_; }

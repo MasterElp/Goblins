@@ -37,6 +37,12 @@ namespace goblins {
 //                   "plant": {"age","growth","moisture","minerals",
 //                              "mineral_pending","stress"},
 //                   "genome": {"species": N, "<черта>": V, ...},
+//                   "herbivore": {"age","growth","sex","energy","water",
+//                                  "protein","protein_pending","dung",
+//                                  "dung_pending","step_progress","stress"},
+//                   "herbivore_genome": {"species": N, "<черта>": V, ...},
+//                   "desire": {"hunger","thirst","mating","current"},
+//                   "identity": N,
 //                   "time": {"tick": N},
 //                   "world_properties": {"water_source_depth": S,
 //                                         "water_evaporation_rate": R,
@@ -46,8 +52,11 @@ namespace goblins {
 //                                         "max_erosion_depth": D,
 //                                         "plant_mutation_rate": M,
 //                                         "humus_decay_rate": H,
-//                                         "plant_random_seed": P},
-//                   "plant_species": [ {"species": 0, "<черта>": V, ...}, ... ]}, ... ]}
+//                                         "plant_random_seed": P,
+//                                         "animal_mutation_rate": AM,
+//                                         "animal_random_seed": AS},
+//                   "plant_species": [ {"species": 0, "<черта>": V, ...}, ... ],
+//                   "herbivore_species": [ {"species": 0, "<черта>": V, ...}, ... ]}, ... ]}
 //
 // "soil.minerals" (SoilComponent.minerals, целое число) — как и "height",
 // добавлено без смены версии: у старых файлов без этого поля минералы
@@ -60,8 +69,8 @@ namespace goblins {
 // значения по умолчанию (water_source_depth = 1, water_evaporation_rate =
 // 0.0002, rain_interval_ticks = 400, rain_amount = 0.05,
 // soil_erosion_rate = 0.05, max_erosion_depth = 0.5,
-// plant_mutation_rate = 0.06, humus_decay_rate = 0.02) — World::reset
-// выставляет их сам.
+// plant_mutation_rate = 0.06, humus_decay_rate = 0.02,
+// animal_mutation_rate = 0.06) — World::reset выставляет их сам.
 //
 // "water_source" (WaterSourceComponent) — тег, как "impassable": сам
 // факт наличия и есть данные, отсутствие поля у старых файлов означает
@@ -80,6 +89,16 @@ namespace goblins {
 // значение по умолчанию, а не ошибку разбора. Растение без генома —
 // ошибка: подставить "средний геном" значило бы втихую изменить
 // состояние мира при загрузке.
+//
+// "herbivore"/"herbivore_genome"/"desire"/"identity" (живое травоядное) и
+// "herbivore_species" (виды травоядных этого мира, на World Entity) —
+// добавлены без смены версии формата по той же причине: в мире из старого
+// файла животных просто нет, и он открывается как открывался. Черты генома
+// пишутся по именам из таблицы core::kHerbivoreTraits — тем же общим кодом,
+// что и черты травы. Животное без генома — ошибка, как и растение;
+// животное без "identity" — не ошибка: постоянный идентификатор ему
+// выдаётся заново (он всего лишь ключ случайности, а мир недетерминирован,
+// 02_CorePrinciples.md, п.12a).
 //
 // Сохраняется полное состояние мира — все Entity со всеми компонентами,
 // включая World Entity с TimeComponent (запись с ключом "time"), а не

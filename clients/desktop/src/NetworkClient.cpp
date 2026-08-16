@@ -144,6 +144,30 @@ void NetworkClient::sendSaveGenerationConfig(const goblins::RegenerationRequest&
     webSocket_.send(message.dump());
 }
 
+// Список животных — один и тот же в world_init и в дельте, поэтому и
+// разбирается одним местом. Отсутствие ключа означает "стадо не менялось",
+// а не "животных не стало": пустой список сервер шлёт явным пустым
+// массивом.
+void NetworkClient::applyHerbivores(const nlohmann::json& message) {
+    if (!message.contains("herbivores") || !message["herbivores"].is_array()) {
+        return;
+    }
+    working_.herbivores.clear();
+    for (const auto& animal : message["herbivores"]) {
+        if (!animal.is_object()) {
+            continue;
+        }
+        WorldState::Herbivore parsed;
+        parsed.x = animal.value("x", 0);
+        parsed.y = animal.value("y", 0);
+        parsed.species = animal.value("species", 0);
+        parsed.growth = animal.value("growth", 0) * 0.01f;
+        parsed.sex = animal.value("sex", std::string{});
+        parsed.desire = animal.value("desire", std::string{});
+        working_.herbivores.push_back(std::move(parsed));
+    }
+}
+
 void NetworkClient::handleMessage(const std::string& payload) {
     const auto json = nlohmann::json::parse(payload, nullptr, /*allow_exceptions=*/false);
     if (json.is_discarded()) {
@@ -212,6 +236,25 @@ void NetworkClient::handleMessage(const std::string& payload) {
             }
         }
 
+        // Виды травоядных и само стадо — тем же способом, что и трава
+        // выше: клиент не знает состава генома и не должен.
+        if (json.contains("herbivore_species")) {
+            working_.herbivoreSpecies.clear();
+            for (const auto& archetype : json["herbivore_species"]) {
+                if (!archetype.is_object()) {
+                    continue;
+                }
+                std::vector<std::pair<std::string, float>> traits;
+                for (const auto& [name, value] : archetype.items()) {
+                    if (name != "species" && value.is_number()) {
+                        traits.emplace_back(name, value.get<float>());
+                    }
+                }
+                working_.herbivoreSpecies.push_back(std::move(traits));
+            }
+        }
+        applyHerbivores(json);
+
         if (json.contains("terrain")) {
             working_.generation.terrain = json["terrain"].get<goblins::TerrainConfig>();
         }
@@ -219,6 +262,9 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.generation.boulder_count = json.value("boulder_count", working_.generation.boulder_count);
         if (json.contains("plants")) {
             working_.generation.plants = json["plants"].get<goblins::PlantConfig>();
+        }
+        if (json.contains("herbivores") && json["herbivores"].is_object()) {
+            working_.generation.herbivores = json["herbivores"].get<goblins::HerbivoreConfig>();
         }
         working_.hasGeneration = true;
 
@@ -256,6 +302,10 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "minerals", working_.minerals, [](int raw) { return raw; });
         applyChangedCells(json, "humus", working_.humus, [](int raw) { return raw; });
         applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
+        // Стадо приходит целиком и только когда сдвинулось (см. протокол в
+        // server/NetworkServer.hpp), поэтому не накладывается по клеткам, а
+        // заменяет прежний список.
+        applyHerbivores(json);
         publishState();
     } else if (type == "pause_state") {
         working_.paused = json.value("paused", working_.paused);
