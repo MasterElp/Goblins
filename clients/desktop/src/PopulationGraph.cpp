@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -290,6 +291,33 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
         return;
     }
 
+    // Чем занято поголовье прямо сейчас. Не история, а срез момента —
+    // но место ему здесь: по нему видно то же, что по кривым, только про
+    // "прямо сейчас" (стадо, поголовно ищущее еду, означает объеденный
+    // луг, а поголовно бегущее — что рядом ходят зубы). Раньше эта строка
+    // стояла надписью на карте, вместе с легендой видов; легенда переехала
+    // в шапки самих графиков, а желаниям места там нет.
+    std::map<std::string, int> desires;
+    for (const auto& animal : state.animals) {
+        ++desires[animal.desire];
+    }
+    if (!desires.empty()) {
+        int desireX = static_cast<int>(bounds.x) + 10;
+        const int desireY = static_cast<int>(bounds.y) + 8;
+        DrawText("now:", desireX, desireY, kAxisFont, mutedColor);
+        desireX += MeasureText("now:", kAxisFont) + 10;
+        for (const auto& [name, count] : desires) {
+            const char* label = TextFormat("%s %d", name.c_str(), count);
+            const int width = MeasureText(label, kAxisFont);
+            if (desireX + width > static_cast<int>(bounds.x + bounds.width) - 8) {
+                break;
+            }
+            DrawText(label, desireX, desireY, kAxisFont, Color{200, 200, 205, 255});
+            desireX += width + 12;
+        }
+    }
+    const float desiresHeight = desires.empty() ? 0.0f : static_cast<float>(kAxisFont) + 10.0f;
+
     constexpr float kPadding = 10.0f;
     constexpr float kGap = 14.0f;
     // Три панели, а не одна: у травы, травоядных и хищников свои единицы и
@@ -298,13 +326,13 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     // ряд: панель узкая и высокая (она стоит справа от карты), и три
     // графика по трети её ширины были бы шириной с подпись.
     const float chartWidth = bounds.width - kPadding * 2.0f;
-    const float chartHeight = (bounds.height - kPadding * 2.0f - kGap * 2.0f) / 3.0f;
+    const float chartHeight = (bounds.height - desiresHeight - kPadding * 2.0f - kGap * 2.0f) / 3.0f;
     if (chartWidth < kValueLabelWidth + 60.0f || chartHeight < kHeaderHeight + kFooterHeight + 30.0f) {
         DrawText("Population history: panel is too small", static_cast<int>(bounds.x) + 10,
-                 static_cast<int>(bounds.y) + 10, kTitleFont, mutedColor);
+                 static_cast<int>(bounds.y) + 10 + static_cast<int>(desiresHeight), kTitleFont, mutedColor);
         return;
     }
-    const Rectangle plants{bounds.x + kPadding, bounds.y + kPadding, chartWidth, chartHeight};
+    const Rectangle plants{bounds.x + kPadding, bounds.y + kPadding + desiresHeight, chartWidth, chartHeight};
     const Rectangle herbivores{plants.x, plants.y + chartHeight + kGap, chartWidth, chartHeight};
     const Rectangle predators{plants.x, herbivores.y + chartHeight + kGap, chartWidth, chartHeight};
 

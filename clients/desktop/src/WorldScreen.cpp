@@ -13,6 +13,7 @@
 
 #include "ConstantsOverlay.hpp"
 #include "InfoPanel.hpp"
+#include "KeysPanel.hpp"
 #include "MapTexture.hpp"
 #include "PopulationGraph.hpp"
 #include "TileColors.hpp"
@@ -32,19 +33,21 @@ constexpr float kZoomStep = 1.1f;
 // отдельном экране, — под ним подобраны ширины ползунков, а карточка
 // существа и графики в него вписались.
 constexpr float kPanelWidth = 460.0f;
-// Полоса подсказки по клавишам вдоль нижнего края.
-constexpr float kHintHeight = 26.0f;
+// Нижняя полоса состояния: сообщения сервера и напоминание про панель.
+// Карта заканчивается над ней — на самой карте надписей нет вовсе.
+constexpr float kStatusHeight = 26.0f;
 
 // Правая панель одна на три содержимого: карточка того, на что смотришь,
 // параметры генерации и графики численности. Одно место, а не три угла
 // экрана: смотрят в них по очереди, а места они просят одинаково много.
-enum class Tab { Hidden, Info, Params, Graphs };
+enum class Tab { Hidden, Info, Params, Graphs, Keys };
 
 const char* tabName(Tab tab) {
     switch (tab) {
         case Tab::Info: return "info";
         case Tab::Params: return "params";
         case Tab::Graphs: return "graphs";
+        case Tab::Keys: return "keys";
         case Tab::Hidden: break;
     }
     return "hidden";
@@ -54,6 +57,7 @@ Tab tabFromName(const std::string& name) {
     if (name == "info") return Tab::Info;
     if (name == "params") return Tab::Params;
     if (name == "graphs") return Tab::Graphs;
+    if (name == "keys") return Tab::Keys;
     return Tab::Hidden;
 }
 
@@ -71,7 +75,8 @@ Tab nextTab(Tab tab) {
     switch (tab) {
         case Tab::Info: return Tab::Params;
         case Tab::Params: return Tab::Graphs;
-        case Tab::Graphs: return Tab::Hidden;
+        case Tab::Graphs: return Tab::Keys;
+        case Tab::Keys: return Tab::Hidden;
         case Tab::Hidden: break;
     }
     return Tab::Info;
@@ -165,14 +170,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     const bool panelOpen = tab != Tab::Hidden;
     const float panelX = static_cast<float>(screenW) - kPanelWidth;
     const int viewportW = panelOpen ? std::max(1, static_cast<int>(panelX)) : screenW;
-    const int viewportH = screenH - kHudHeight;
+    const int viewportH = screenH - kHudHeight - static_cast<int>(kStatusHeight);
 
     // Полоса вкладок — вровень с верхней полосой над картой: это один и тот
     // же ряд элементов управления, просто над разными половинами экрана.
     const Rectangle panelBounds{panelX, 0, kPanelWidth, static_cast<float>(screenH)};
     const Rectangle tabsBounds{panelX, 0, kPanelWidth, static_cast<float>(kHudHeight)};
     const Rectangle panelContent{panelX + 10.0f, static_cast<float>(kHudHeight) + 8.0f, kPanelWidth - 20.0f,
-                                 static_cast<float>(screenH) - kHudHeight - 8.0f - kHintHeight};
+                                 static_cast<float>(screenH) - kHudHeight - 8.0f - kStatusHeight};
 
     const Color backgroundColor{28, 28, 32, 255};
     const Color boulderColor{70, 66, 62, 255};
@@ -437,6 +442,17 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
     ClearBackground(backgroundColor);
 
+    // Набор включённых слоёв нужен и карте, и вкладке Keys (она показывает
+    // их состояние), поэтому собирается до того, как что-либо рисуется.
+    MapTexture::Layers layers;
+    layers.rockiness = showRockiness;
+    layers.compaction = showCompaction;
+    layers.moisture = showMoisture;
+    layers.minerals = showMinerals;
+    layers.height = showHeight;
+    layers.plants = showPlants;
+    layers.animals = showAnimals;
+
     if (!snapshot.connected || snapshot.areaWidth == 0) {
         const std::string waiting = "Connecting to " + config.host + ":" + std::to_string(config.port) + "...";
         DrawText(waiting.c_str(), 10, kHudHeight + 10, 20, textColor);
@@ -447,14 +463,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // при новом состоянии мира или смене набора слоёв; за кадр это
         // один вызов отрисовки вместо тысяч прямоугольников, а отсечение
         // невидимой части делает сам ножничный режим.
-        MapTexture::Layers layers;
-        layers.rockiness = showRockiness;
-        layers.compaction = showCompaction;
-        layers.moisture = showMoisture;
-        layers.minerals = showMinerals;
-        layers.height = showHeight;
-        layers.plants = showPlants;
-        layers.animals = showAnimals;
         const Texture2D& mapTexture = mapCache.texture(snapshot, layers);
         DrawTexturePro(mapTexture,
                        Rectangle{0, 0, static_cast<float>(snapshot.areaWidth),
@@ -584,93 +592,30 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
         EndScissorMode();
 
-        // Статус слоёв почвы — под верхней панелью, слева: включённые
-        // слои белым, выключенные приглушённым серым, чтобы состояние
-        // читалось с одного взгляда.
-        const Color layerOnColor = textColor;
-        const Color layerOffColor{110, 110, 110, 255};
-        int layerX = 10;
-        const int layerY = kHudHeight + 6;
-        auto drawLayerLabel = [&](const char* label, bool enabled) {
-            const Color c = enabled ? layerOnColor : layerOffColor;
-            DrawText(label, layerX, layerY, 14, c);
-            layerX += MeasureText(label, 14) + 14;
-        };
-        drawLayerLabel("[1] Rockiness", showRockiness);
-        drawLayerLabel("[2] Compaction", showCompaction);
-        drawLayerLabel("[3] Moisture+Water", showMoisture);
-        drawLayerLabel("[4] Minerals", showMinerals);
-        drawLayerLabel("[5] Height", showHeight);
-        drawLayerLabel("[6] Grass+Humus", showPlants);
-        drawLayerLabel("[7] Animals", showAnimals);
-
-        // Виды травы: цвет, номер и текущая численность — сколько тайлов
-        // занимает каждый вид прямо сейчас. Считается по тому же
-        // плотному массиву, что и рисуется, поэтому легенда всегда
-        // соответствует картинке. Это единственное место, где видно, как
-        // виды делят мир между собой на протяжении симуляции.
-        if (showPlants && !snapshot.plantSpecies.empty()) {
-            std::vector<int> population(snapshot.plantSpecies.size(), 0);
-            for (const int species : snapshot.plantSpeciesAt) {
-                if (species >= 0 && static_cast<std::size_t>(species) < population.size()) {
-                    ++population[static_cast<std::size_t>(species)];
-                }
-            }
-
-            int legendX = 10;
-            const int legendY = layerY + 20;
-            for (std::size_t s = 0; s < population.size(); ++s) {
-                DrawRectangle(legendX, legendY + 1, 10, 10, TileColors::plantSpecies(static_cast<int>(s)));
-                const char* label = TextFormat("sp%zu %d", s, population[s]);
-                DrawText(label, legendX + 14, legendY, 14, layerOnColor);
-                legendX += 14 + MeasureText(label, 14) + 12;
-            }
-        }
-
-        // Поголовье: сколько особей каждого вида и чем они сейчас заняты.
-        // Желания в легенде не для красоты — по ним видно состояние мира
-        // целиком: стадо, поголовно ищущее еду, означает объеденный луг, а
-        // стадо, поголовно бегущее, — что рядом ходят зубы.
-        if (showAnimals && !snapshot.animals.empty()) {
-            std::vector<int> herbivores(std::max<std::size_t>(snapshot.herbivoreSpecies.size(), 1), 0);
-            std::vector<int> predators(std::max<std::size_t>(snapshot.predatorSpecies.size(), 1), 0);
-            std::map<std::string, int> desires;
-            for (const auto& animal : snapshot.animals) {
-                auto& population = animal.predator ? predators : herbivores;
-                if (animal.species >= 0 && static_cast<std::size_t>(animal.species) < population.size()) {
-                    ++population[static_cast<std::size_t>(animal.species)];
-                }
-                ++desires[animal.desire];
-            }
-
-            int legendX = 10;
-            const int legendY = layerY + 40;
-            for (std::size_t s = 0; s < herbivores.size(); ++s) {
-                DrawRectangle(legendX, legendY + 1, 10, 10, TileColors::herbivoreSpecies(static_cast<int>(s)));
-                const char* label = TextFormat("hb%zu %d", s, herbivores[s]);
-                DrawText(label, legendX + 14, legendY, 14, layerOnColor);
-                legendX += 14 + MeasureText(label, 14) + 12;
-            }
-            for (std::size_t s = 0; s < predators.size(); ++s) {
-                DrawRectangle(legendX, legendY + 1, 10, 10, TileColors::predatorSpecies(static_cast<int>(s)));
-                const char* label = TextFormat("pr%zu %d", s, predators[s]);
-                DrawText(label, legendX + 14, legendY, 14, layerOnColor);
-                legendX += 14 + MeasureText(label, 14) + 12;
-            }
-            for (const auto& [name, count] : desires) {
-                const char* label = TextFormat("%s %d", name.c_str(), count);
-                DrawText(label, legendX, legendY, 14, mutedColor);
-                legendX += MeasureText(label, 14) + 12;
-            }
-        }
+        // Ни легенд, ни статуса слоёв, ни подписи тайла поверх карты
+        // больше нет: карта — это картина мира, и текст по ней читается
+        // хуже и её, и себя. Всё, что раньше стояло на ней надписями,
+        // живёт в правой панели: что за клетка и кто на ней — во вкладке
+        // Info, численность видов — в Graphs, состояние слоёв и сами
+        // клавиши — в Keys. На карте остались только метки, а не слова:
+        // рамка под курсором и кольцо на том, за кем следят.
     }
 
     DrawRectangle(0, 0, viewportW, kHudHeight, hudColor);
-    DrawText(TextFormat("%s   Tick: %llu   Area: %dx%d   Zoom: %d%%",
-                         snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
-                         static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
-                         static_cast<int>(std::round(zoom * 100.0f))),
-             10, 8, 16, textColor);
+    const std::string hudLabel =
+        TextFormat("%s   Tick: %llu   Area: %dx%d   Zoom: %d%%",
+                   snapshot.currentWorld.empty() ? "(unsaved world)" : snapshot.currentWorld.c_str(),
+                   static_cast<unsigned long long>(snapshot.tick), snapshot.areaWidth, snapshot.areaHeight,
+                   static_cast<int>(std::round(zoom * 100.0f)));
+    DrawText(hudLabel.c_str(), 10, 8, 16, textColor);
+
+    // Остановленное время — в верхней полосе, следом за номером тика, а не
+    // надписью поверх карты: это состояние мира, и место ему там же, где
+    // остальное состояние мира. Заодно оно всегда на одном месте, а не
+    // посреди того, на что игрок в этот момент смотрит.
+    if (snapshot.paused) {
+        DrawText("PAUSED", 10 + MeasureText(hudLabel.c_str(), 16) + 20, 8, 16, pausedColor);
+    }
 
     // Пока открыт любой из модальных диалогов, ни кнопки полосы, ни панель
     // настроек под ним не должны ловить клики.
@@ -709,10 +654,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
         // Полоса вкладок — своей отрисовкой, а не кнопками raygui: у
         // кнопки нет состояния "выбрана", а именно это и нужно показать.
-        const Tab tabs[] = {Tab::Info, Tab::Params, Tab::Graphs};
-        const char* labels[] = {"Info", "Params", "Graphs"};
-        const float tabWidth = tabsBounds.width / 3.0f;
-        for (int i = 0; i < 3; ++i) {
+        const Tab tabs[] = {Tab::Info, Tab::Params, Tab::Graphs, Tab::Keys};
+        const char* labels[] = {"Info", "Params", "Graphs", "Keys"};
+        constexpr int kTabCount = 4;
+        const float tabWidth = tabsBounds.width / static_cast<float>(kTabCount);
+        for (int i = 0; i < kTabCount; ++i) {
             const Rectangle rect{tabsBounds.x + tabWidth * i, tabsBounds.y, tabWidth, tabsBounds.height};
             const bool active = tab == tabs[i];
             const bool hovered = !modalOpen && CheckCollisionPointRec(mouse, rect);
@@ -756,6 +702,9 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             case Tab::Graphs:
                 PopulationGraph::draw(snapshot, panelContent, !modalOpen);
                 break;
+            case Tab::Keys:
+                KeysPanel::draw(panelContent, layers);
+                break;
             case Tab::Hidden:
                 break;
         }
@@ -763,90 +712,17 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
     if (modalOpen) GuiUnlock();
 
-    // Подсказка по клавишам — по нижнему краю слева, мелким приглушённым
-    // текстом: в верхней полосе её теснят имя мира и кнопки, а нужна она
-    // редко.
-    DrawText("WASD-scroll  Wheel-zoom  F-fit  1-7-layers  Space-pause  P-panel  LMB-track  RMB-clear  C-constants  "
-              "Esc-menu",
-             10, screenH - 20, 14, mutedColor);
-
-    const int bottomInfoY = screenH - 42;
-
-    // Параметры тайла под курсором — по нижнему краю справа (над панелью
-    // настроек, если она открыта, места нет — поэтому от края карты).
-    if (hasHoverTile) {
-        const std::size_t hi = static_cast<std::size_t>(hoverY) * snapshot.areaWidth + hoverX;
-        const bool hoverIsSource =
-            std::any_of(snapshot.waterSources.begin(), snapshot.waterSources.end(),
-                        [&](const auto& s) { return s.first == hoverX && s.second == hoverY; });
-        // Подпись собирается по кускам, а не одним TextFormat со вложенными
-        // TextFormat внутри: у raylib на все вызовы всего четыре
-        // прокручиваемых буфера (MAX_TEXTFORMAT_BUFFERS), и пятый
-        // вложенный вызов затёр бы строку, которую внешний ещё не
-        // прочитал. Здесь результат каждого вызова копируется в строку
-        // сразу же, поэтому необязательных кусков может быть сколько
-        // угодно.
-        std::string tileLabel = TextFormat("Tile (%d,%d)  moist %.2f  rock %.2f  pack %.2f  min %d", hoverX, hoverY,
-                                            snapshot.moisture[hi], snapshot.rockiness[hi], snapshot.compaction[hi],
-                                            snapshot.minerals[hi]);
-        if (snapshot.waterDepth[hi] > 0.0f) {
-            tileLabel += TextFormat("  water %.2f", snapshot.waterDepth[hi]);
-        }
-        if (hoverIsSource) {
-            tileLabel += "  [source]";
-        }
-        if (snapshot.plantSpeciesAt[hi] >= 0) {
-            tileLabel +=
-                TextFormat("  grass sp%d %.0f%%", snapshot.plantSpeciesAt[hi], snapshot.plantGrowth[hi] * 100.0f);
-        }
-        // Семя — отдельной пометкой, а не вместо травы: под стоящим
-        // растением обычно лежит его же семя, и клетка одинаково честно и
-        // занята, и засеяна.
-        if (snapshot.seedSpeciesAt[hi] >= 0) {
-            tileLabel += TextFormat("  seed sp%d", snapshot.seedSpeciesAt[hi]);
-        }
-        if (snapshot.humus[hi] > 0) {
-            tileLabel += TextFormat("  humus %d", snapshot.humus[hi]);
-        }
-        const int labelWidth = MeasureText(tileLabel.c_str(), 16);
-        DrawText(tileLabel.c_str(), viewportW - labelWidth - 12, bottomInfoY, 16, cursorColor);
-
-        // Животные под курсором — отдельной строкой над строкой тайла: их
-        // на клетке может быть несколько, и втискивать их в подпись самого
-        // тайла (у которого всё по одному) значило бы врать о том, как
-        // устроен мир.
-        if (showAnimals) {
-            std::string animalsLabel;
-            if (!snapshot.carcass.empty() && snapshot.carcass[hi] > 0.0f) {
-                animalsLabel += TextFormat("carcass %.1f", snapshot.carcass[hi]);
-            }
-            for (const auto& animal : snapshot.animals) {
-                if (animal.x != hoverX || animal.y != hoverY) {
-                    continue;
-                }
-                if (!animalsLabel.empty()) {
-                    animalsLabel += "   ";
-                }
-                animalsLabel += TextFormat("%s%d %s %.0f%%%s -> %s", animal.predator ? "pr" : "hb", animal.species,
-                                            animal.sex.c_str(), animal.growth * 100.0f,
-                                            animal.health < 0.99f ? TextFormat(" hurt %.0f%%", animal.health * 100.0f)
-                                                                  : "",
-                                            animal.desire.c_str());
-            }
-            if (!animalsLabel.empty()) {
-                const int animalsWidth = MeasureText(animalsLabel.c_str(), 16);
-                DrawText(animalsLabel.c_str(), viewportW - animalsWidth - 12, bottomInfoY - 20, 16,
-                         Color{235, 195, 120, 255});
-            }
-        }
-    }
-
-    // Результат сохранения (или ошибка загрузки, если мир так и не
-    // открылся) — единственное место, где клиент об этом узнаёт.
+    // Нижняя полоса — своя, а не надпись поверх карты: карта заканчивается
+    // над ней (см. viewportH). Здесь живут сообщения сервера — результат
+    // сохранения и ошибки загрузки, единственное место, где клиент о них
+    // узнаёт, — и напоминание, где искать всё остальное.
+    DrawRectangle(0, screenH - static_cast<int>(kStatusHeight), viewportW, static_cast<int>(kStatusHeight), hudColor);
     if (hasFreshNotice(snapshot)) {
-        DrawText(snapshot.notice.c_str(), 10, bottomInfoY, 16,
+        DrawText(snapshot.notice.c_str(), 10, screenH - 19, 14,
                  snapshot.noticeIsError ? Color{230, 110, 110, 255} : textColor);
     }
+    const char* panelHint = "P -- panel: Info / Params / Graphs / Keys";
+    DrawText(panelHint, viewportW - MeasureText(panelHint, 14) - 10, screenH - 19, 14, mutedColor);
 
     // Мира ещё нет: сервер поднялся с пустой Областью или игрок пришёл
     // сюда с "New world". Пустая карта сама по себе об этом не говорит —
@@ -865,13 +741,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         DrawRectangleLines(boxX, boxY, boxWidth, 80, Color{90, 90, 98, 255});
         DrawText(firstLine, viewportW / 2 - firstWidth / 2, boxY + 20, 20, textColor);
         DrawText(secondLine, viewportW / 2 - secondWidth / 2, boxY + 48, 16, mutedColor);
-    }
-
-    if (snapshot.paused) {
-        const char* pausedLabel = "PAUSED";
-        const int labelWidth = MeasureText(pausedLabel, 24);
-        DrawRectangle(viewportW / 2 - labelWidth / 2 - 10, kHudHeight + 8, labelWidth + 20, 32, hudColor);
-        DrawText(pausedLabel, viewportW / 2 - labelWidth / 2, kHudHeight + 12, 24, pausedColor);
     }
 
     // Выход всегда идёт через подтверждение: несохранённые изменения
