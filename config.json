@@ -2,44 +2,44 @@
     "animals": {
         "herbivore_count": 120,
         "herbivore_species": 2,
-        "mutation_rate": 60,
+        "mutation_rate": 60.0,
         "predator_count": 10,
         "predator_species": 1
     },
     "area": {
-        "height": 100,
-        "width": 100
+        "height": 200,
+        "width": 200
     },
     "boulder_count": 40,
     "host": "127.0.0.1",
     "plants": {
-        "grass_coverage": 60,
+        "grass_coverage": 0.2441314458847046,
         "grass_species": 5,
-        "humus_decay_period": 50,
-        "mutation_rate": 60
+        "humus_decay_rate": 0.07340610772371292,
+        "mutation_rate": 0.30000001192092896
     },
     "port": 9002,
     "saves_dir": "saves",
     "seed": 54321,
     "snapshot_interval_ms": 100,
     "terrain": {
-        "feature_size": 50,
-        "max_erosion_depth": 500,
-        "minerals_average": 10,
-        "mountain_hardness": 600,
-        "mountain_height": 16000,
+        "max_erosion_depth": 3.0,
+        "minerals_average": 10.0,
+        "mountain_hardness": 1.0,
+        "mountain_height": 60.0,
+        "noise_frequency": 0.019999999552965164,
         "noise_octaves": 4,
-        "pond_depth": 900,
-        "rain_amount": 50,
+        "pond_depth": 3.0164318084716797,
+        "rain_amount": 0.30000001192092896,
         "rain_interval_ticks": 400,
         "river_count": 3,
-        "river_depth": 900,
-        "river_sinuosity": 500,
-        "river_width": 30,
-        "soil_erosion_rate": 50,
-        "water_evaporation_period": 5,
-        "water_source_count": 3,
-        "water_source_depth": 1000
+        "river_depth": 3.0169014930725098,
+        "river_sinuosity": 1.0,
+        "river_width": 6.809859275817871,
+        "soil_erosion_rate": 0.5,
+        "water_evaporation_rate": 0.0009976525325328112,
+        "water_source_count": 9,
+        "water_source_depth": 5.0
     },
     "tick_interval_ms": 200
 }

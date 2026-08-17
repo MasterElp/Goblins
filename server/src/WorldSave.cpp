@@ -106,9 +106,9 @@ struct ParsedEntity {
     bool hasSoil = false;
     SoilComponent soil{};
     // Не разделяем на hasHeight: высота всегда идёт в паре с почвой
-    // (parsed.hasSoil), а для старых сохранений без поля "height" уже есть
-    // безопасное значение по умолчанию — 0.0f.
-    float height = 0.0f;
+    // (parsed.hasSoil), а для сохранений без поля "height" уже есть
+    // безопасное значение по умолчанию — 0 (плоский рельеф).
+    int height = 0;
     bool hasWater = false;
     WaterComponent water{};
     bool impassable = false;
@@ -410,7 +410,7 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.soil.rockiness = record["soil"].value("rockiness", 0.0f);
             parsed.soil.minerals = record["soil"].value("minerals", 0);
         }
-        parsed.height = record.value("height", 0.0f);
+        parsed.height = record.value("height", 0);
         if (record.contains("water")) {
             parsed.hasWater = true;
             // Старые файлы несут ещё и "flow_speed" — его молча

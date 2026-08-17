@@ -120,6 +120,21 @@ struct WorldState {
         std::string sex;
         std::string desire;
         std::vector<WatchedGroup> groups;
+
+        // Охота выбранного хищника, как её посчитал сам мир (core/Hunting.hpp,
+        // считает сервер): "reach" — вся округа, до которой у зверя есть ход,
+        // "road" — дорога до выбранной цели, клетка за клеткой, от первого
+        // шага до самой цели. У травоядного и у растения оба пусты.
+        //
+        // Числа, а не картинка: клиент рисует их как хочет и ничего о законе
+        // охоты не знает (07_TechStack.md, п.6).
+        std::vector<std::pair<int, int>> reach;
+        std::vector<std::pair<int, int>> road;
+        // За кем идёт: "prey" — за живой добычей, "carcass" — к туше,
+        // "teeth" — добыча уже под зубами, идти некуда. Пусто — цели нет.
+        std::string roadKind;
+        int roadX = 0;
+        int roadY = 0;
     };
     Watched watched;
 

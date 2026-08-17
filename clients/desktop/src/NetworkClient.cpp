@@ -291,6 +291,28 @@ void NetworkClient::applyWatched(const nlohmann::json& message) {
             parsed.groups.push_back(std::move(parsedGroup));
         }
     }
+
+    // Округа и дорога хищника — плоскими парами координат: клеток в округе
+    // сотни, и имена полей весили бы больше самих чисел (тот же приём, что
+    // у точек летописи).
+    auto readCells = [&watched](const char* field, std::vector<std::pair<int, int>>& out) {
+        if (!watched.contains(field) || !watched[field].is_array()) {
+            return;
+        }
+        const auto& array = watched[field];
+        for (std::size_t i = 0; i + 1 < array.size(); i += 2) {
+            if (!array[i].is_number() || !array[i + 1].is_number()) {
+                continue;
+            }
+            out.emplace_back(array[i].get<int>(), array[i + 1].get<int>());
+        }
+    };
+    readCells("reach", parsed.reach);
+    readCells("road", parsed.road);
+    parsed.roadKind = watched.value("road_kind", std::string{});
+    parsed.roadX = watched.value("road_x", 0);
+    parsed.roadY = watched.value("road_y", 0);
+
     working_.watched = std::move(parsed);
 }
 

@@ -22,6 +22,7 @@
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/Diagnostics.hpp"
+#include "core/Hunting.hpp"
 #include "core/Needs.hpp"
 #include "core/Scale.hpp"
 
@@ -82,12 +83,11 @@ constexpr int kStepEnergy = 250;
 // след получался неразличимым, — то есть чтобы не значить ничего.
 constexpr int kDrinkRate = 4000;
 
-// Ниже этой развитости куст объедать нечего, ниже этого мяса — нечего
-// глодать: животное просто не считает такое едой. Иначе стадо паслось бы на
-// голых проростках, не давая лугу отрасти, а хищник сидел бы у обглоданных
-// костей вместо охоты.
+// Ниже этой развитости куст объедать нечего: животное просто не считает
+// такое едой. Иначе стадо паслось бы на голых проростках, не давая лугу
+// отрасти. Тот же порог для мяса (kMinBiteMeat) живёт вместе с остальным
+// законом охоты в core/Hunting.hpp — его спрашивает и наблюдатель.
 constexpr int kMinBiteGrowth = 50;
-constexpr int kMinBiteMeat = 50;
 
 // Сколько стресса получает растение за единицу съеденной развитости. Именно
 // так объедание убивает траву — не напрямую, а через её собственный закон
@@ -206,19 +206,10 @@ constexpr int kMeatPerSize = 8000;
 // портиться — иначе однажды случившийся мор кормит вечно.
 constexpr int kCarcassRot = 20;
 
-// С какого голода хищник выходит на охоту. Порог выше общего kDesireFloor
-// намеренно: слегка проголодавшийся зверь подберёт падаль, если она рядом,
-// но гнаться за живой добычей не станет. Сытый хищник, пропускающий добычу
-// мимо, — не поблажка стаду, а единственное, что вообще удерживает его
-// численность: пока хищники убивали при любом голоде, они выбивали стадо
-// подчистую и вымирали следом, сколько ни крути прочие числа.
-constexpr int kHuntHunger = 350;
-
-// Дотянуться зубами можно до своей клетки и до соседней. Не только до
-// своей: жертва убегает каждый тик, и хищнику, который обязан встать ровно
-// на её клетку, доставалась бы она только по случайности — охота
-// выродилась бы в лотерею.
-constexpr int kAttackReach = 1;
+// Голод, с которого выходят на охоту (kHuntHunger), досягаемость зубов
+// (kAttackReach) и порог годного мяса (kMinBiteMeat) лежат в
+// core/Hunting.hpp вместе с самим выбором добычи: этот закон спрашивает не
+// только система, но и наблюдатель — он рисует найденную дорогу на карте.
 
 // --- Намерения ---
 // Собираются при обходе животных и исполняются после него. Отдельный шаг
@@ -655,6 +646,26 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         desire.current = chooseDesire(animal, adult && content);
     }
 
+    // Добыча в том виде, в каком её видит хищник (core/Hunting.hpp): где
+    // стоит и как быстро бежит. Собирается один раз на тик, а не заново для
+    // каждого хищника, и рядом с ней — обратный указатель в снимок: закон
+    // охоты возвращает номер в этом списке, а бить надо конкретное животное.
+    std::vector<HuntPrey> preys;
+    std::vector<int> preyOwner;
+    for (std::size_t b = 0; b < animals.size(); ++b) {
+        if (!alive[b] || animals[b].predator) {
+            continue;
+        }
+        preys.push_back(HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed});
+        preyOwner.push_back(static_cast<int>(b));
+    }
+
+    // Округа хищника и дорога по ней. Живут снаружи цикла и
+    // переиспользуются: за тик волна пускается столько раз, сколько в мире
+    // хищников, а массивы у неё на всю Область.
+    HuntReach huntReach;
+    std::vector<HuntCell> road;
+
     // --- 4. Решения: что животное делает со своим желанием ---
     for (std::size_t a = 0; a < animals.size(); ++a) {
         if (!alive[a]) {
@@ -685,26 +696,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         int targetX = animal.x;
         int targetY = animal.y;
 
-        // Куда животное вообще может встать: не за границей Области, не на
-        // занятый непроходимым объектом тайл и не в воду. Вода — стена:
-        // животное не плавает и брода не знает, поэтому клетка, где вода
-        // есть вообще (waterAt > 0, то есть на тайле висит WaterComponent),
-        // непроходима для него так же, как булыжник. Река делит карту, а не
-        // замедляет ход.
-        //
-        // Этим же проверяется и годность еды: до туши, лежащей посреди
-        // разлившейся реки, не дойти — значит, для животного это не еда, а
-        // вид. Без этой проверки хищник вставал у самой воды напротив
-        // недосягаемой туши и голодал насмерть, каждый тик заново выбирая
-        // её целью: в мире была еда, до которой он не мог дойти, и он не
-        // умел этого понять.
-        //
-        // Тот же закон действует и при расселении первого поголовья
-        // (AnimalSeeding.cpp): в воду не ставим — животное туда и само не
-        // пойдёт. Разойдись эти две проверки, и стадо оказалось бы
-        // расставленным там, откуда оно не может сойти.
-        auto standable = [&](std::size_t cell, int nx, int ny) {
-            return !world.area().isBlocked(nx, ny) && terrain[cell] != entt::null && waterAt[cell] <= 0;
+        // Куда животное вообще может встать (core/Hunting.hpp, standableAt):
+        // не за границей Области, не на занятый непроходимым объектом тайл и
+        // не в воду. Само правило — там, здесь только факты, из которых оно
+        // складывается: снимок тайлов этого тика.
+        auto standable = [&](int nx, int ny) {
+            const std::size_t cell = index(nx, ny);
+            return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell]);
         };
 
         // Ближайшая клетка в пределах видимости, удовлетворяющая условию.
@@ -765,80 +763,40 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                         break;
                     }
 
-                    // Добыча в пределах досягаемости зубов — бьём. Ближе
-                    // всех и первой: гнаться за той, что дальше, когда рядом
-                    // стоит эта, бессмысленно. Но только если хищник и
-                    // вправду голоден (kHuntHunger): наевшийся не охотится.
-                    int preyIndex = -1;
-                    int preyDistance = 0;
-                    for (std::size_t b = 0; animal.hunger >= kHuntHunger && b < animals.size(); ++b) {
-                        if (b == a || !alive[b] || animals[b].predator) {
-                            continue;
-                        }
-                        // За тем, кто быстрее, гнаться незачем: догнать его
-                        // нельзя, а силы уйдут. Скорость чужого бега —
-                        // ровно то знание, которое у хищника есть: он её
-                        // видит (02_CorePrinciples.md, п.6), в отличие от
-                        // чужого возраста или запаса сил.
-                        //
-                        // Без этого правила хищник выбирал ближайшую добычу
-                        // и гнался за ней, даже если она заведомо уходила;
-                        // на безнадёжные погони уходила вся энергия, и
-                        // первое поголовье вымирало за тысячу тиков в мире,
-                        // полном добычи. Заодно у стада появляется смысл
-                        // вкладывать бюджет в скорость: быстрого не
-                        // преследуют вовсе.
-                        if (animals[b].genome->speed >= genome.speed) {
-                            continue;
-                        }
-                        const int dx = animals[b].x - animal.x;
-                        const int dy = animals[b].y - animal.y;
-                        const int distance = dx * dx + dy * dy;
-                        if (distance > reach * reach) {
-                            continue;
-                        }
-                        if (preyIndex >= 0 && distance >= preyDistance) {
-                            continue;
-                        }
-                        preyIndex = static_cast<int>(b);
-                        preyDistance = distance;
-                    }
+                    // --- Дорога ---
+                    // Прежде чем выбирать, за кем гнаться, хищник
+                    // прикидывает дорогу: волна расходится от него самого
+                    // по проходимым клеткам и считает, за сколько шагов он
+                    // доберётся до каждой. Куда волна не пришла, туда хода
+                    // нет — там вода, камень или чужой берег. Сам закон
+                    // (кого выбрать и какой дорогой идти) живёт в
+                    // core/Hunting.hpp: по нему же наблюдатель рисует эту
+                    // дорогу на карте, и разъехаться им негде.
+                    huntReach.build(world.area(), animal.x, animal.y, reach, standable);
+                    const HuntChoice choice = chooseHuntTarget(
+                        huntReach, Hunter{animal.x, animal.y, reach, genome.speed, animal.hunger}, preys,
+                        [&](int nx, int ny) { return carcassMeat[index(nx, ny)]; }, random);
 
-                    if (preyIndex >= 0 &&
-                        std::abs(animals[static_cast<std::size_t>(preyIndex)].x - animal.x) <= kAttackReach &&
-                        std::abs(animals[static_cast<std::size_t>(preyIndex)].y - animal.y) <= kAttackReach) {
-                        attacks.push_back(AttackIntent{preyIndex, genome.attack * size / kFull});
+                    // Добыча в пределах досягаемости зубов — бьём, и никуда
+                    // при этом не идём.
+                    if (choice.kind == HuntChoice::Kind::Prey && choice.atTeeth) {
+                        attacks.push_back(
+                            AttackIntent{preyOwner[static_cast<std::size_t>(choice.prey)], genome.attack * size / kFull});
                         busy = true;
                         break;
                     }
 
-                    // Видимая падаль важнее видимой добычи: зачем гнаться,
-                    // когда рядом лежит мясо. Хищнику всё равно, кто убил
-                    // ту тушу, — падаль это тоже еда (см.
-                    // PredatorComponent).
-                    //
-                    // Правило не косметическое. Пока хищник шёл к тому, что
-                    // ближе, он бросал недоеденную тушу ради свежей добычи
-                    // и убивал куда больше, чем съедал: по карте лежали
-                    // десятки почти нетронутых туш, а стадо тем временем
-                    // выбивалось под ноль — и следом вымирали сами хищники.
-                    // "Сначала доешь" превращает лишнее убийство в редкость,
-                    // а не в правило.
-                    int carcassX = animal.x;
-                    int carcassY = animal.y;
-                    const int carcassDistance = findNearest(
-                        [&](std::size_t cell, int nx, int ny) {
-                            return carcassMeat[cell] > kMinBiteMeat && standable(cell, nx, ny);
-                        },
-                        carcassX, carcassY);
-                    if (carcassDistance >= 0) {
-                        targetX = carcassX;
-                        targetY = carcassY;
-                        hasTarget = true;
-                    } else if (preyIndex >= 0) {
-                        targetX = animals[static_cast<std::size_t>(preyIndex)].x;
-                        targetY = animals[static_cast<std::size_t>(preyIndex)].y;
-                        hasTarget = true;
+                    // Цель шага — не сама добыча и не туша, а следующая
+                    // клетка дороги к ним: идти хищник обязан по дороге, а
+                    // не напролом. Напролом он упрётся ровно в тот берег,
+                    // который дорога и обходит, и вся находка пропадёт зря.
+                    if (choice.kind != HuntChoice::Kind::None) {
+                        huntReach.roadTo(choice.x, choice.y, road);
+                        if (!road.empty()) {
+                            targetX = road.front().x;
+                            targetY = road.front().y;
+                            hasTarget = true;
+                        }
                     }
                     break;
                 }
@@ -850,7 +808,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     hasTarget = findNearest(
                                     [&](std::size_t cell, int nx, int ny) {
                                         return plantAt[cell] != entt::null && plantGrowth[cell] > kMinBiteGrowth &&
-                                               standable(cell, nx, ny);
+                                               standable(nx, ny);
                                     },
                                     targetX, targetY) >= 0;
                 }
@@ -1033,7 +991,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 const int dir = (firstDir + n) % 8;
                 const int nx = animal.x + kDx8[dir];
                 const int ny = animal.y + kDy8[dir];
-                if (!world.area().inBounds(nx, ny) || !standable(index(nx, ny), nx, ny)) {
+                if (!world.area().inBounds(nx, ny) || !standable(nx, ny)) {
                     continue;
                 }
                 if (aimless) {

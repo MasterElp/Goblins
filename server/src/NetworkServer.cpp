@@ -8,7 +8,9 @@
 #include <ixwebsocket/IXNetSystem.h>
 #include <nlohmann/json.hpp>
 
+#include "core/Hunting.hpp"
 #include "core/Needs.hpp"
+#include "core/Random.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
@@ -28,6 +30,7 @@
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
+#include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "core/Diagnostics.hpp"
@@ -353,6 +356,124 @@ nlohmann::json makeGroup(const char* title, std::initializer_list<std::pair<cons
     return nlohmann::json{{"title", title}, {"values", std::move(pairs)}};
 }
 
+// Что лежит на тайле из того, что нужно закону охоты: есть ли под ногами
+// земля, стоит ли на ней вода, лежит ли падаль. Наблюдателю нужно то же
+// самое, что и системе тика, но по клетке за раз: собирать снимок всей
+// Области ради одного выбранного зверя незачем — за одну рассылку сюда
+// приходит меньше тысячи клеток, а не десятки тысяч.
+struct TileFacts {
+    bool soil = false;
+    int water = 0;
+    int carcass = 0;
+};
+
+TileFacts tileFactsAt(const World& world, int x, int y) {
+    TileFacts facts;
+    if (!world.area().inBounds(x, y)) {
+        return facts;
+    }
+    const auto& registry = world.registry();
+    for (const auto entity : world.area().cellAt(x, y).entities) {
+        if (!registry.all_of<SoilComponent>(entity)) {
+            continue;
+        }
+        facts.soil = true;
+        if (const auto* water = registry.try_get<const WaterComponent>(entity)) {
+            facts.water = water->depth;
+        }
+        if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
+            facts.carcass = carcass->meat;
+        }
+        break;
+    }
+    return facts;
+}
+
+// Дорога выбранного хищника — та же самая, по которой он идёт сам.
+//
+// Считается она не копией правил, а тем же законом (core/Hunting.hpp), и
+// из тех же чисел: клетка, зоркость, скорость, голод из тела (core/
+// Needs.hpp) и розыгрыш, собранный ровно так же, как его собирает
+// AnimalSystem (seed мира, тик, идентификатор зверя). Иначе нарисованная
+// дорога рано или поздно разошлась бы с настоящей, а дорога, по которой
+// зверь не идёт, хуже ненарисованной: по ней в первую очередь и судят,
+// работает ли охота вообще.
+//
+// "reach" — вся округа, до которой у хищника есть ход: по ней сразу видно,
+// почему он не пошёл за той добычей, что стоит на виду за рекой.
+void appendHuntRoad(const World& world, entt::entity entity, const AnimalComponent& animal,
+                    const AnimalGenomeComponent& genome, const PositionComponent& position, Desire desire,
+                    std::uint64_t id, nlohmann::json& watched, nlohmann::json& groups) {
+    const auto& registry = world.registry();
+    const auto& properties = registry.get<const WorldPropertiesComponent>(world.worldEntity());
+    const std::uint64_t tick = registry.get<const TimeComponent>(world.worldEntity()).tick;
+    const int sight = std::max(1, genome.perception);
+
+    HuntReach reach;
+    reach.build(world.area(), position.x, position.y, sight, [&world](int x, int y) {
+        const TileFacts facts = tileFactsAt(world, x, y);
+        return standableAt(world.area().isBlocked(x, y), facts.soil, facts.water);
+    });
+
+    std::vector<HuntCell> cells;
+    reach.reachedCells(cells);
+    const int reachCount = static_cast<int>(cells.size());
+    auto reachJson = nlohmann::json::array();
+    for (const auto& cell : cells) {
+        reachJson.push_back(cell.x);
+        reachJson.push_back(cell.y);
+    }
+    watched["reach"] = std::move(reachJson);
+
+    // Те же две величины числами, рядом с телом и геномом: "докуда есть
+    // ход" и "сколько шагов до цели". Ноль шагов при полной округе — это и
+    // есть "добычи нет ни одной, до которой можно дойти", и увидеть это в
+    // карточке проще, чем вглядываться в карту.
+    auto huntGroup = [&groups, reachCount](int roadSteps) {
+        groups.push_back(makeGroup("Hunt", {{"reach_cells", reachCount}, {"road_steps", roadSteps}}));
+    };
+
+    // Дорога есть только у того, кто идёт за едой. Хищник, севший пить или
+    // ушедший искать пару, никакой добычи сейчас не выбирает, и рисовать
+    // ему дорогу значило бы показывать решение, которого он не принимал.
+    if (desire != Desire::Food) {
+        huntGroup(0);
+        return;
+    }
+
+    std::vector<HuntPrey> preys;
+    for (const auto other : registry.view<const AnimalComponent, const AnimalGenomeComponent, const PositionComponent>()) {
+        if (other == entity || registry.all_of<PredatorComponent>(other)) {
+            continue;
+        }
+        const auto& preyPosition = registry.get<const PositionComponent>(other);
+        preys.push_back(HuntPrey{preyPosition.x, preyPosition.y,
+                                  registry.get<const AnimalGenomeComponent>(other).speed});
+    }
+
+    const HuntChoice choice = chooseHuntTarget(
+        reach, Hunter{position.x, position.y, sight, genome.speed, hungerOf(animal, genome)}, preys,
+        [&world](int x, int y) { return tileFactsAt(world, x, y).carcass; },
+        mixSeed(static_cast<std::uint64_t>(properties.animalRandomSeed), mixSeed(tick, id)));
+
+    if (choice.kind == HuntChoice::Kind::None) {
+        huntGroup(0);
+        return;
+    }
+    watched["road_kind"] = choice.kind == HuntChoice::Kind::Prey ? (choice.atTeeth ? "teeth" : "prey") : "carcass";
+    watched["road_x"] = choice.x;
+    watched["road_y"] = choice.y;
+
+    reach.roadTo(choice.x, choice.y, cells);
+    auto roadJson = nlohmann::json::array();
+    for (const auto& cell : cells) {
+        roadJson.push_back(cell.x);
+        roadJson.push_back(cell.y);
+    }
+    watched["road"] = std::move(roadJson);
+    huntGroup(static_cast<int>(cells.size()));
+}
+
 // Геном — по таблице черт своей диеты, а не полем за полем: новая черта
 // уедет клиенту сама, как это уже сделано для архетипов видов.
 template <typename Traits, typename Genome>
@@ -424,6 +545,15 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                                                     {"thirst", thirstOf(animal, genome)},
                                                     {"mating", desire.mating}}));
             groups.push_back(makeGenomeGroup(predator ? predatorTraits() : herbivoreTraits(), genome));
+
+            // Охота — единственное, что видно не только в числах, но и на
+            // карте: куда хищник может дойти и за кем сейчас идёт (см.
+            // appendHuntRoad). У травоядного дороги нет — оно ходит
+            // напролом и обходит преграду вслепую (09_Animals.md, п.8).
+            if (predator) {
+                appendHuntRoad(world_, entity, animal, genome, position, desire.current, target.id, watched, groups);
+            }
+
             watched["groups"] = std::move(groups);
             return watched;
         }

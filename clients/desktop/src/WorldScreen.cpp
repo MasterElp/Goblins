@@ -463,6 +463,25 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                                  static_cast<float>(snapshot.areaHeight) * tileSizeF},
                        Vector2{0, 0}, 0.0f, WHITE);
 
+        // Охота выбранного хищника — глазами самого хищника (см. "watched"
+        // в протоколе; считает её мир, core/Hunting.hpp, клиент только
+        // рисует пришедшие клетки). Округа — подсветкой под всем остальным:
+        // это ответ на вопрос "почему он не пошёл за той добычей, что стоит
+        // на виду за рекой", и заслонять ею карту нельзя.
+        const bool watchingHunter = snapshot.watched.kind == "animal" && !snapshot.watched.reach.empty();
+        if (watchingHunter) {
+            for (const auto& cell : snapshot.watched.reach) {
+                const float screenX = static_cast<float>(cell.first) * tileSizeF - viewX;
+                const float screenY = static_cast<float>(cell.second) * tileSizeF - viewY + kHudHeight;
+                if (screenX + tileSize < 0 || screenX > viewportW || screenY + tileSize < kHudHeight ||
+                    screenY > viewportH + kHudHeight) {
+                    continue;
+                }
+                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY), std::max(1, tileSize),
+                              std::max(1, tileSize), Color{90, 170, 255, 38});
+            }
+        }
+
         for (const auto& boulder : snapshot.boulders) {
             const float screenX = static_cast<float>(boulder.first) * tileSizeF - viewX;
             const float screenY = static_cast<float>(boulder.second) * tileSizeF - viewY + kHudHeight;
@@ -538,6 +557,32 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                                   Color{220, 60, 50, 230});
                 }
             }
+        }
+
+        // Дорога — поверх зверей: она и есть то, ради чего смотрят. Линия
+        // от самого хищника через клетки найденной дороги до цели, а на
+        // цели — кольцо. Цвет говорит, за чем он идёт: за живой добычей или
+        // к туше. Дороги нет вовсе — не нарисовано ничего, и это тоже
+        // ответ: значит, идти хищнику не за кем.
+        if (watchingHunter && !snapshot.watched.road.empty()) {
+            // "teeth" — та же живая добыча, просто уже под зубами.
+            const bool huntingPrey =
+                snapshot.watched.roadKind == "prey" || snapshot.watched.roadKind == "teeth";
+            const Color roadColor = huntingPrey ? Color{255, 120, 90, 235} : Color{235, 225, 170, 225};
+            const float thickness = std::max(1.5f, tileSizeF * 0.14f);
+            auto centerOf = [&](int cellX, int cellY) {
+                return Vector2{static_cast<float>(cellX) * tileSizeF - viewX + tileSizeF * 0.5f,
+                               static_cast<float>(cellY) * tileSizeF - viewY + kHudHeight + tileSizeF * 0.5f};
+            };
+            Vector2 from = centerOf(snapshot.watched.x, snapshot.watched.y);
+            for (const auto& cell : snapshot.watched.road) {
+                const Vector2 to = centerOf(cell.first, cell.second);
+                DrawLineEx(from, to, thickness, roadColor);
+                from = to;
+            }
+            const Vector2 goal = centerOf(snapshot.watched.roadX, snapshot.watched.roadY);
+            DrawCircleLines(static_cast<int>(goal.x), static_cast<int>(goal.y), std::max(3.0f, tileSizeF * 0.45f),
+                             roadColor);
         }
 
         if (hasHoverTile) {
