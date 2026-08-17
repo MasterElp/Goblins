@@ -186,7 +186,7 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           {"soil_erosion_rate", worldProperties->soilErosionRate},
                                           {"max_erosion_depth", worldProperties->maxErosionDepth},
                                           {"plant_mutation_rate", worldProperties->plantMutationRate},
-                                          {"humus_decay_rate", worldProperties->humusDecayRate},
+                                          {"humus_decay_period", worldProperties->humusDecayPeriod},
                                           {"plant_random_seed", worldProperties->plantRandomSeed},
                                           {"animal_mutation_rate", worldProperties->animalMutationRate},
                                           {"animal_random_seed", worldProperties->animalRandomSeed}};
@@ -219,7 +219,6 @@ nlohmann::json buildEntitiesJson(const World& world) {
         if (const auto* soil = registry.try_get<SoilComponent>(entity)) {
             record["soil"] = {{"moisture", soil->moisture},
                               {"rockiness", soil->rockiness},
-                              {"compaction", soil->compaction},
                               {"minerals", soil->minerals}};
         }
         if (const auto* heightComponent = registry.try_get<HeightComponent>(entity)) {
@@ -229,21 +228,19 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["water"] = {{"depth", water->depth}};
         }
         if (const auto* humus = registry.try_get<HumusComponent>(entity)) {
-            record["humus"] = {{"minerals", humus->minerals}, {"pending", humus->pending}};
+            record["humus"] = {{"minerals", humus->minerals}};
         }
         if (const auto* plant = registry.try_get<PlantComponent>(entity)) {
             record["plant"] = {{"age", plant->age},
                                {"growth", plant->growth},
-                               {"moisture", plant->moisture},
                                {"minerals", plant->minerals},
-                               {"mineral_pending", plant->mineralPending},
                                {"stress", plant->stress}};
         }
         // Лежащее семя — не растение (см. SeedComponent), но геном у него
         // такой же, и пишется он общей веткой ниже: "genome" есть и у
         // растения, и у семени.
         if (const auto* seed = registry.try_get<SeedComponent>(entity)) {
-            record["seed"] = {{"age", seed->age}, {"moisture", seed->moisture}, {"minerals", seed->minerals}};
+            record["seed"] = {{"age", seed->age}, {"minerals", seed->minerals}};
         }
         if (const auto* genome = registry.try_get<PlantGenomeComponent>(entity)) {
             record["genome"] = genomeToJson(*genome, kGrassTraits);
@@ -255,12 +252,9 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                  {"energy", animal->energy},
                                  {"water", animal->water},
                                  {"protein", animal->protein},
-                                 {"protein_pending", animal->proteinPending},
                                  {"dung", animal->dung},
-                                 {"dung_pending", animal->dungPending},
                                  {"health", animal->health},
-                                 {"step_progress", animal->stepProgress},
-                                 {"stress", animal->stress}};
+                                 {"step_progress", animal->stepProgress}};
         }
         if (const auto* genome = registry.try_get<AnimalGenomeComponent>(entity)) {
             // Черты пишутся по таблице своей диеты: у хищника их на одну
@@ -271,15 +265,14 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                            : genomeToJson(*genome, kHerbivoreTraits);
         }
         if (const auto* carcass = registry.try_get<CarcassComponent>(entity)) {
-            record["carcass"] = {{"meat", carcass->meat},
-                                  {"protein", carcass->protein},
-                                  {"protein_pending", carcass->proteinPending}};
+            record["carcass"] = {{"meat", carcass->meat}, {"protein", carcass->protein}};
         }
         if (const auto* desire = registry.try_get<DesireComponent>(entity)) {
-            record["desire"] = {{"hunger", desire->hunger},
-                                 {"thirst", desire->thirst},
-                                 {"mating", desire->mating},
-                                 {"current", desireName(desire->current)}};
+            // Голод и жажда в файл не пишутся: они пересчитываются из тела
+            // на первом же тике и между тиками не живут (см.
+            // DesireComponent). Записывать их значило бы сохранять то, что
+            // всё равно будет переписано.
+            record["desire"] = {{"mating", desire->mating}, {"current", desireName(desire->current)}};
         }
         if (const auto* identity = registry.try_get<IdentityComponent>(entity)) {
             record["identity"] = identity->id;
@@ -350,8 +343,8 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("max_erosion_depth", 0.5f);
             parsed.worldProperties.plantMutationRate =
                 record["world_properties"].value("plant_mutation_rate", 0.06f);
-            parsed.worldProperties.humusDecayRate =
-                record["world_properties"].value("humus_decay_rate", 0.02f);
+            parsed.worldProperties.humusDecayPeriod =
+                record["world_properties"].value("humus_decay_period", 50);
             parsed.worldProperties.plantRandomSeed =
                 record["world_properties"].value("plant_random_seed", 0u);
             parsed.worldProperties.animalMutationRate =
@@ -414,7 +407,6 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.hasSoil = true;
             parsed.soil.moisture = record["soil"].value("moisture", 0.0f);
             parsed.soil.rockiness = record["soil"].value("rockiness", 0.0f);
-            parsed.soil.compaction = record["soil"].value("compaction", 0.0f);
             parsed.soil.minerals = record["soil"].value("minerals", 0);
         }
         parsed.height = record.value("height", 0.0f);
@@ -431,21 +423,17 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         if (record.contains("humus")) {
             parsed.hasHumus = true;
             parsed.humus.minerals = record["humus"].value("minerals", 0);
-            parsed.humus.pending = record["humus"].value("pending", 0.0f);
         }
         if (record.contains("carcass")) {
             parsed.hasCarcass = true;
             parsed.carcass.meat = record["carcass"].value("meat", 0.0f);
             parsed.carcass.protein = record["carcass"].value("protein", 0);
-            parsed.carcass.proteinPending = record["carcass"].value("protein_pending", 0.0f);
         }
         if (record.contains("plant")) {
             parsed.hasPlant = true;
             parsed.plant.age = record["plant"].value("age", 0.0f);
             parsed.plant.growth = record["plant"].value("growth", 0.0f);
-            parsed.plant.moisture = record["plant"].value("moisture", 0.0f);
             parsed.plant.minerals = record["plant"].value("minerals", 0);
-            parsed.plant.mineralPending = record["plant"].value("mineral_pending", 0.0f);
             parsed.plant.stress = record["plant"].value("stress", 0.0f);
             // Геном обязателен: растение без него не смогло бы ни расти,
             // ни размножаться, а подставлять "средний геном" значило бы
@@ -459,7 +447,6 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         if (record.contains("seed")) {
             parsed.hasSeed = true;
             parsed.seed.age = record["seed"].value("age", 0.0f);
-            parsed.seed.moisture = record["seed"].value("moisture", 0.0f);
             parsed.seed.minerals = record["seed"].value("minerals", 0);
             // Геном обязателен по той же причине, что и у растения: из
             // семени без генома нечему было бы прорасти, а "средний геном"
@@ -488,14 +475,11 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.animal.energy = animal.value("energy", 0.0f);
             parsed.animal.water = animal.value("water", 0.0f);
             parsed.animal.protein = animal.value("protein", 0);
-            parsed.animal.proteinPending = animal.value("protein_pending", 0.0f);
             parsed.animal.dung = animal.value("dung", 0);
-            parsed.animal.dungPending = animal.value("dung_pending", 0.0f);
             // У животного из старого файла целости тела нет — ран тогда
             // никто не наносил, значит оно цело.
             parsed.animal.health = animal.value("health", 1.0f);
             parsed.animal.stepProgress = animal.value("step_progress", 0.0f);
-            parsed.animal.stress = animal.value("stress", 0.0f);
             // Геном обязателен по той же причине, что и у растения:
             // подставить "средний геном" значило бы втихую изменить
             // состояние мира при загрузке.
@@ -512,10 +496,10 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
 
             if (record.contains("desire")) {
                 const auto& desire = record["desire"];
-                parsed.desire.hunger = desire.value("hunger", 0.0f);
-                parsed.desire.thirst = desire.value("thirst", 0.0f);
+                // Голод, жажда и страх из старых файлов молча
+                // игнорируются: они пересчитываются из тела на первом же
+                // тике, и хранить их между запусками мира незачем.
                 parsed.desire.mating = desire.value("mating", 0.0f);
-                parsed.desire.fear = desire.value("fear", 0.0f);
                 parsed.desire.current = desireFromName(desire.value("current", std::string("idle")));
             }
             // Постоянный идентификатор — единственное, что животное не может

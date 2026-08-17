@@ -119,13 +119,13 @@ struct SaveWorldRequest {
 //              (хищники) появился позже трёх первых, поэтому читающая
 //              сторона обязана пережить его отсутствие: летопись мира,
 //              прожитого до появления хищников, короче на элемент.
-//      "layers": {"rockiness", "moisture", "compaction", "minerals",
+//      "layers": {"rockiness", "moisture", "minerals",
 //                 "height", "water", "humus", "carcass", "species",
 //                 "growth", "seeds"}}
 //              -- плоские массивы целых, row-major, по одному значению на
 //              тайл. Целые, а не float: в JSON число с плавающей точкой
 //              печатается как double (два десятка знаков на значение), а
-//              плотный массив тут — на всю Область. moisture, compaction,
+//              плотный массив тут — на всю Область. moisture,
 //              rockiness, height и water — в тысячных долях (делить на
 //              "scale"), growth — целые проценты, minerals и humus —
 //              счётные величины как есть, species — индекс вида или -1
@@ -358,7 +358,6 @@ private:
         int width = 0;
         int height = 0;
         std::vector<int> moisture;
-        std::vector<int> compaction;
         std::vector<int> minerals;
         std::vector<int> terrainHeight;
         std::vector<int> water;

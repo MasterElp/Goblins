@@ -32,7 +32,7 @@ inline void depositHumus(World& world, int x, int y, int minerals) {
         if (auto* humus = world.registry().try_get<HumusComponent>(tile)) {
             humus->minerals += minerals;
         } else {
-            world.registry().emplace<HumusComponent>(tile, HumusComponent{minerals, 0.0f});
+            world.registry().emplace<HumusComponent>(tile, HumusComponent{minerals});
         }
         return;
     }

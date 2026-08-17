@@ -22,6 +22,7 @@
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/Diagnostics.hpp"
+#include "core/Needs.hpp"
 
 namespace goblins {
 
@@ -37,29 +38,29 @@ constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 // никогда не выживал бы на бедной земле.
 constexpr float kMinSizeShare = 0.3f;
 
-// Сколько энергии даёт единица биомассы съеденного (до того, как её
-// умножат на digestion генома). Число связывает две шкалы, которые иначе не
-// сопоставимы: развитость растения живёт в [0, 1], а расход животного — в
-// единицах за тик. Оно же переводит и мясо: биомасса травы и биомасса туши
-// меряются одной шкалой, поэтому травоядное и хищник считают энергию
-// одинаково, а разница между диетами остаётся в том, ГДЕ её взять, а не в
-// том, сколько её в куске.
-constexpr float kEnergyPerBiomass = 40.0f;
+// Сколько энергии даёт единица биомассы съеденного. Число связывает две
+// шкалы, которые иначе не сопоставимы: развитость растения живёт в [0, 1],
+// а расход животного — в единицах за тик. Оно же переводит и мясо: биомасса
+// травы и биомасса туши меряются одной шкалой, поэтому травоядное и хищник
+// считают энергию одинаково, а разница между диетами остаётся в том, ГДЕ её
+// взять, а не в том, сколько её в куске.
+//
+// Значение меньше прежнего ровно настолько, насколько раньше его в среднем
+// урезало пищеварение генома (digestion, 0.3..1.0). Самой этой черты
+// больше нет: невидимый множитель, за который вид платил бюджетом и о
+// котором в мире нельзя было узнать иначе как по скорости насыщения.
+constexpr float kEnergyPerBiomass = 26.0f;
 
-// Сколько воды животное получает из самой травы: трава сочная, и часть
-// жажды утоляется кормёжкой. Множитель к влаге, накопленной растением
-// (PlantComponent::moisture), в пересчёте на съеденную долю куста.
-constexpr float kWaterPerBiomass = 6.0f;
-
-// То же для мяса: в туше есть кровь, и наевшийся хищник долго может не
-// искать воду. Своей влаги падаль не хранит (у неё нет поля, откуда её
-// брать), поэтому вода считается прямо от съеденной биомассы.
+// Сколько воды животное получает из самой еды: трава сочная, в туше есть
+// кровь, и наевшийся долго может не искать реку. Одно число на обе диеты, а
+// не по своему на каждую: две величины были равны с самого начала, и разной
+// их никто никогда не делал.
 //
 // Число заметное, а не символическое: хищник уходит за добычей далеко от
 // воды, и если бы поить его могла только река, он гиб бы от жажды посреди
 // охоты — на первых прогонах именно так и выходило, хищники умирали с
 // полным брюхом и пустой флягой.
-constexpr float kWaterPerMeat = 6.0f;
+constexpr float kWaterPerFood = 6.0f;
 
 // Цена одного шага в энергии (взрослому). Вместе со скоростью из генома это
 // и есть плата за быстроту: быстрое животное делает больше шагов за тик,
@@ -74,12 +75,10 @@ constexpr float kWaterPerMeat = 6.0f;
 // которому корм давался даром, за тысячу тиков объедало весь мир.
 constexpr float kStepEnergy = 0.25f;
 
-// Водопой: сколько единиц воды животное выпивает за тик и сколько глубины
-// это снимает с клетки. Второе число мало намеренно: стадо не должно
-// выпивать реку — оно и не выпивает, но след в мире оставляет, и вода
-// приходит не из ниоткуда.
+// Водопой: сколько единиц воды животное выпивает за тик. Сколько глубины
+// это снимало с клетки, было вторым числом, и подобрано оно было так, чтобы
+// след получался неразличимым, — то есть чтобы не значить ничего.
 constexpr float kDrinkRate = 4.0f;
-constexpr float kDrinkDepthPerUnit = 0.002f;
 
 // Ниже этой развитости куст объедать нечего, ниже этого мяса — нечего
 // глодать: животное просто не считает такое едой. Иначе стадо паслось бы на
@@ -95,23 +94,27 @@ constexpr float kMinBiteMeat = 0.05f;
 // отходит.
 constexpr float kGrazeStress = 0.4f;
 
-// Пищеварение: какая доля крупицы за тик проходит через взрослое животное
-// в навоз. Отсюда и необходимость есть постоянно: белок не лежит в теле
-// вечно. Навоз выпадает не по крупице, а порциями в kDungDrop крупиц —
-// это навоз, а не равномерная плёнка по всему маршруту.
-constexpr float kDungRate = 0.004f;
+// Пищеварение: раз во сколько тиков одна крупица белка трогается с места и
+// уходит в навоз. Отсюда и необходимость есть постоянно: белок не лежит в
+// теле вечно. Срок, а не скорость — поэтому телу не нужен накопитель доли:
+// дробное "0.004 крупицы за тик" требовало поля dungPending только затем,
+// чтобы дробь дожила до целого. Навоз при этом всё равно выпадает не по
+// крупице, а порциями в kDungDrop крупиц: это навоз, а не равномерная
+// плёнка по всему маршруту.
+constexpr std::uint64_t kDungPeriod = 250;
 constexpr int kDungDrop = 2;
 
-// Стресс. Голод убивает примерно за 1/kStarvationStress тиков, жажда
-// быстрее — без воды живут меньше, чем без еды. Восстановление медленнее
-// накопления: пережитая бескормица не забывается мгновенно.
-constexpr float kStarvationStress = 0.02f;
-constexpr float kDehydrationStress = 0.03f;
-constexpr float kStressRelief = 0.01f;
-
-// Раны затягиваются у того, кому есть чем: голодное животное не заживает.
-// Медленно — чтобы уйти от хищника раненым значило ещё не спастись.
-constexpr float kHealRate = 0.002f;
+// Здоровье — одно на все беды. Голод убивает примерно за
+// 1/kStarvationHarm тиков, жажда быстрее — без воды живут меньше, чем без
+// еды. Заживление медленнее любого из них: пережитая бескормица не
+// забывается мгновенно, а уйти от хищника раненым — ещё не спастись.
+//
+// Прежде это были две величины: stress копил истощение, health держал раны,
+// и обе убивали при своём краю. Один закон, записанный дважды, — а причина
+// смерти видна и так, в тот тик, когда животное умирает.
+constexpr float kStarvationHarm = 0.02f;
+constexpr float kDehydrationHarm = 0.03f;
+constexpr float kRecoveryRate = 0.002f;
 
 // Желания. Ниже kDesireFloor желание никуда не гонит — животное считается
 // довольным и просто бродит. kDesireSwitch — насколько сильнее должно быть
@@ -138,22 +141,16 @@ constexpr float kCalmNeed = 0.75f;
 constexpr float kMateDesire = 0.6f;
 
 // Цена потомства. Мать отдаёт детёнышу долю своих запасов и крупицу белка —
-// ровно как растение отдаёт семени часть влаги и крупицу минералов; отец
-// платит только ухаживанием (энергия тратится, но никуда не переходит).
-// Именно эта цена, а не отдельный "лимит поголовья", и сдерживает
-// размножение: после родов матери нужно заново отъедаться.
+// ровно как растение отдаёт семени крупицу минералов. Именно эта цена, а не
+// отдельный "лимит поголовья", и сдерживает размножение: после родов матери
+// нужно заново отъедаться.
+//
+// Отец не платит ничего: доля энергии "на ухаживание" (kCourtshipEnergyShare)
+// сгорала в никуда и ни на что не влияла — ни на выбор партнёра, ни на
+// численность, которую держит цена, уплаченная матерью.
 constexpr float kBirthEnergyShare = 0.45f;
 constexpr float kBirthWaterShare = 0.3f;
-constexpr float kCourtshipEnergyShare = 0.15f;
 constexpr float kNewbornGrowth = 0.08f;
-
-// Насколько один проход животного уплотняет почву под ногами. Черта
-// "терпимость к утоптанности" (PlantGenomeComponent::compactionTolerance)
-// была куплена растениями за бюджет ещё до появления животных и до сих пор
-// ничего не значила: топтать почву было некому (docs/08_Plants.md, п.9).
-// Теперь есть кому — тропа к водопою становится твёрдой, и трава на ней
-// растёт хуже.
-constexpr float kTrampleRate = 0.004f;
 
 // С какой вероятностью ничего не желающее животное всё-таки делает шаг.
 // Постоянно бродящее стадо выглядит нервным и зря жжёт энергию; полностью
@@ -272,6 +269,16 @@ struct Animal {
     AnimalComponent* state = nullptr;
     const AnimalGenomeComponent* genome = nullptr;
     DesireComponent* desire = nullptr;
+
+    // Голод, жажда и страх живут здесь, в снимке тика, а не в компоненте.
+    // Все три и раньше пересчитывались из тела и из чужого присутствия
+    // каждый тик заново — храниться между тиками им было незачем, и
+    // хранились они лишь затем, чтобы их было видно снаружи. Смотреть на
+    // них по-прежнему можно (сервер кладёт их в "watched"), но берёт он их
+    // теперь оттуда же, откуда и сама система, — из этого снимка.
+    float hunger = 0.0f;
+    float thirst = 0.0f;
+    float fear = 0.0f;
 };
 
 bool sortByCellThenId(const ShareIntent& a, const ShareIntent& b) {
@@ -286,18 +293,19 @@ bool sortByCellThenId(const ShareIntent& a, const ShareIntent& b) {
 // другое не перевесит его с заметным запасом. Страх инерции не подчиняется
 // в одну сторону — он и так пересчитывается каждый тик и пропадает вместе
 // с опасностью.
-Desire chooseDesire(const DesireComponent& desire, bool readyToMate) {
+Desire chooseDesire(const Animal& animal, bool readyToMate) {
+    const DesireComponent& desire = *animal.desire;
     const float mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0.0f;
 
     Desire best = Desire::Idle;
     float bestUrgency = kDesireFloor;
-    if (desire.hunger >= bestUrgency) {
+    if (animal.hunger >= bestUrgency) {
         best = Desire::Food;
-        bestUrgency = desire.hunger;
+        bestUrgency = animal.hunger;
     }
-    if (desire.thirst >= bestUrgency) {
+    if (animal.thirst >= bestUrgency) {
         best = Desire::Water;
-        bestUrgency = desire.thirst;
+        bestUrgency = animal.thirst;
     }
     if (mating >= bestUrgency) {
         best = Desire::Mate;
@@ -305,17 +313,17 @@ Desire chooseDesire(const DesireComponent& desire, bool readyToMate) {
     }
     // Страх проверяется последним и потому при равенстве побеждает: сытость
     // подождёт, зубы — нет.
-    if (desire.fear >= bestUrgency) {
+    if (animal.fear >= bestUrgency) {
         best = Desire::Flee;
-        bestUrgency = desire.fear;
+        bestUrgency = animal.fear;
     }
 
     float currentUrgency = 0.0f;
     switch (desire.current) {
-        case Desire::Food: currentUrgency = desire.hunger; break;
-        case Desire::Water: currentUrgency = desire.thirst; break;
+        case Desire::Food: currentUrgency = animal.hunger; break;
+        case Desire::Water: currentUrgency = animal.thirst; break;
         case Desire::Mate: currentUrgency = mating; break;
-        case Desire::Flee: currentUrgency = desire.fear; break;
+        case Desire::Flee: currentUrgency = animal.fear; break;
         case Desire::Idle: break;
     }
     if (desire.current != Desire::Idle && currentUrgency >= kDesireFloor &&
@@ -344,7 +352,7 @@ void depositCarcass(World& world, int x, int y, float meat, int protein) {
             carcass->meat += meat;
             carcass->protein += protein;
         } else {
-            world.registry().emplace<CarcassComponent>(tile, CarcassComponent{meat, protein, 0.0f});
+            world.registry().emplace<CarcassComponent>(tile, CarcassComponent{meat, protein});
         }
         return;
     }
@@ -358,13 +366,13 @@ int releaseCarcassProtein(CarcassComponent& carcass, float meatBefore, float rem
     if (meatBefore <= 0.0f || removed <= 0.0f || carcass.protein <= 0) {
         return 0;
     }
-    carcass.proteinPending += static_cast<float>(carcass.protein) * std::min(1.0f, removed / meatBefore);
-    int released = 0;
-    while (carcass.proteinPending >= 1.0f && carcass.protein > 0) {
-        carcass.proteinPending -= 1.0f;
-        --carcass.protein;
-        ++released;
-    }
+    // Целочисленно и без накопителя: сколько крупиц приходится на
+    // унесённую долю мяса, столько и освобождается. Округление вниз ничего
+    // не теряет — неосвобождённое остаётся в туше и уйдёт со следующим
+    // куском или с гниением.
+    const float share = std::min(1.0f, removed / meatBefore);
+    const int released = std::min(carcass.protein, static_cast<int>(static_cast<float>(carcass.protein) * share));
+    carcass.protein -= released;
     return released;
 }
 
@@ -504,7 +512,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // мир узнаёт, чего он хочет, и только потом кто-то что-то делает.
     std::vector<bool> alive(animals.size(), true);
     for (std::size_t a = 0; a < animals.size(); ++a) {
-        const Animal& animal = animals[a];
+        // Не const: голод, жажда и страх этого тика пишутся сюда же, в
+        // снимок, а не в компонент (см. struct Animal).
+        Animal& animal = animals[a];
         auto& state = *animal.state;
         const auto& genome = *animal.genome;
         auto& desire = *animal.desire;
@@ -519,14 +529,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         // Пищеварение: белок не лежит в теле вечно, часть уходит навозом.
         // Отсюда и постоянная нужда есть, а не только "когда кончилась
-        // энергия".
-        state.dungPending += kDungRate * size;
-        while (state.dungPending >= 1.0f && state.protein > 0) {
-            state.dungPending -= 1.0f;
+        // энергия". Крупица трогается с места раз в kDungPeriod тиков —
+        // это срок, а не скорость, поэтому никакого накопителя доли телу не
+        // нужно. Отсчёт сдвинут на постоянный идентификатор животного:
+        // иначе всё поголовье испражнялось бы одним и тем же тиком.
+        if (state.protein > 0 && (tick + animal.id) % kDungPeriod == 0) {
             --state.protein;
             ++state.dung;
         }
-        state.dungPending = std::min(state.dungPending, 1.0f);
 
         // Взросление: детёныш дорастает до взрослого примерно к
         // maturityAge, но не выше того, что позволяет накопленный белок —
@@ -540,25 +550,30 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             state.growth = std::clamp(state.growth + rate, 0.0f, ceiling);
         }
 
+        // Здоровье — одно на все беды. Голод, жажда и чужие зубы отнимают
+        // его, сытость возвращает. Отдельного счётчика истощения (stress)
+        // рядом со здоровьем больше нет: две величины, обе от нуля до
+        // единицы, обе убивающие при своём краю, — это один закон,
+        // записанный дважды. Отчего именно животное умерло, по-прежнему
+        // видно в тот момент, когда оно умирает: пустой желудок, пустая
+        // фляга или рана.
         if (state.energy <= 0.0f) {
             state.energy = 0.0f;
-            state.stress += kStarvationStress;
+            state.health -= kStarvationHarm;
         }
         if (state.water <= 0.0f) {
             state.water = 0.0f;
-            state.stress += kDehydrationStress;
+            state.health -= kDehydrationHarm;
         }
         if (state.energy > 0.0f && state.water > 0.0f) {
-            state.stress = std::max(0.0f, state.stress - kStressRelief);
-            // Раны затягиваются только у того, кому есть чем.
-            state.health = std::min(1.0f, state.health + kHealRate);
+            state.health = std::min(1.0f, state.health + kRecoveryRate);
         }
 
         // Смерть от старости, от условий или от чужих зубов. Entity
         // исчезает не сейчас, а при разрешении очереди команд
         // (05_Entity.md, п.5), и тело ложится падалью — одинаково, от чего
         // бы животное ни умерло.
-        if (state.age >= genome.maxAge || state.stress >= 1.0f || state.health <= 0.0f) {
+        if (state.age >= genome.maxAge || state.health <= 0.0f) {
             enqueueDeath(commands, animal.entity, animal.x, animal.y);
             alive[a] = false;
             continue;
@@ -576,17 +591,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // потому падают сразу, как только животное поело или напилось. Это
         // и есть удовлетворение желания: изменившееся тело, а не списанный
         // счётчик.
-        const float energyDeficit =
-            genome.energyCapacity > 0.0f ? 1.0f - state.energy / genome.energyCapacity : 1.0f;
-        const float proteinDeficit =
-            genome.proteinNeed > 0.0f ? 1.0f - static_cast<float>(state.protein) / genome.proteinNeed : 0.0f;
-        desire.hunger = std::clamp(std::max(energyDeficit, proteinDeficit), 0.0f, 1.0f);
-        desire.thirst =
-            std::clamp(genome.waterCapacity > 0.0f ? 1.0f - state.water / genome.waterCapacity : 1.0f, 0.0f, 1.0f);
+        animal.hunger = hungerOf(state, genome);
+        animal.thirst = thirstOf(state, genome);
 
         // Страх: насколько близко видна опасность. Хищник ни от кого не
         // бегает — на него в этом мире не охотятся (09_Animals.md, п.2).
-        desire.fear = 0.0f;
+        animal.fear = 0.0f;
         if (!animal.predator) {
             const float sight = std::max(1.0f, genome.perception);
             for (std::size_t b = 0; b < animals.size(); ++b) {
@@ -611,8 +621,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // тиков, а следом вымирали и сами хищники. Фора, которую
                 // даёт зоркость, и есть главная защита добычи.
                 const float scare = kDesireFloor + (1.0f - kDesireFloor) * (1.0f - distance / sight);
-                if (scare > desire.fear) {
-                    desire.fear = scare;
+                if (scare > animal.fear) {
+                    animal.fear = scare;
                     threatX[a] = animals[b].x;
                     threatY[a] = animals[b].y;
                 }
@@ -623,14 +633,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // Не бедствует: ни голод, ни жажда не дошли до предела, и нет
         // накопленного стресса — то есть в последние десятки тиков запасы
         // не кончались совсем.
-        const bool content =
-            state.stress <= 0.0f && desire.hunger < kCalmNeed && desire.thirst < kCalmNeed;
+        const bool content = state.health >= 1.0f && animal.hunger < kCalmNeed && animal.thirst < kCalmNeed;
         if (adult && content) {
             // Желание пары — единственное, которого в теле не прочитать: оно
             // копится со временем у того, кому больше нечего хотеть.
             desire.mating = std::min(1.0f, desire.mating + genome.breedingUrge);
         }
-        desire.current = chooseDesire(desire, adult && content);
+        desire.current = chooseDesire(animal, adult && content);
     }
 
     // --- 4. Решения: что животное делает со своим желанием ---
@@ -749,7 +758,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // вправду голоден (kHuntHunger): наевшийся не охотится.
                     int preyIndex = -1;
                     float preyDistance = 0.0f;
-                    for (std::size_t b = 0; desire.hunger >= kHuntHunger && b < animals.size(); ++b) {
+                    for (std::size_t b = 0; animal.hunger >= kHuntHunger && b < animals.size(); ++b) {
                         if (b == a || !alive[b] || animals[b].predator) {
                             continue;
                         }
@@ -1073,11 +1082,16 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         }
 
         const float growthBefore = plant->growth;
-        const float moistureBefore = plant->moisture;
         const int mineralsBefore = plant->minerals;
         const float share = std::min(1.0f, growthBefore / demand);
 
+        // Крупицы белка делятся между едоками целочисленно и без остатка:
+        // каждому достаётся столько, сколько причитается на всё съеденное
+        // им И теми, кто был до него, минус уже розданное. Накопителя доли
+        // (proteinPending) при этом не нужно ни одному из них — куст
+        // отдаёт свои крупицы здесь и сейчас, ровно по разу каждую.
         float eatenTotal = 0.0f;
+        int releasedTotal = 0;
         for (std::size_t k = n; k < m; ++k) {
             const float eaten = bites[k].want * share;
             if (eaten <= 0.0f) {
@@ -1086,20 +1100,20 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             auto& state = *animals[static_cast<std::size_t>(bites[k].animal)].state;
             const auto& genome = *animals[static_cast<std::size_t>(bites[k].animal)].genome;
 
-            state.energy = std::min(genome.energyCapacity, state.energy + eaten * kEnergyPerBiomass * genome.digestion);
+            state.energy = std::min(genome.energyCapacity, state.energy + eaten * kEnergyPerBiomass);
 
-            // Доля куста, доставшаяся этому животному, — по ней делятся и
-            // вода, и крупицы белка: съеденное растение отдаёт всё, что в
-            // нём было, а не только биомассу.
-            const float fraction = growthBefore > 0.0f ? eaten / growthBefore : 0.0f;
-            const float sap = moistureBefore * fraction;
-            state.water = std::min(genome.waterCapacity, state.water + sap * kWaterPerBiomass);
-            plant->moisture = std::max(0.0f, plant->moisture - sap);
+            // Трава сочная: часть жажды утоляется самой кормёжкой. Вода
+            // считается прямо от съеденной биомассы — тем же числом, что и
+            // у мяса (kWaterPerFood): отдельный множитель на каждую еду был
+            // невидимой величиной, которая ни разу ни на что не повлияла.
+            state.water = std::min(genome.waterCapacity, state.water + eaten * kWaterPerFood);
+
+            eatenTotal += eaten;
 
             const int proteinCap = std::max(1, static_cast<int>(std::ceil(genome.proteinNeed)));
-            state.proteinPending += static_cast<float>(mineralsBefore) * fraction;
-            while (state.proteinPending >= 1.0f && plant->minerals > 0) {
-                state.proteinPending -= 1.0f;
+            const float fraction = growthBefore > 0.0f ? eatenTotal / growthBefore : 0.0f;
+            const int owed = std::min(mineralsBefore, static_cast<int>(static_cast<float>(mineralsBefore) * fraction));
+            for (int grain = releasedTotal; grain < owed && plant->minerals > 0; ++grain) {
                 --plant->minerals;
                 if (state.protein < proteinCap) {
                     ++state.protein;
@@ -1109,9 +1123,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     ++state.dung;
                 }
             }
-            state.proteinPending = std::min(state.proteinPending, 1.0f);
-
-            eatenTotal += eaten;
+            releasedTotal = std::max(releasedTotal, owed);
         }
 
         plant->growth = std::max(0.0f, plant->growth - eatenTotal);
@@ -1153,10 +1165,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             auto& state = *animals[static_cast<std::size_t>(meals[k].animal)].state;
             const auto& genome = *animals[static_cast<std::size_t>(meals[k].animal)].genome;
 
-            state.energy = std::min(genome.energyCapacity, state.energy + eaten * kEnergyPerBiomass * genome.digestion);
+            state.energy = std::min(genome.energyCapacity, state.energy + eaten * kEnergyPerBiomass);
             // В мясе есть кровь: наевшийся хищник какое-то время может не
             // искать воду.
-            state.water = std::min(genome.waterCapacity, state.water + eaten * kWaterPerMeat);
+            state.water = std::min(genome.waterCapacity, state.water + eaten * kWaterPerFood);
 
             const float meatNow = carcass->meat;
             carcass->meat = std::max(0.0f, carcass->meat - eaten);
@@ -1192,20 +1204,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue;
         }
 
-        const float availableUnits = water->depth / kDrinkDepthPerUnit;
-        const float share = std::min(1.0f, availableUnits / demand);
-        float drunk = 0.0f;
+        // Стадо пьёт из клетки, но не вычерпывает её: за глубиной водопоя
+        // следил множитель kDrinkDepthPerUnit, и был он подобран так, чтобы
+        // след получался неразличимо малым — то есть чтобы не значить
+        // ничего. Река и без него живёт по своему закону (HydrologySystem),
+        // а спор за один водопой решается тем, что все пьющие делят одну
+        // клетку, а не тем, насколько она от этого просела.
         for (std::size_t k = n; k < m; ++k) {
             auto& state = *animals[static_cast<std::size_t>(drinks[k].animal)].state;
             const auto& genome = *animals[static_cast<std::size_t>(drinks[k].animal)].genome;
-            const float got = std::min(drinks[k].want * share, std::max(0.0f, genome.waterCapacity - state.water));
-            state.water += got;
-            drunk += got;
+            state.water = std::min(genome.waterCapacity, state.water + drinks[k].want);
         }
-        // Выпитое уходит из клетки: воды в мире от водопоя становится
-        // меньше, пусть и на малость. Исчезнет ли после этого сама вода с
-        // тайла — решает HydrologySystem по своему порогу, не мы.
-        water->depth = std::max(0.0f, water->depth - drunk * kDrinkDepthPerUnit);
         n = m;
     }
 
@@ -1239,17 +1248,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue;
         }
         world.moveTo(animals[a].entity, step.x, step.y);
-
-        // Вытаптывание: под ногами почва становится плотнее. Это и есть
-        // обратная связь стада на луг помимо поедания — по тропам к
-        // водопою трава растёт хуже (habitatFit по compaction).
-        const entt::entity tile = terrain[index(step.x, step.y)];
-        if (tile != entt::null && registry.valid(tile)) {
-            auto& soil = registry.get<SoilComponent>(tile);
-            const float size = kMinSizeShare + (1.0f - kMinSizeShare) * animals[a].state->growth;
-            soil.compaction = std::clamp(soil.compaction + kTrampleRate * size, 0.0f, 1.0f);
-        }
     }
+
+    // Вытаптывания под ногами больше нет: утоптанность ушла из почвы
+    // вместе с пригодностью, которую она кормила (см. SoilComponent).
+    // Обратная связь стада на луг осталась одна, зато прямая — поедание:
+    // скушенный куст копит стресс и в конце концов гибнет, и тропа к
+    // водопою вытравливается зубами, а не ногами.
 
     // --- 10. Встречи: кто с кем сошёлся ---
     // Пары складываются внутри клетки, в порядке постоянных
@@ -1334,7 +1339,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // Ухаживание тоже стоит энергии, но она никуда не переходит — это
         // потраченные силы, а не переданное вещество.
         father.state->energy =
-            std::max(0.0f, father.state->energy - fatherGenome.energyCapacity * kCourtshipEnergyShare);
+            father.state->energy;
 
         mother.desire->mating = 0.0f;
         father.desire->mating = 0.0f;
@@ -1411,20 +1416,17 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* g = "Animals (tick)";
     out.push_back({g, "kMinSizeShare", kMinSizeShare});
     out.push_back({g, "kEnergyPerBiomass", kEnergyPerBiomass});
-    out.push_back({g, "kWaterPerBiomass", kWaterPerBiomass});
-    out.push_back({g, "kWaterPerMeat", kWaterPerMeat});
+    out.push_back({g, "kWaterPerFood", kWaterPerFood});
     out.push_back({g, "kStepEnergy", kStepEnergy});
     out.push_back({g, "kDrinkRate", kDrinkRate});
-    out.push_back({g, "kDrinkDepthPerUnit", kDrinkDepthPerUnit});
     out.push_back({g, "kMinBiteGrowth", kMinBiteGrowth});
     out.push_back({g, "kMinBiteMeat", kMinBiteMeat});
     out.push_back({g, "kGrazeStress", kGrazeStress});
-    out.push_back({g, "kDungRate", kDungRate});
+    out.push_back({g, "kDungPeriod", static_cast<float>(kDungPeriod)});
     out.push_back({g, "kDungDrop", static_cast<float>(kDungDrop)});
-    out.push_back({g, "kStarvationStress", kStarvationStress});
-    out.push_back({g, "kDehydrationStress", kDehydrationStress});
-    out.push_back({g, "kStressRelief", kStressRelief});
-    out.push_back({g, "kHealRate", kHealRate});
+    out.push_back({g, "kStarvationHarm", kStarvationHarm});
+    out.push_back({g, "kDehydrationHarm", kDehydrationHarm});
+    out.push_back({g, "kRecoveryRate", kRecoveryRate});
     out.push_back({g, "kDesireFloor", kDesireFloor});
     out.push_back({g, "kDesireSwitch", kDesireSwitch});
     out.push_back({g, "kBreedingGrowth", kBreedingGrowth});
@@ -1432,9 +1434,7 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kMateDesire", kMateDesire});
     out.push_back({g, "kBirthEnergyShare", kBirthEnergyShare});
     out.push_back({g, "kBirthWaterShare", kBirthWaterShare});
-    out.push_back({g, "kCourtshipEnergyShare", kCourtshipEnergyShare});
     out.push_back({g, "kNewbornGrowth", kNewbornGrowth});
-    out.push_back({g, "kTrampleRate", kTrampleRate});
     out.push_back({g, "kWanderChance", kWanderChance});
     out.push_back({g, "kRoamTicks", static_cast<float>(kRoamTicks)});
     out.push_back({g, "kRoamReach", static_cast<float>(kRoamReach)});

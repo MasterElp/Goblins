@@ -102,7 +102,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     static bool initialized = false;
     static float zoom = 1.0f;
     static bool showRockiness = true;
-    static bool showCompaction = true;
     static bool showMoisture = true;
     static bool showMinerals = true;
     static bool showHeight = true;
@@ -126,7 +125,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     if (!initialized) {
         zoom = config.zoom;
         showRockiness = config.show_rockiness;
-        showCompaction = config.show_compaction;
         showMoisture = config.show_moisture;
         showMinerals = config.show_minerals;
         showHeight = config.show_height;
@@ -258,14 +256,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         }
 
         // Слои почвы — каждый можно исключить из смешения цвета тайла
-        // (каменистость/плотность/влажность/минералы считаются нулевыми,
-        // если слой выключен). Вода — тот же выключатель, что и влажность
-        // (KEY_THREE): вода на карте — это и есть источник влажности,
+        // (каменистость/влажность/минералы считаются нулевыми, если слой
+        // выключен). Вода — тот же выключатель, что и влажность
+        // (KEY_TWO): вода на карте — это и есть источник влажности,
         // раздельные флаги только путали бы (можно было увидеть воду при
-        // погашенном слое влажности). Высота (KEY_FIVE) — не часть
+        // погашенном слое влажности). Высота (KEY_FOUR) — не часть
         // смешения, а множитель яркости поверх готового цвета (см.
         // TileColors::applyHeightShading), поэтому переключается и
-        // применяется отдельно от остальных четырёх.
+        // применяется отдельно от остальных трёх.
         // Каждое переключение — редкое дискретное событие (не каждый
         // кадр, как WASD-прокрутка), поэтому сохраняем в config.json сразу,
         // без отдельной кнопки "Сохранить" — как и масштаб выше.
@@ -275,29 +273,24 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             goblins::saveClientConfig(configPath, config);
         }
         if (IsKeyPressed(KEY_TWO)) {
-            showCompaction = !showCompaction;
-            config.show_compaction = showCompaction;
-            goblins::saveClientConfig(configPath, config);
-        }
-        if (IsKeyPressed(KEY_THREE)) {
             showMoisture = !showMoisture;
             config.show_moisture = showMoisture;
             goblins::saveClientConfig(configPath, config);
         }
-        if (IsKeyPressed(KEY_FOUR)) {
+        if (IsKeyPressed(KEY_THREE)) {
             showMinerals = !showMinerals;
             config.show_minerals = showMinerals;
             goblins::saveClientConfig(configPath, config);
         }
-        if (IsKeyPressed(KEY_FIVE)) {
+        if (IsKeyPressed(KEY_FOUR)) {
             showHeight = !showHeight;
             config.show_height = showHeight;
             goblins::saveClientConfig(configPath, config);
         }
-        // Растения и перегной — один выключатель (KEY_SIX): перегной это
+        // Растения и перегной — один выключатель (KEY_FIVE): перегной это
         // и есть след умершего растения, разделять их значило бы видеть
         // остатки при погашенном слое травы.
-        if (IsKeyPressed(KEY_SIX)) {
+        if (IsKeyPressed(KEY_FIVE)) {
             showPlants = !showPlants;
             config.show_plants = showPlants;
             goblins::saveClientConfig(configPath, config);
@@ -306,7 +299,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // слой почвы, а объекты поверх карты (как булыжники и источники),
         // и смотреть на луг без зверей — обычное дело. Падаль гаснет
         // вместе с ними: она их след, а не свойство почвы.
-        if (IsKeyPressed(KEY_SEVEN)) {
+        if (IsKeyPressed(KEY_SIX)) {
             showAnimals = !showAnimals;
             config.show_animals = showAnimals;
             goblins::saveClientConfig(configPath, config);
@@ -446,7 +439,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // их состояние), поэтому собирается до того, как что-либо рисуется.
     MapTexture::Layers layers;
     layers.rockiness = showRockiness;
-    layers.compaction = showCompaction;
     layers.moisture = showMoisture;
     layers.minerals = showMinerals;
     layers.height = showHeight;

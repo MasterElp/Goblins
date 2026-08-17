@@ -63,17 +63,15 @@ inline constexpr PlantTrait kGrassTraits[] = {
     {"maturity_age", &PlantGenomeComponent::maturityAge, 250.0f, 40.0f, 1.25f},
     {"max_age", &PlantGenomeComponent::maxAge, 300.0f, 2500.0f, 1.5f},
     {"growth_rate", &PlantGenomeComponent::growthRate, 0.002f, 0.025f, 1.0f},
-    {"moisture_uptake", &PlantGenomeComponent::moistureUptake, 0.01f, 0.1f, 1.0f},
-    {"moisture_capacity", &PlantGenomeComponent::moistureCapacity, 0.05f, 1.2f, 0.75f},
-    {"moisture_need", &PlantGenomeComponent::moistureNeed, 0.008f, 0.0008f, 1.25f},
-    {"mineral_uptake", &PlantGenomeComponent::mineralUptake, 0.005f, 0.08f, 0.75f},
+    // Влажность, при которой вид растёт в полную силу. Диапазон обрезан по
+    // тому, что мир реально предлагает: фон вдали от воды — 0.5
+    // (kBackgroundMoisture), вплотную к воде — около единицы, камень
+    // отнимает до трети. Вид, которому нужно 0.8, живёт только у воды; вид,
+    // которому хватает 0.3, растёт где угодно, но платит за это бюджетом.
+    // Выше 0.85 требовать нельзя — такой вид оказался бы бездомным не по
+    // своей вине.
+    {"moisture_need", &PlantGenomeComponent::moistureNeed, 0.85f, 0.3f, 1.25f},
     {"mineral_need", &PlantGenomeComponent::mineralNeed, 6.0f, 1.0f, 1.0f},
-    {"rockiness_tolerance", &PlantGenomeComponent::rockinessTolerance, 0.12f, 0.85f, 1.0f},
-    // Верхняя граница — не 1: утоптанность в нынешнем мире выше ~0.5
-    // почти не встречается (её размягчает вода, HydrologySystem), и
-    // терпимость сверх этого была бы выброшенным бюджетом. Когда по миру
-    // начнут ходить и топтать почву, границу нужно будет поднять.
-    {"compaction_tolerance", &PlantGenomeComponent::compactionTolerance, 0.1f, 0.7f, 0.75f},
     // Какую глубину воды растение переносит. Верх диапазона — заметно
     // меньше глубины русла: это трава, а не камыш, вид может пережить
     // лужу после дождя, разлив по пойме и подтопленный берег, но не жизнь
@@ -96,12 +94,15 @@ inline constexpr PlantTrait kGrassTraits[] = {
     // Диапазон соразмерен окну ожидания (kSeedWaitTicks в PlantSystem):
     // при худшем покое семя почти всё отведённое ему время просто спит.
     {"seed_dormancy", &PlantGenomeComponent::seedDormancy, 500.0f, 40.0f, 1.0f},
-    // Ниша, а не преимущество — цена 0 (см. выше). Диапазон обрезан по
-    // тому, что мир реально предлагает: каменистость на карте — шум
-    // вокруг середины, у краёв [0, 1] тайлов почти нет, и вид с такой
-    // "своей" каменистостью оказался бы бездомным не по своей вине.
-    {"preferred_rockiness", &PlantGenomeComponent::preferredRockiness, 0.15f, 0.85f, 0.0f},
 };
+
+// Бесплатных черт (weight = 0) в таблице больше нет: единственной такой
+// была "своя" каменистость — выбор ниши, а не преимущество. Ниша по
+// каменистости ушла вместе с habitatFit, а ниша по влажности бесплатной
+// быть не может: сухое место хуже мокрого для всех, и терпеть сухость —
+// это преимущество, за которое платят (см. moisture_need выше). Механика
+// бесплатных черт в genetics::makeSpecies при этом осталась — она ждёт
+// того, у кого ниша появится снова.
 
 inline constexpr std::size_t kGrassTraitCount = sizeof(kGrassTraits) / sizeof(kGrassTraits[0]);
 
@@ -133,16 +134,17 @@ std::vector<PlantGenomeComponent> makeGrassSpecies(int count, std::uint64_t seed
 PlantGenomeComponent mutateGenome(const PlantGenomeComponent& parent, const PlantGenomeComponent& archetype,
                                   float mutationRate, std::uint64_t seed);
 
-// Насколько почва клетки подходит этому геному: 0 — расти невозможно, 1 —
-// идеальные для него условия. Здесь и только здесь сказано, что означают
-// гены preferredRockiness/rockinessTolerance/compactionTolerance, поэтому
-// функция живёт рядом с таблицей черт, а не внутри системы: ею одинаково
-// пользуются и генерация (куда вообще сажать первые семена), и PlantSystem
-// (как быстро растение растёт и куда ему разрешено дать потомка).
+// Функции "насколько почва подходит этому геному" (habitatFit) здесь
+// больше нет, и это не пропажа, а срез. Она перемножала два допуска — по
+// каменистости и по утоптанности, — то есть отвечала на вопрос "хорошее ли
+// это место" вторым способом. Первый способ у мира уже был: влажность.
+// Каменистая земля суше (kRockMoistureReduction, core/Moisture.hpp), а на
+// сухой земле растение не растёт и копит стресс — и голые горы получаются
+// сами собой, из одной причины вместо двух.
 //
-// Влажность и минералы сюда не входят намеренно: это не свойство места, а
-// расход и приход, которые считаются по тикам (растение может пережить
-// засуху на своих запасах и умереть на "подходящей" почве без воды).
-float habitatFit(const PlantGenomeComponent& genome, const SoilComponent& soil);
+// Пригодность клетки теперь читается прямо там, где нужна: влажности не
+// ниже, чем требует геном (moistureNeed), и вода не глубже, чем он
+// переносит (waterTolerance). Порогов kSeedingMinFit/kSeedMinFit не стало
+// вместе с самой функцией.
 
 } // namespace goblins

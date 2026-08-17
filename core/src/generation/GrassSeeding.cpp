@@ -17,15 +17,10 @@ namespace goblins {
 
 namespace {
 
-// Хуже этого семя не сажаем даже при генерации: клетка виду не подходит,
+// Суше этого семя не сажаем даже при генерации: клетка виду не подходит,
 // растение всё равно погибло бы от стресса за сотню тиков (PlantSystem).
-// Тот же порог использует и расселение — см. kSeedMinFit там.
-constexpr float kSeedingMinFit = 0.25f;
-
-// Стартовый запас влаги — половина ёмкости: не пустой (иначе первые же
-// тики засухи выкосили бы весь стартовый луг), но и не полный, чтобы
-// начальное состояние не выглядело подарком.
-constexpr float kInitialMoistureShare = 0.5f;
+// Тот же порог использует и расселение — см. kSeedMinSupply там.
+constexpr float kSeedingMinSupply = 0.5f;
 
 // Ограничение попыток, как в BoulderScatter: на карте, где почти всё —
 // вода/камень/чужая для всех видов почва, случайный поиск свободной
@@ -69,7 +64,7 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
     // seed'а мира, номера тика и координат клетки.
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.plantMutationRate = params.mutationRate;
-    worldProperties.humusDecayRate = params.humusDecayRate;
+    worldProperties.humusDecayPeriod = params.humusDecayPeriod;
     worldProperties.plantRandomSeed = seed;
 
     // --- Виды: архетипы на World Entity (см. PlantSpeciesComponent) ---
@@ -129,7 +124,15 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         }
 
         auto& soil = world.registry().get<SoilComponent>(terrain);
-        if (habitatFit(genome, soil) < kSeedingMinFit) {
+        // Пригодность клетки — та же обеспеченность влагой, по которой
+        // растение живёт каждый тик (PlantSystem). Отдельной функции
+        // пригодности почвы по каменистости и утоптанности больше нет:
+        // камень и так суше, и виду, которому нужна вода, на нём нечего
+        // делать по той же причине, что и в сухой степи.
+        const float supply = genome.moistureNeed > 0.0f
+                                 ? std::clamp(soil.moisture / genome.moistureNeed, 0.0f, 1.0f)
+                                 : 1.0f;
+        if (supply < kSeedingMinSupply) {
             continue; // вид сюда не годится — пусть его семена лягут там, где ему подходит
         }
 
@@ -139,7 +142,6 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         // созревал бы и умирал синхронными волнами.
         PlantComponent plant;
         plant.age = randomUnit(state) * genome.maturityAge;
-        plant.moisture = genome.moistureCapacity * kInitialMoistureShare;
 
         const float grownTo = std::clamp(plant.age * genome.growthRate, 0.0f, 1.0f);
         const int wanted = static_cast<int>(std::ceil(grownTo * genome.mineralNeed));
@@ -165,8 +167,7 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
 // Константы этой стадии — наружу только для чтения (core/Diagnostics.hpp).
 void appendGrassSeedingConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* g = "Grass seeding";
-    out.push_back({g, "kSeedingMinFit", kSeedingMinFit});
-    out.push_back({g, "kInitialMoistureShare", kInitialMoistureShare});
+    out.push_back({g, "kSeedingMinSupply", kSeedingMinSupply});
     out.push_back({g, "kAttemptMultiplier", static_cast<float>(kAttemptMultiplier)});
 }
 

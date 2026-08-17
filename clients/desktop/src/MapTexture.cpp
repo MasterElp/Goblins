@@ -26,7 +26,6 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
     for (std::size_t i = 0; i < cellCount; ++i) {
         Color color = TileColors::soil(layers.moisture ? state.moisture[i] : 0.0f,
                                        layers.rockiness ? state.rockiness[i] : 0.0f,
-                                       layers.compaction ? state.compaction[i] : 0.0f,
                                        layers.minerals ? TileColors::mineralsFraction(state.minerals[i]) : 0.0f);
         if (layers.height && heightRange > 0.0f) {
             color = TileColors::applyHeightShading(color, (state.height[i] - minHeight) / heightRange);

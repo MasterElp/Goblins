@@ -331,7 +331,6 @@ void NetworkClient::handleMessage(const std::string& payload) {
 
         working_.moisture = decodeScaled(layers, "moisture", cellCount, milliScale_);
         working_.rockiness = decodeScaled(layers, "rockiness", cellCount, milliScale_);
-        working_.compaction = decodeScaled(layers, "compaction", cellCount, milliScale_);
         working_.height = decodeScaled(layers, "height", cellCount, milliScale_);
         working_.waterDepth = decodeScaled(layers, "water", cellCount, milliScale_);
         working_.minerals = decodeInts(layers, "minerals", cellCount, 0);
@@ -438,7 +437,6 @@ void NetworkClient::handleMessage(const std::string& payload) {
         const float scale = milliScale_;
         const auto toFraction = [scale](int raw) { return static_cast<float>(raw) * scale; };
         applyChangedCells(json, "moisture", working_.moisture, toFraction);
-        applyChangedCells(json, "compaction", working_.compaction, toFraction);
         applyChangedCells(json, "height", working_.height, toFraction);
         applyChangedCells(json, "water", working_.waterDepth, toFraction);
         applyChangedCells(json, "growth", working_.plantGrowth, [](int raw) { return raw * 0.01f; });

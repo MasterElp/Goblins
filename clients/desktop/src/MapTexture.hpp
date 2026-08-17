@@ -23,7 +23,6 @@ namespace MapTexture {
 // влажностью (вода на тайле и есть источник его влажности).
 struct Layers {
     bool rockiness = true;
-    bool compaction = true;
     bool moisture = true;
     bool minerals = true;
     bool height = true;
@@ -35,7 +34,7 @@ struct Layers {
 };
 
 inline bool operator==(const Layers& a, const Layers& b) {
-    return a.rockiness == b.rockiness && a.compaction == b.compaction && a.moisture == b.moisture &&
+    return a.rockiness == b.rockiness && a.moisture == b.moisture &&
            a.minerals == b.minerals && a.height == b.height && a.plants == b.plants && a.animals == b.animals;
 }
 inline bool operator!=(const Layers& a, const Layers& b) {

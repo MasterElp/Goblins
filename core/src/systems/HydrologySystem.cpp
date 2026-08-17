@@ -37,13 +37,11 @@ constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 // увлажняется постепенно, а не мгновенно.
 constexpr float kMoistureAdaptRate = 0.01f;
 
-// Утрамбованность: только размягчение, необратимо (без причины со стороны
-// воды утрамбованность не меняется — 02_CorePrinciples.md, п.12). rockFloor —
-// доля исходной утрамбованности, ниже которой каменистый участок не
-// размягчается (камень остаётся твёрдым даже у самой воды).
-constexpr float kCompactionRockFloor = 0.6f;
-constexpr float kCompactionSoftenReach = 4.0f;
-constexpr float kCompactionSoftenRate = 0.02f;
+// Утрамбованности в почве больше нет, и размягчать её у воды больше
+// некому. Она жила ради одного потребителя — пригодности почвы для
+// растения, — а та оказалась вторым способом сказать то, что уже говорит
+// влажность (см. SoilComponent). Вместе с ней ушли три константы:
+// kCompactionRockFloor, kCompactionSoftenReach, kCompactionSoftenRate.
 
 // Ниже этой глубины воды на тайле нет (WaterComponent отсутствует —
 // 02_CorePrinciples.md, п.3). Порог ОДИН, а не пара "появиться/исчезнуть":
@@ -156,7 +154,6 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     std::vector<entt::entity> entities(cellCount, kNullEntity);
     std::vector<float> moisture(cellCount, 0.0f);
     std::vector<float> rockiness(cellCount, 0.0f);
-    std::vector<float> compaction(cellCount, 0.0f);
     std::vector<int> minerals(cellCount, 0);
     std::vector<float> terrainHeight(cellCount, 0.0f);
     std::vector<float> waterDepth(cellCount, 0.0f);
@@ -176,7 +173,6 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         entities[i] = entity;
         moisture[i] = soil.moisture;
         rockiness[i] = soil.rockiness;
-        compaction[i] = soil.compaction;
         minerals[i] = soil.minerals;
         terrainHeight[i] = heightComponent.height;
 
@@ -215,9 +211,8 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
     }
 
-    // --- 3. Влажность и 4. утрамбованность: релаксация к цели ---
+    // --- 3. Влажность: релаксация к цели ---
     std::vector<float> nextMoisture(moisture);
-    std::vector<float> nextCompaction(compaction);
     for (std::size_t i = 0; i < cellCount; ++i) {
         if (entities[i] == entt::null) {
             continue;
@@ -225,13 +220,6 @@ void HydrologySystem(World& world, CommandQueue& commands) {
 
         const float target = moistureTarget(distanceToWater[i], rockiness[i]);
         nextMoisture[i] = moisture[i] + (target - moisture[i]) * kMoistureAdaptRate;
-
-        const float softenProximity =
-            distanceToWater[i] >= 0 ? std::exp(-static_cast<float>(distanceToWater[i]) / kCompactionSoftenReach) : 0.0f;
-        const float compactionFloor = rockiness[i] * kCompactionRockFloor;
-        if (compaction[i] > compactionFloor) {
-            nextCompaction[i] = compaction[i] - (compaction[i] - compactionFloor) * kCompactionSoftenRate * softenProximity;
-        }
     }
 
     // --- 5. Течение: вода в "луже" встаёт на один уровень.
@@ -382,9 +370,12 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             continue;
         }
 
-        // Разная почва вымывается по-разному: каменистая и утрамбованная
-        // сопротивляются размыву, рыхлая уходит легко.
-        const float softness = (1.0f - rockiness[i]) * (1.0f - compaction[i]);
+        // Разная почва вымывается по-разному: камень сопротивляется
+        // размыву, рыхлая земля уходит легко. Множителя утрамбованности
+        // здесь больше нет — её самой больше нет в почве, — и склон горы
+        // держится одной каменистостью, как и сказано в
+        // docs/01_Cosmology.md, п.2.
+        const float softness = 1.0f - rockiness[i];
 
         // Потолок выемки. Без него клетка под постоянным источником
         // размывается каждый тик без остановки — высота уезжает в минус, и
@@ -548,7 +539,6 @@ void HydrologySystem(World& world, CommandQueue& commands) {
 
         auto& soil = registry.get<SoilComponent>(entity);
         soil.moisture = std::clamp(nextMoisture[i], 0.0f, 1.0f);
-        soil.compaction = std::clamp(nextCompaction[i], 0.0f, 1.0f);
         soil.minerals = std::max(0, nextMinerals[i]);
         registry.get<HeightComponent>(entity).height = nextTerrainHeight[i];
 
@@ -586,9 +576,6 @@ void HydrologySystem(World& world, CommandQueue& commands) {
 void appendHydrologyConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* g = "Hydrology";
     out.push_back({g, "kMoistureAdaptRate", kMoistureAdaptRate});
-    out.push_back({g, "kCompactionRockFloor", kCompactionRockFloor});
-    out.push_back({g, "kCompactionSoftenReach", kCompactionSoftenReach});
-    out.push_back({g, "kCompactionSoftenRate", kCompactionSoftenRate});
     out.push_back({g, "kWaterMinDepth", kWaterMinDepth});
     out.push_back({g, "kWaterRetention", kWaterRetention});
     out.push_back({g, "kPoolCells", static_cast<float>(kPoolCells)});

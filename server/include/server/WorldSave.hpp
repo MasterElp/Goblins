@@ -54,7 +54,7 @@ namespace goblins {
 //                                         "soil_erosion_rate": E,
 //                                         "max_erosion_depth": D,
 //                                         "plant_mutation_rate": M,
-//                                         "humus_decay_rate": H,
+//                                         "humus_decay_period": H,
 //                                         "plant_random_seed": P,
 //                                         "animal_mutation_rate": AM,
 //                                         "animal_random_seed": AS},
@@ -72,7 +72,7 @@ namespace goblins {
 // значения по умолчанию (water_source_depth = 1, water_evaporation_rate =
 // 0.0002, rain_interval_ticks = 400, rain_amount = 0.05,
 // soil_erosion_rate = 0.05, max_erosion_depth = 0.5,
-// plant_mutation_rate = 0.06, humus_decay_rate = 0.02,
+// plant_mutation_rate = 0.06, humus_decay_period = 50,
 // animal_mutation_rate = 0.06) — World::reset выставляет их сам.
 //
 // "water_source" (WaterSourceComponent) — тег, как "impassable": сам

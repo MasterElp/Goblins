@@ -62,12 +62,11 @@ void draw(Rectangle bounds, const MapTexture::Layers& layers) {
 
     group("Layers -- what the tile colour is made of");
     layerRow("1", "Rockiness", layers.rockiness);
-    layerRow("2", "Compaction", layers.compaction);
-    layerRow("3", "Moisture + water", layers.moisture);
-    layerRow("4", "Minerals", layers.minerals);
-    layerRow("5", "Height shading", layers.height);
-    layerRow("6", "Grass + humus + seeds", layers.plants);
-    layerRow("7", "Animals + carcasses", layers.animals);
+    layerRow("2", "Moisture + water", layers.moisture);
+    layerRow("3", "Minerals", layers.minerals);
+    layerRow("4", "Height shading", layers.height);
+    layerRow("5", "Grass + humus + seeds", layers.plants);
+    layerRow("6", "Animals + carcasses", layers.animals);
 
     group("World");
     row("Space", "pause / resume (the world stops)");

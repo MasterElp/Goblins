@@ -38,9 +38,9 @@ constexpr float kNoiseGain = 0.5f;
 // (TerrainParams::noiseFrequency). Слоям нужна не независимая настройка, а
 // лишь разный масштаб узора, чтобы каменистость не повторяла рельеф один
 // в один. Значения подобраны так, чтобы при noiseFrequency = 0.02
-// получались те же 0.05/0.04/0.06, что были раздельными параметрами.
+// получались те же 0.05 и 0.06, что были раздельными параметрами. Третьего
+// слоя (утрамбованность, 0.04) больше нет — вместе с самой утрамбованностью.
 constexpr float kRockFrequencyRatio = 2.5f;
-constexpr float kCompactionFrequencyRatio = 2.0f;
 constexpr float kMineralsFrequencyRatio = 3.0f;
 
 // Форма склона: во сколько раз "нажать" шум высоты перед растяжением до
@@ -102,7 +102,7 @@ constexpr float kSoilProbeDist = 2.0f;            // на сколько тай�
 constexpr float kSoilPushScale = 10.0f;           // во что превращается разница высот в боковой толчок
 constexpr float kSoilPushClamp = 1.5f;            // потолок бокового толчка от рельефа — не должен доминировать над шумом
 // Жёсткий предел суммарного бокового отклонения за шаг (доли stepLen).
-// Без него при резких перепадах рельефа (высокие rock/compaction bump +
+// Без него при резких перепадах рельефа (высокая mountainHardness +
 // высокая частота шума) soilPush мог быть огромным, путь "телепортировался"
 // на десятки тайлов за шаг — resulting samples.size() и стоимость
 // stampFootprint взрывались, генерация зависала на потоке GameLoop.
@@ -437,13 +437,10 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     const auto heightmapStart = Clock::now();
     auto heightNoise = makeFbmNoise(static_cast<int>(seed), params.noiseFrequency, params);
     auto rockNoise = makeFbmNoise(static_cast<int>(seed) + 1, params.noiseFrequency * kRockFrequencyRatio, params);
-    auto compactionNoise =
-        makeFbmNoise(static_cast<int>(seed) + 2, params.noiseFrequency * kCompactionFrequencyRatio, params);
     auto mineralsNoise = makeFbmNoise(static_cast<int>(seed) + 4, params.noiseFrequency * kMineralsFrequencyRatio, params);
 
     std::vector<float> elevation(cellCount);
     std::vector<float> rockiness(cellCount);
-    std::vector<float> compaction(cellCount);
 
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
@@ -452,7 +449,6 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const float fy = static_cast<float>(y);
 
             rockiness[i] = normalize01(rockNoise.GetNoise(fx, fy));
-            compaction[i] = normalize01(compactionNoise.GetNoise(fx, fy));
 
             // Высота — чистый рельеф, без вклада почвы. Связь между
             // твёрдостью и высотой идёт в обратную сторону (см. ниже):
@@ -469,17 +465,15 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const float relief = std::pow(heightNoise01, kMountainSharpness);
             elevation[i] = relief * params.mountainHeight;
 
-            // Горы и их подножия — преимущественно камень и слежавшийся
-            // грунт: чем выше рельеф, тем сильнее собственный шум
-            // каменистости/утрамбованности подтягивается к самой высоте.
-            // На mountainHardness = 0 остаётся прежний независимый шум, на
-            // 1 — твёрдость почти повторяет рельеф. Подмешивается именно
-            // relief (доля от вершины, 0..1), а не сама высота: обе почвенные
-            // величины нормализованы, и абсолютная высота их бы просто
-            // упёрла в единицу по всей карте.
+            // Горы и их подножия сложены камнем: чем выше рельеф, тем
+            // сильнее собственный шум каменистости подтягивается к самой
+            // высоте. На mountainHardness = 0 остаётся прежний независимый
+            // шум, на 1 — камень почти повторяет рельеф. Подмешивается
+            // именно relief (доля от вершины, 0..1), а не сама высота:
+            // каменистость нормализована, и абсолютная высота просто
+            // упёрла бы её в единицу по всей карте.
             const float lift = std::clamp(params.mountainHardness, 0.0f, 1.0f);
             rockiness[i] = rockiness[i] * (1.0f - lift) + relief * lift;
-            compaction[i] = compaction[i] * (1.0f - lift) + relief * lift;
         }
     }
     stats.heightmapMs = elapsedMs(heightmapStart);
@@ -976,7 +970,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
                 std::max(0, static_cast<int>(std::lround(mineralsNoise01 * params.mineralsAverage * 2.0f)));
 
             const auto entity = world.registry().create();
-            world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, rockiness[i], compaction[i], minerals});
+            world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, rockiness[i], minerals});
             world.registry().emplace<HeightComponent>(entity, HeightComponent{elevation[i]});
             if (waterDepth[i] > 0.0f) {
                 world.registry().emplace<WaterComponent>(entity, WaterComponent{waterDepth[i]});
@@ -1015,7 +1009,6 @@ void appendTerrainConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kNoiseLacunarity", kNoiseLacunarity});
     out.push_back({g, "kNoiseGain", kNoiseGain});
     out.push_back({g, "kRockFrequencyRatio", kRockFrequencyRatio});
-    out.push_back({g, "kCompactionFrequencyRatio", kCompactionFrequencyRatio});
     out.push_back({g, "kMineralsFrequencyRatio", kMineralsFrequencyRatio});
     out.push_back({g, "kMeanderFrequency", kMeanderFrequency});
     out.push_back({g, "kMeanderPushScale", kMeanderPushScale});

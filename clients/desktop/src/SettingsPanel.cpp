@@ -163,7 +163,7 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // геном).
     ops.floatRow("Mutation rate", edited.plants.mutation_rate, 0.0f, 0.3f, 3);
     // Сколько крупиц минералов перегной возвращает в почву за тик.
-    ops.floatRow("Humus decay (per tick)", edited.plants.humus_decay_rate, 0.001f, 0.2f, 3);
+    ops.intRow("Humus: ticks per grain", edited.plants.humus_decay_period, 1, 1000);
 
     ops.section("Animal life");
     // Та же мутация, что и у растений, но своя: наследование детёныша

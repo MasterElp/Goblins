@@ -8,6 +8,7 @@
 #include <ixwebsocket/IXNetSystem.h>
 #include <nlohmann/json.hpp>
 
+#include "core/Needs.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
@@ -84,7 +85,6 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     height = h;
     const std::size_t count = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
     moisture.assign(count, 0);
-    compaction.assign(count, 0);
     minerals.assign(count, 0);
     terrainHeight.assign(count, 0);
     water.assign(count, 0);
@@ -249,7 +249,6 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
             out.moisture[i] = encodeMilli(soil.moisture);
             out.rockiness[i] = encodeMilli(soil.rockiness);
-            out.compaction[i] = encodeMilli(soil.compaction);
             out.minerals[i] = soil.minerals;
         });
 
@@ -426,12 +425,16 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                                                  {"water", animal.water},
                                                  {"protein", static_cast<float>(animal.protein)},
                                                  {"dung", static_cast<float>(animal.dung)},
-                                                 {"step_progress", animal.stepProgress},
-                                                 {"stress", animal.stress}}));
-            groups.push_back(makeGroup("Desires", {{"hunger", desire.hunger},
-                                                    {"thirst", desire.thirst},
-                                                    {"mating", desire.mating},
-                                                    {"fear", desire.fear}}));
+                                                 {"step_progress", animal.stepProgress}}));
+            // Голод и жажда не хранятся в мире — они и есть тело, прочитанное
+            // с другой стороны (core/Needs.hpp, та же формула, по которой
+            // животное выбирает желание). Страха здесь нет: он считается из
+            // чужого присутствия, а не из своего тела, и живёт ровно один тик
+            // внутри AnimalSystem. Виден он всё равно — в "desire", где стоит
+            // "flee", пока животное бежит.
+            groups.push_back(makeGroup("Desires", {{"hunger", hungerOf(animal, genome)},
+                                                    {"thirst", thirstOf(animal, genome)},
+                                                    {"mating", desire.mating}}));
             groups.push_back(makeGenomeGroup(predator ? predatorTraits() : herbivoreTraits(), genome));
             watched["groups"] = std::move(groups);
             return watched;
@@ -463,7 +466,6 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
         auto groups = nlohmann::json::array();
         groups.push_back(makeGroup("Body", {{"age", plant.age},
                                              {"growth", plant.growth},
-                                             {"moisture", plant.moisture},
                                              {"minerals", static_cast<float>(plant.minerals)},
                                              {"stress", plant.stress}}));
         groups.push_back(makeGenomeGroup(kGrassTraits, genome));
@@ -592,7 +594,6 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
 
     message["layers"]["rockiness"] = layers.rockiness;
     message["layers"]["moisture"] = layers.moisture;
-    message["layers"]["compaction"] = layers.compaction;
     message["layers"]["minerals"] = layers.minerals;
     message["layers"]["height"] = layers.terrainHeight;
     message["layers"]["water"] = layers.water;
@@ -622,7 +623,6 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
     // рассылает новый world_init.
     const std::pair<const char*, std::pair<const std::vector<int>*, const std::vector<int>*>> layers[] = {
         {"moisture", {&previous.moisture, &current.moisture}},
-        {"compaction", {&previous.compaction, &current.compaction}},
         {"minerals", {&previous.minerals, &current.minerals}},
         {"height", {&previous.terrainHeight, &current.terrainHeight}},
         {"water", {&previous.water, &current.water}},

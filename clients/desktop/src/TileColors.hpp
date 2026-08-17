@@ -16,20 +16,20 @@ inline Color lerp(Color a, Color b, float t) {
                  static_cast<unsigned char>(a.b + (b.b - a.b) * t), 255};
 }
 
-// Каменистость и утрамбованность задают материал (серый/утоптанная
-// земля), влажность затемняет поверх, минералы добавляют золотистый
-// отблеск. mineralsFraction — уже нормализованная доля (0..1), см.
+// Каменистость задаёт материал (земля или серый камень), влажность
+// затемняет поверх, минералы добавляют золотистый отблеск. Оттенка
+// утоптанной земли здесь больше нет: утрамбованности не стало в самой
+// почве (core/components/SoilComponent.hpp), и красить нечего.
+// mineralsFraction — уже нормализованная доля (0..1), см.
 // mineralsFraction(int) ниже: сам SoilComponent.minerals — счётное целое,
 // не доля, поэтому нормализация вынесена отдельно, а не в этот блендер.
-inline Color soil(float moisture, float rockiness, float compaction, float mineralsFraction) {
+inline Color soil(float moisture, float rockiness, float mineralsFraction) {
     static const Color dirt{101, 67, 33, 255};
     static const Color rock{132, 130, 124, 255};
-    static const Color packed{150, 132, 96, 255};
     static const Color wet{40, 46, 38, 255};
     static const Color mineral{196, 168, 62, 255};
 
     Color c = lerp(dirt, rock, rockiness);
-    c = lerp(c, packed, compaction * (1.0f - rockiness * 0.5f));
     c = lerp(c, wet, moisture * 0.6f);
     c = lerp(c, mineral, mineralsFraction * 0.5f);
     return c;

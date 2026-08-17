@@ -131,10 +131,14 @@ struct PlantConfig {
     // water_flow_rate у террейна: выбираются при генерации, во время
     // симуляции PlantSystem их только читает.
     float mutation_rate = 0.06f;
-    float humus_decay_rate = 0.02f;
+
+    // Раз во сколько тиков перегной возвращает в почву одну крупицу
+    // минералов — срок, а не дробная скорость (см.
+    // core::PlantParams::humusDecayPeriod).
+    int humus_decay_period = 50;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PlantConfig, grass_species, grass_coverage, mutation_rate,
-                                    humus_decay_rate)
+                                    humus_decay_period)
 
 // Зеркало core::AnimalParams (core/generation/AnimalParams.hpp) — по той же
 // причине, что TerrainConfig и PlantConfig выше. Имена и значения по
@@ -269,7 +273,6 @@ struct ClientConfig {
     // бы только для конкретного мира, а после запуска клиента мир может
     // оказаться другим.
     bool show_rockiness = true;
-    bool show_compaction = true;
     bool show_moisture = true;
     bool show_minerals = true;
     bool show_height = true;
@@ -292,7 +295,7 @@ struct ClientConfig {
     std::string panel_tab = "hidden";
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
-                                    fullscreen, show_rockiness, show_compaction, show_moisture, show_minerals,
+                                    fullscreen, show_rockiness, show_moisture, show_minerals,
                                     show_height, show_plants, show_animals, zoom, panel_tab)
 
 namespace detail {

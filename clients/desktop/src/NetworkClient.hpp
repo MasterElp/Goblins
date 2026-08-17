@@ -41,7 +41,6 @@ struct WorldState {
     // целое количество (SoilComponent.minerals), не нормализовано.
     std::vector<float> moisture;
     std::vector<float> rockiness;
-    std::vector<float> compaction;
     std::vector<int> minerals;
     std::vector<float> waterDepth;
 

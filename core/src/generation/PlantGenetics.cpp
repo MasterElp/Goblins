@@ -29,32 +29,6 @@ PlantGenomeComponent mutateGenome(const PlantGenomeComponent& parent, const Plan
     return genetics::mutate(traits(), parent, archetype, mutationRate, seed);
 }
 
-float habitatFit(const PlantGenomeComponent& genome, const SoilComponent& soil) {
-    // Каменистость: чем дальше от "своей", тем хуже, и на границе допуска
-    // рост прекращается совсем. Узкий допуск — специалист (в своей полосе
-    // каменистости ему хорошо, на шаг в сторону уже нет), широкий —
-    // универсал, который растёт почти везде, но платит за это бюджетом.
-    const float rockinessMiss = std::abs(soil.rockiness - genome.preferredRockiness);
-    const float rockinessFit =
-        genome.rockinessTolerance > 0.0f ? std::clamp(1.0f - rockinessMiss / genome.rockinessTolerance, 0.0f, 1.0f)
-                                          : 0.0f;
-
-    // Утоптанность: до предела терпимости не мешает вовсе, дальше рост
-    // падает линейно до нуля на полностью убитой почве. Односторонняя
-    // черта (рыхлая почва плоха ни для кого), поэтому и формула
-    // односторонняя, в отличие от каменистости.
-    float compactionFit = 1.0f;
-    if (soil.compaction > genome.compactionTolerance) {
-        const float headroom = 1.0f - genome.compactionTolerance;
-        compactionFit = headroom > 0.0f ? std::clamp(1.0f - (soil.compaction - genome.compactionTolerance) / headroom,
-                                                      0.0f, 1.0f)
-                                         : 0.0f;
-    }
-
-    return rockinessFit * compactionFit;
-}
-
-
 // Константы генетики — наружу только для чтения (core/Diagnostics.hpp).
 // Общие для всего живого (бюджет, полоса вида, пороги различимости) живут
 // в core/generation/Genetics.hpp и перечислены здесь же: в оверлее им место
