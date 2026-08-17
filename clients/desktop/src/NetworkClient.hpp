@@ -69,12 +69,12 @@ struct WorldState {
     // полями: клиент не знает и не должен знать состав генома (он
     // зависит только от протокола, 07_TechStack.md, п.6), поэтому новая
     // черта появится в клиенте сама, без правок здесь.
-    std::vector<std::vector<std::pair<std::string, float>>> plantSpecies;
+    std::vector<std::vector<std::pair<std::string, int>>> plantSpecies;
     // Виды животных — тем же способом и по той же причине. Списка два:
     // у травоядных и хищников свои таблицы черт, и индекс вида у каждой
     // диеты свой.
-    std::vector<std::vector<std::pair<std::string, float>>> herbivoreSpecies;
-    std::vector<std::vector<std::pair<std::string, float>>> predatorSpecies;
+    std::vector<std::vector<std::pair<std::string, int>>> herbivoreSpecies;
+    std::vector<std::vector<std::pair<std::string, int>>> predatorSpecies;
 
     // Животные — списком, а не слоем по тайлам, как всё остальное выше:
     // они подвижны, их десятки на десятки тысяч клеток, и на одной клетке
@@ -106,7 +106,9 @@ struct WorldState {
     // он просто печатает пришедшее, и новая черта появится в карточке сама.
     struct WatchedGroup {
         std::string title;
-        std::vector<std::pair<std::string, float>> values;
+        // Целые: мир целочислен, и панель показывает те же числа, что
+        // лежат в его компонентах (core/Scale.hpp).
+        std::vector<std::pair<std::string, int>> values;
     };
     struct Watched {
         // Пусто — никто не выбран; "animal"/"plant" — карточка ниже;

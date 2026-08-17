@@ -381,10 +381,10 @@ void NetworkClient::handleMessage(const std::string& payload) {
                 if (!archetype.is_object()) {
                     continue;
                 }
-                std::vector<std::pair<std::string, float>> traits;
+                std::vector<std::pair<std::string, int>> traits;
                 for (const auto& [name, value] : archetype.items()) {
                     if (name != "species" && value.is_number()) {
-                        traits.emplace_back(name, value.get<float>());
+                        traits.emplace_back(name, value.get<int>());
                     }
                 }
                 working_.plantSpecies.push_back(std::move(traits));
@@ -394,15 +394,15 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // Виды животных и само поголовье — тем же способом, что и трава
         // выше: клиент не знает состава генома и не должен.
         auto readSpecies = [](const nlohmann::json& list) {
-            std::vector<std::vector<std::pair<std::string, float>>> species;
+            std::vector<std::vector<std::pair<std::string, int>>> species;
             for (const auto& archetype : list) {
                 if (!archetype.is_object()) {
                     continue;
                 }
-                std::vector<std::pair<std::string, float>> traits;
+                std::vector<std::pair<std::string, int>> traits;
                 for (const auto& [name, value] : archetype.items()) {
                     if (name != "species" && value.is_number()) {
-                        traits.emplace_back(name, value.get<float>());
+                        traits.emplace_back(name, value.get<int>());
                     }
                 }
                 species.push_back(std::move(traits));

@@ -383,7 +383,7 @@ void enqueueDeath(CommandQueue& commands, entt::entity entity, int x, int y) {
         int protein = 0;
         if (const auto* body = w.registry().try_get<const AnimalComponent>(entity)) {
             const int size = kMinSizeShare + (kFull - kMinSizeShare) * body->growth / kFull;
-            meat = kMeatPerSize * size;
+            meat = kMeatPerSize * size / kFull;
             // И накопленный белок, и не вышедший навоз: из тела в мир
             // уходит всё, что в нём было.
             protein = body->protein + body->dung;
@@ -758,7 +758,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // Хищник ест не жертву, а падаль: сначала надо убить
                     // (или найти уже мёртвое), и только потом есть.
                     if (carcassMeat[here] > kMinBiteMeat) {
-                        meals.push_back(ShareIntent{here, static_cast<int>(a), animal.id, genome.biteSize * size});
+                        meals.push_back(
+                            ShareIntent{here, static_cast<int>(a), animal.id, genome.biteSize * size / kFull});
                         busy = true;
                         break;
                     }
@@ -802,7 +803,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 }
 
                 if (plantAt[here] != entt::null && plantGrowth[here] > kMinBiteGrowth) {
-                    bites.push_back(ShareIntent{here, static_cast<int>(a), animal.id, genome.biteSize * size});
+                    bites.push_back(
+                        ShareIntent{here, static_cast<int>(a), animal.id, genome.biteSize * size / kFull});
                     busy = true;
                 } else {
                     hasTarget = findNearest(
@@ -838,7 +840,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     }
                 }
                 if (source < cellCount) {
-                    drinks.push_back(ShareIntent{source, static_cast<int>(a), animal.id, kDrinkRate * size});
+                    drinks.push_back(
+                        ShareIntent{source, static_cast<int>(a), animal.id, kDrinkRate * size / kFull});
                     busy = true;
                 } else {
                     hasTarget =

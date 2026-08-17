@@ -1003,7 +1003,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // просто перезаписываются выбором этой генерации.
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.waterSourceDepth = params.waterSourceDepth;
-    worldProperties.waterEvaporationPeriod = params.waterEvaporationPeriod;
+    worldProperties.waterEvaporationRate = params.waterEvaporationRate;
     worldProperties.rainIntervalTicks = params.rainIntervalTicks;
     worldProperties.rainAmount = params.rainAmount;
     worldProperties.soilErosionRate = params.soilErosionRate;

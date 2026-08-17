@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -100,10 +101,10 @@ struct TerrainConfig {
     int water_source_count = 3;
     int water_source_depth = 1000;
 
-    // Отток воды и дожди — вторая половина баланса воды. Испарение задано
-    // сроком: раз во сколько тиков вода теряет тысячную глубины (см.
-    // core::TerrainParams::waterEvaporationPeriod).
-    int water_evaporation_period = 5;
+    // Отток воды и дожди — вторая половина баланса воды. Испарение — в
+    // тысячных глубины за сто тиков (см.
+    // core::TerrainParams::waterEvaporationRate).
+    int water_evaporation_rate = 20;
     int rain_interval_ticks = 400;
     int rain_amount = 50;
 
@@ -116,7 +117,7 @@ struct TerrainConfig {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, feature_size, noise_octaves, mountain_height,
                                     mountain_hardness, river_count, river_width, river_sinuosity, river_depth, pond_depth,
                                     minerals_average, water_source_count, water_source_depth,
-                                    water_evaporation_period, rain_interval_ticks, rain_amount,
+                                    water_evaporation_rate, rain_interval_ticks, rain_amount,
                                     soil_erosion_rate, max_erosion_depth)
 
 // Зеркало core::PlantParams (core/generation/PlantParams.hpp) — по той же
@@ -310,8 +311,46 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_s
 
 namespace detail {
 
+// Первое дробное число, найденное где-нибудь в дереве JSON, — вместе с
+// путём до него. Пустая строка, если дробных чисел нет.
+//
+// Нужно ровно для одного случая, зато важного. Все настройки сервера стали
+// целыми (core/Scale.hpp), и числа при этом сменили не только тип, но и
+// СМЫСЛ: 0.06 доли карты — это теперь 60 тысячных, 29.53 высоты — 29530.
+// nlohmann, встретив дробное значение в int-поле, не ругается, а отбрасывает
+// дробную часть: "grass_coverage": 0.06 молча превращается в 0, то есть в
+// мир вообще без травы, а "mountain_height": 29.53 — в плоскую карту. И
+// того, и другого пользователь не увидит никак: мир просто выйдет пустым.
+//
+// Ловим именно дробность, а не имена ключей: часть имён (например,
+// water_evaporation_rate) уцелела при смене смысла, а часть настроек
+// перестала быть дробной ещё раньше. Дробное число в конфигурации сервера
+// не имеет права встретиться ни одно — значит его наличие и есть надёжный
+// признак файла старой формы.
+inline std::string findFractional(const nlohmann::json& json, const std::string& path = "") {
+    if (json.is_number_float()) {
+        const double value = json.get<double>();
+        if (value != std::floor(value)) {
+            return path.empty() ? "<root>" : path;
+        }
+        return "";
+    }
+    if (json.is_object()) {
+        for (const auto& [key, value] : json.items()) {
+            const std::string found = findFractional(value, path.empty() ? key : path + "." + key);
+            if (!found.empty()) {
+                return found;
+            }
+        }
+    }
+    return "";
+}
+
+// hasIntegerScale — есть ли у этой конфигурации целая шкала (у серверной
+// есть, у клиентской нет: там живёт дробный zoom). Проверка старой формы
+// имеет смысл только для первой.
 template <typename Config>
-Config loadConfigFile(const std::string& path) {
+Config loadConfigFile(const std::string& path, bool hasIntegerScale) {
     Config config;
 
     std::ifstream file(path);
@@ -322,6 +361,22 @@ Config loadConfigFile(const std::string& path) {
     try {
         nlohmann::json json;
         file >> json;
+
+        if (hasIntegerScale) {
+            const std::string fractional = findFractional(json);
+            if (!fractional.empty()) {
+                std::cerr << "Config file '" << path << "' is from an older version: it holds a fractional value at '"
+                          << fractional << "', and settings are whole numbers now.\n"
+                          << "  The numbers changed meaning as well as type: fractions became thousandths\n"
+                          << "  (0.06 of the map -> 60), depths and heights too (0.9 deep -> 900).\n"
+                          << "  Reading it as is would silently give you an empty, flat world, so defaults\n"
+                          << "  are used instead. Delete the file to get a documented one, or convert it:\n"
+                          << "  noise_frequency 0.02 -> feature_size 50, humus_decay_rate 0.02 ->\n"
+                          << "  humus_decay_period 50, water_evaporation_rate 0.0002 -> 20 (per 100 ticks).\n";
+                return config;
+            }
+        }
+
         config = json.get<Config>();
     } catch (const nlohmann::json::exception& e) {
         std::cerr << "Config file '" << path << "' is not valid (" << e.what() << "), using defaults.\n";
@@ -356,11 +411,15 @@ void ensureConfigExists(const std::string& path) {
 }
 
 inline ServerConfig loadServerConfig(const std::string& path) {
-    return detail::loadConfigFile<ServerConfig>(path);
+    // true: у настроек мира целая шкала целиком, дробному числу тут взяться
+    // неоткуда — см. detail::findFractional.
+    return detail::loadConfigFile<ServerConfig>(path, true);
 }
 
 inline ClientConfig loadClientConfig(const std::string& path) {
-    return detail::loadConfigFile<ClientConfig>(path);
+    // false: у клиента остался дробный zoom — это не состояние мира, а
+    // масштаб картинки на экране.
+    return detail::loadConfigFile<ClientConfig>(path, false);
 }
 
 // Явное сохранение — используется экраном "Настройки" после применения

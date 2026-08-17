@@ -108,9 +108,9 @@ struct TerrainParams {
     // rainIntervalTicks — раз во сколько тиков начинается дождь (0 —
     // дождей нет), rainAmount — глубина одной капли. Дождь идёт несколько
     // тиков и роняет капли в случайные точки, а не заливает карту разом.
-    // Раз во сколько тиков вода теряет от испарения одну тысячную глубины
-    // (см. core::WorldPropertiesComponent::waterEvaporationPeriod).
-    int waterEvaporationPeriod = 5;
+    // Сколько тысячных глубины вода теряет от испарения за сто тиков
+    // (см. core::WorldPropertiesComponent::waterEvaporationRate).
+    int waterEvaporationRate = 20;
     int rainIntervalTicks = 400;
     int rainAmount = 50;
 
