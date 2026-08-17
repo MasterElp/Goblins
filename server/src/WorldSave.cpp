@@ -225,7 +225,11 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["height"] = heightComponent->height;
         }
         if (const auto* water = registry.try_get<WaterComponent>(entity)) {
-            record["water"] = {{"depth", water->depth}};
+            // Остаток разлива (flow_remainder) — такое же состояние мира,
+            // как и сама глубина: он несёт неделящуюся часть воды до
+            // следующего тика (см. WaterComponent), и потерять его на
+            // сохранении значило бы потерять эту воду.
+            record["water"] = {{"depth", water->depth}, {"flow_remainder", water->flowRemainder}};
         }
         if (const auto* humus = registry.try_get<HumusComponent>(entity)) {
             record["humus"] = {{"minerals", humus->minerals}};
@@ -413,7 +417,8 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             // игнорируем: признака "река" у воды больше нет (см.
             // WaterComponent), а нечитаемым из-за лишнего ключа файл
             // становиться не должен.
-            parsed.water.depth = record["water"].value("depth", 0.0f);
+            parsed.water.depth = record["water"].value("depth", 0);
+            parsed.water.flowRemainder = record["water"].value("flow_remainder", 0);
         }
         parsed.impassable = record.value("impassable", false);
         parsed.waterSource = record.value("water_source", false);

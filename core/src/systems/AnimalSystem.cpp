@@ -343,7 +343,7 @@ Desire chooseDesire(const Animal& animal, bool readyToMate) {
 // Вызывать только из команды очереди (05_Entity.md, п.5): добавление
 // компонента — структурное изменение.
 void depositCarcass(World& world, int x, int y, int meat, int protein) {
-    if ((meat <= 0.0f && protein <= 0) || !world.area().inBounds(x, y)) {
+    if ((meat <= 0 && protein <= 0) || !world.area().inBounds(x, y)) {
         return;
     }
     for (const auto tile : world.area().cellAt(x, y).entities) {
@@ -852,7 +852,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                                         return plantAt[cell] != entt::null && plantGrowth[cell] > kMinBiteGrowth &&
                                                standable(cell, nx, ny);
                                     },
-                                    targetX, targetY) >= 0.0f;
+                                    targetX, targetY) >= 0;
                 }
                 break;
             }
@@ -863,7 +863,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // равно нужна: паводок может залить ту, на которой животное
                 // стоит.
                 std::size_t source = cellCount;
-                if (waterAt[here] > 0.0f) {
+                if (waterAt[here] > 0) {
                     source = here;
                 } else {
                     for (int dir = 0; dir < 8; ++dir) {
@@ -873,7 +873,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                             continue;
                         }
                         const std::size_t j = index(nx, ny);
-                        if (waterAt[j] > 0.0f) {
+                        if (waterAt[j] > 0) {
                             source = j;
                             break;
                         }
@@ -884,8 +884,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     busy = true;
                 } else {
                     hasTarget =
-                        findNearest([&](std::size_t cell, int, int) { return waterAt[cell] > 0.0f; }, targetX,
-                                     targetY) >= 0.0f;
+                        findNearest([&](std::size_t cell, int, int) { return waterAt[cell] > 0; }, targetX,
+                                     targetY) >= 0;
                 }
                 break;
             }
@@ -958,11 +958,22 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue;
         }
 
-        state.stepProgress += genome.speed;
-        if (state.stepProgress < 1.0f) {
+        // Скорость — тысячных клетки за тик (core/Scale.hpp): копится,
+        // пока не наберётся целая клетка, и тогда животное переставляет
+        // ноги. Одна клетка за тик и не больше, даже если скорость выше
+        // единицы (у хищника она до 1800).
+        //
+        // Отсюда и потолок в две клетки: у того, кто быстрее клетки за
+        // тик, невыбранный запас иначе растёт без конца — шагов от этого
+        // больше не становится, но число в теле уезжает в бесконечность.
+        // Дробным оно уезжало туда же, просто этого не было видно; целое
+        // состояние мира обязано жить в тех пределах, которые о нём
+        // объявлены (см. AnimalComponent::stepProgress).
+        state.stepProgress = std::min(state.stepProgress + genome.speed, 2 * kFull - 1);
+        if (state.stepProgress < kFull) {
             continue;
         }
-        state.stepProgress -= 1.0f;
+        state.stepProgress -= kFull;
 
         const bool fleeing = desire.current == Desire::Flee;
 
@@ -1407,13 +1418,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             commands.enqueue([x = position.x, y = position.y, toHumus](World& w) { depositHumus(w, x, y, toHumus); });
         }
 
-        if (carcass.meat <= 0.0f) {
+        if (carcass.meat <= 0) {
             commands.enqueue([entity](World& w) {
                 // Проверяем заново, а не полагаемся на снятое выше
                 // состояние: пока команда ждала очереди, на этой же клетке
                 // могло умереть ещё одно животное, и в туше снова есть мясо.
                 auto* remains = w.registry().try_get<CarcassComponent>(entity);
-                if (remains != nullptr && remains->meat <= 0.0f && remains->protein <= 0) {
+                if (remains != nullptr && remains->meat <= 0 && remains->protein <= 0) {
                     w.registry().remove<CarcassComponent>(entity);
                 }
             });

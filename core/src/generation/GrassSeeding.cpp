@@ -110,7 +110,7 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         // у PlantSystem: тонет не тот, под кем есть вода, а тот, под кем
         // её больше, чем он переносит.
         const auto* water = world.registry().try_get<const WaterComponent>(terrain);
-        const float waterDepth = water != nullptr ? water->depth : 0.0f;
+        const int waterDepth = water != nullptr ? water->depth : 0;
 
         const std::size_t speciesIndex =
             static_cast<std::size_t>(randomUnit(state) * static_cast<float>(species.size())) % species.size();

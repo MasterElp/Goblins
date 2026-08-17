@@ -23,32 +23,38 @@ namespace goblins {
 // зависит от содержимого файлов, а два мира не могут случайно оказаться
 // с одним именем.
 //
-// Формат файла (версия 1, dump без отступов — это машинные данные, а не
-// конфигурация для правки руками):
-//   {"format": "goblins_world", "version": 1,
+// Формат файла (версия 2, dump без отступов — это машинные данные, а не
+// конфигурация для правки руками). Все числа целые: мир целочислен
+// (core/Scale.hpp), доли записаны в тысячных, высоты и глубины — в
+// тысячных единицы глубины.
+//
+// Версия поднята с 1 до 2 не из-за нового поля, а потому, что прежние
+// числа сменили и смысл, и шкалу: "growth": 0.6 версии 1 и "growth": 600
+// версии 2 — не одно и то же, и молча прочитать первое как второе значило
+// бы открыть мир, которого не было. Файлы версии 1 отвергаются с ошибкой,
+// а не подгоняются.
+//   {"format": "goblins_world", "version": 2,
 //    "info": WorldSaveInfo,
 //    "generation": RegenerationRequest,
 //    "history": {"interval": N,
 //                "points": [[тик, [трава по видам], [животные по видам]], ...]},
 //    "entities": [ {"position": {"x","y"},
-//                   "soil": {"moisture","rockiness","compaction","minerals"},
+//                   "soil": {"moisture","rockiness","minerals"},
 //                   "height": H,
-//                   "water": {"depth"},
+//                   "water": {"depth","flow_remainder"},
 //                   "water_source": true,
-//                   "humus": {"minerals","pending"},
+//                   "humus": {"minerals"},
 //                   "impassable": true,
-//                   "plant": {"age","growth","moisture","minerals",
-//                              "mineral_pending","stress"},
+//                   "plant": {"age","growth","minerals","stress"},
 //                   "genome": {"species": N, "<черта>": V, ...},
-//                   "herbivore": {"age","growth","sex","energy","water",
-//                                  "protein","protein_pending","dung",
-//                                  "dung_pending","step_progress","stress"},
-//                   "herbivore_genome": {"species": N, "<черта>": V, ...},
-//                   "desire": {"hunger","thirst","mating","current"},
+//                   "animal": {"age","growth","sex","energy","water",
+//                               "protein","dung","health","step_progress"},
+//                   "animal_genome": {"species": N, "<черта>": V, ...},
+//                   "desire": {"mating","current"},
 //                   "identity": N,
 //                   "time": {"tick": N},
 //                   "world_properties": {"water_source_depth": S,
-//                                         "water_evaporation_rate": R,
+//                                         "water_evaporation_period": R,
 //                                         "rain_interval_ticks": RI,
 //                                         "rain_amount": RA,
 //                                         "soil_erosion_rate": E,
@@ -59,7 +65,12 @@ namespace goblins {
 //                                         "animal_mutation_rate": AM,
 //                                         "animal_random_seed": AS},
 //                   "plant_species": [ {"species": 0, "<черта>": V, ...}, ... ],
-//                   "herbivore_species": [ {"species": 0, "<черта>": V, ...}, ... ]}, ... ]}
+//                   "animal_species": {"herbivores": [...], "predators": [...]}}, ... ]}
+//
+// Голода, жажды и страха в "desire" нет: они пересчитываются из тела на
+// первом же тике и между тиками не живут (core/Needs.hpp). Накопителей
+// дроби ("*_pending") нет нигде: мир целочислен, и копить в нём нечего.
+// Утрамбованности нет в "soil": её нет и в самой почве.
 //
 // "soil.minerals" (SoilComponent.minerals, целое число) — как и "height",
 // добавлено без смены версии: у старых файлов без этого поля минералы
@@ -69,11 +80,11 @@ namespace goblins {
 // Entity, что и "time" — 06_GameLoop.md, п.1a) — свойства мира, выбранные
 // один раз при генерации и не меняющиеся во время симуляции. У старых
 // файлов без этого поля (или без отдельных полей внутри него) действуют
-// значения по умолчанию (water_source_depth = 1, water_evaporation_rate =
-// 0.0002, rain_interval_ticks = 400, rain_amount = 0.05,
-// soil_erosion_rate = 0.05, max_erosion_depth = 0.5,
-// plant_mutation_rate = 0.06, humus_decay_period = 50,
-// animal_mutation_rate = 0.06) — World::reset выставляет их сам.
+// значения по умолчанию (water_source_depth = 1000,
+// water_evaporation_period = 5, rain_interval_ticks = 400, rain_amount =
+// 50, soil_erosion_rate = 50, max_erosion_depth = 500,
+// plant_mutation_rate = 60, humus_decay_period = 50,
+// animal_mutation_rate = 60) — World::reset выставляет их сам.
 //
 // "water_source" (WaterSourceComponent) — тег, как "impassable": сам
 // факт наличия и есть данные, отсутствие поля у старых файлов означает
@@ -117,7 +128,7 @@ namespace goblins {
 // является. Индекс размещения Area в файл не пишется — он полностью
 // выводится из PositionComponent/ImpassableComponent и перестраивается
 // при загрузке.
-inline constexpr int kWorldSaveFormatVersion = 1;
+inline constexpr int kWorldSaveFormatVersion = 2;
 
 // Каталог сохранений. Относительный путь из конфигурации разрешается
 // относительно каталога исполняемого файла (как и config.json клиента),

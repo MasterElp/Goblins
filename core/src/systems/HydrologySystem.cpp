@@ -553,7 +553,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         const int y = static_cast<int>(i) / width;
         if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
             nextTerrainHeight[i] = kVoidHeight;
-            nextWaterDepth[i] = 0.0f;
+            nextWaterDepth[i] = 0;
         }
     }
 
