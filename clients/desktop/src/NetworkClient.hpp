@@ -83,6 +83,11 @@ struct WorldState {
     // Диета, пол и желание приходят строками — клиент их только показывает
     // и не должен знать, какие ещё бывают.
     struct Animal {
+        // Постоянный идентификатор (IdentityComponent на сервере): по нему
+        // клиент узнаёт то же самое животное в следующем снимке. Без него
+        // следить за выбранным зверем было бы не за что — список приходит
+        // целиком, и по клетке его уже не найти, он ходит.
+        std::uint64_t id = 0;
         int x = 0;
         int y = 0;
         int species = 0;
@@ -93,6 +98,31 @@ struct WorldState {
         std::string desire;
     };
     std::vector<Animal> animals;
+
+    // Подробности того, за кем следит клиент (существо или растение,
+    // выбранное кликом или наведением; см. "watch" в протоколе сервера).
+    // Тело, желания и геном — парами "имя-значение" в группах, а не полями
+    // структуры: состав у каждого существа свой и живёт в таблицах черт
+    // ядра, а клиент их не знает и знать не должен (07_TechStack.md, п.6) —
+    // он просто печатает пришедшее, и новая черта появится в карточке сама.
+    struct WatchedGroup {
+        std::string title;
+        std::vector<std::pair<std::string, float>> values;
+    };
+    struct Watched {
+        // Пусто — никто не выбран; "animal"/"plant" — карточка ниже;
+        // "gone" — выбранного больше нет в мире (съеден, умер, вытоптан).
+        std::string kind;
+        std::uint64_t id = 0;
+        int x = 0;
+        int y = 0;
+        int species = 0;
+        std::string diet;
+        std::string sex;
+        std::string desire;
+        std::vector<WatchedGroup> groups;
+    };
+    Watched watched;
 
     // Летопись численности, как её ведёт сервер (server/PopulationHistory.hpp):
     // на такой-то тик — сколько клеток занимал каждый вид травы и сколько
@@ -208,6 +238,13 @@ public:
     // Удалить сохранённый мир по имени.
     void sendDeleteWorld(const std::string& name);
 
+    // За кем следить: kind — "animal" (по id), "plant" (по клетке) или
+    // "none" (снять выбор). Ответ приходит в составе world_init/world_delta
+    // (WorldState::watched) — отдельного сообщения у этого запроса нет,
+    // потому что подробности живого существа меняются каждый тик и уместны
+    // ровно там же, где остальное меняющееся состояние мира.
+    void sendWatch(const std::string& kind, std::uint64_t id, int x, int y);
+
 private:
     void handleMessage(const std::string& payload);
     // Разбор списка животных: он одинаков в world_init и в world_delta.
@@ -216,6 +253,8 @@ private:
     // replace — заменить накопленное, а не дописать к нему (world_init:
     // мир построен заново, и прежняя летопись к нему не относится).
     void applyPopulationHistory(const nlohmann::json& message, bool replace);
+    // Разбор карточки выбранного существа — общий для world_init и дельты.
+    void applyWatched(const nlohmann::json& message);
     // Опубликовать working_ как новый неизменяемый снимок. Единственное
     // место, где состояние копируется.
     void publishState();

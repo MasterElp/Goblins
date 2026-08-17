@@ -257,21 +257,23 @@ struct ClientConfig {
     bool show_animals = true;
     float zoom = 1.0f;
 
-    // Панель параметров генерации на экране мира. По умолчанию закрыта:
-    // 460px справа нужны, только когда параметры действительно крутят.
-    bool show_generation_panel = false;
-
-    // График численности видов по времени (клавиша H) — полоса по нижнему
-    // краю карты. Тоже по умолчанию закрыт: он занимает треть высоты окна,
-    // а нужен не всегда. Сохраняется только сам факт "показан или нет":
-    // саму летопись ведёт сервер и кладёт в файл мира (см.
-    // server/PopulationHistory.hpp), клиенту хранить её незачем.
-    bool show_population_graph = false;
+    // Какая вкладка открыта в правой панели экрана мира: "info"
+    // (карточка существа или клетки), "params" (параметры генерации),
+    // "graphs" (численность по времени) или "hidden" — панель свёрнута и
+    // карта занимает всё окно. Одно поле на три панели, а не три
+    // выключателя: они и на экране занимают одно и то же место, показывать
+    // их одновременно негде. Строкой, а не числом, чтобы файл
+    // конфигурации оставался читаемым глазами.
+    //
+    // По умолчанию свёрнута: 460px справа нужны, только когда в них
+    // действительно смотрят. Содержимое вкладок здесь не хранится —
+    // летопись численности ведёт сервер (server/PopulationHistory.hpp), а
+    // параметры генерации приходят от него же.
+    std::string panel_tab = "hidden";
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
                                     fullscreen, show_rockiness, show_compaction, show_moisture, show_minerals,
-                                    show_height, show_plants, show_animals, zoom, show_generation_panel,
-                                    show_population_graph)
+                                    show_height, show_plants, show_animals, zoom, panel_tab)
 
 namespace detail {
 

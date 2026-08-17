@@ -43,7 +43,7 @@ struct SaveWorldRequest {
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 16):
+// Протокол (версия 17):
 //   Состояние мира уходит клиенту двумя разными сообщениями, потому что
 //   оно состоит из двух разных по природе частей. Полный world_init —
 //   всё, включая то, что между регенерациями не меняется вообще
@@ -81,8 +81,8 @@ struct SaveWorldRequest {
 //      "plant_species": [{"species": N, <черты генома>}, ...],
 //      "animal_species": {"herbivores": [{"species": N, <черты>}, ...],
 //                          "predators": [...]},
-//      "animals": [{"x", "y", "species", "kind", "sex", "desire", "growth",
-//                    "health"}, ...]
+//      "animals": [{"id", "x", "y", "species", "kind", "sex", "desire",
+//                    "growth", "health"}, ...]
 //              -- второй канал состояния, рядом с тайловыми слоями: у
 //              подвижных существ нет "своей клетки", их десятки на десятки
 //              тысяч клеток, и плотный массив на всю Область ради них был
@@ -90,7 +90,12 @@ struct SaveWorldRequest {
 //              несколько). Поэтому — список, целиком, и в world_init, и в
 //              дельте (см. ниже). "kind" — диета ("herbivore"/"predator"),
 //              она же говорит, в каком из двух списков animal_species
-//              искать вид по индексу
+//              искать вид по индексу. "id" — постоянный идентификатор
+//              (IdentityComponent): по нему клиент узнаёт то же самое
+//              животное в следующем снимке и может следить за ним, пока
+//              оно ходит по карте
+//      "watched": {...}  -- подробности того, за кем сейчас следит клиент
+//              (см. "watch" ниже). Отсутствует, пока никто не выбран
 //      "history": {"interval": N, "full": true,
 //                  "points": [[тик, [трава по видам], [травоядные по
 //                              видам], [хищники по видам]], ...]}
@@ -147,6 +152,11 @@ struct SaveWorldRequest {
 //      летопись с "full": true, а клиент заменяет ею свою. Случается это
 //      раз в сотни точек, поэтому дешевле, чем поддерживать одинаковое
 //      прореживание на обеих сторонах.
+//      Подробности выбранного существа ("watched") — в каждой дельте, где
+//      они изменились: за живым существом следят именно потому, что оно
+//      меняется каждый тик. Уходят и на паузе (тела не меняются, но выбор
+//      меняется по клику), поэтому дельта отправляется и тогда, когда
+//      изменилось только это.
 //   Сервер -> клиент, сразу при подключении и после каждого сохранения:
 //     {"type": "world_list", "current": "имя текущего мира",
 //      "worlds": [WorldSaveInfo, ...]}  -- см. shared/world/WorldSaveInfo.hpp
@@ -158,6 +168,26 @@ struct SaveWorldRequest {
 //     {"type": "notice", "level": "info"|"error", "text": "..."}
 //   Клиент -> сервер, запрос переключить паузу:
 //     {"type": "toggle_pause"}
+//   Клиент -> сервер, за кем следить (клик по существу или траве на карте):
+//     {"type": "watch", "kind": "animal"|"plant"|"none", "id": N, "x", "y"}
+//     Животное ищется по "id" (оно ходит, и клетка его не определяет),
+//     растение — по клетке (растение на тайле одно). "none" — снять выбор.
+//     В ответ сервер кладёт в world_init и world_delta объект "watched":
+//       {"kind": "animal", "id": N, "x", "y", "species": N,
+//        "diet": "herbivore"|"predator", "sex": "...", "desire": "...",
+//        "groups": [{"title": "...", "values": [["имя", число], ...]}, ...]}
+//       {"kind": "plant", "x", "y", "species": N, "groups": [...]}
+//       {"kind": "gone"}  -- выбранного больше нет в мире (съеден, умер)
+//     Значения — парами "имя-число" в группах, а не полями структуры: у
+//     тела и генома состав свой у каждого существа и меняется вместе с
+//     таблицами черт (core/generation/*Genetics.hpp), а клиент не знает и
+//     не должен знать, из чего они состоят (07_TechStack.md, п.6) — он
+//     просто печатает пришедшее. Порядок значений внутри группы
+//     осмысленный (как в таблице черт), поэтому массив пар, а не объект.
+//     Выбор — общий для всех клиентов, как и пауза: мир один, и состояние
+//     соединения сервер по клиентам не разделяет. Два наблюдателя,
+//     кликающие в разные стороны, перебивают выбор друг другу — как и
+//     нажимающие паузу.
 //   Клиент -> сервер, запрос остановить симуляцию (кнопка "Back" на
 //   экране симуляции) — не toggle, а гарантированная пауза:
 //     {"type": "stop_simulation"}
@@ -337,6 +367,12 @@ private:
         // выше. Лежат в том же снимке, потому что сравниваются с
         // отправленным ровно так же, как слои.
         struct AnimalView {
+            // Постоянный идентификатор (IdentityComponent) — по нему клиент
+            // узнаёт то же самое животное в следующем снимке. Без него
+            // "следить за этим зверем" было бы невозможно: список приходит
+            // целиком, животные в нём переставляются и различаются только
+            // тем, что у них внутри.
+            std::uint64_t id = 0;
             int x = 0;
             int y = 0;
             int species = 0;
@@ -347,9 +383,9 @@ private:
             Desire desire = Desire::Idle;
 
             bool operator==(const AnimalView& other) const {
-                return x == other.x && y == other.y && species == other.species && growth == other.growth &&
-                       health == other.health && predator == other.predator && sex == other.sex &&
-                       desire == other.desire;
+                return id == other.id && x == other.x && y == other.y && species == other.species &&
+                       growth == other.growth && health == other.health && predator == other.predator &&
+                       sex == other.sex && desire == other.desire;
             }
         };
         std::vector<AnimalView> animals;
@@ -363,9 +399,18 @@ private:
     // функция на world_init и на дельту: список там и там целиком и
     // одинаковый, поэтому и собирается одним местом.
     static nlohmann::json animalsToJson(const std::vector<LayerSnapshot::AnimalView>& animals);
-    std::string buildInitMessage(const LayerSnapshot& layers) const;
+    // Подробности выбранного существа (см. "watch" в описании протокола):
+    // тело, желания и геном парами "имя-число". Читает ECS registry —
+    // только с потока GameLoop, как и captureLayers. Возвращает null,
+    // когда никто не выбран.
+    nlohmann::json buildWatchedJson() const;
+    std::string buildInitMessage(const LayerSnapshot& layers, const nlohmann::json& watched) const;
     // Возвращает пустую строку, если ничего не изменилось.
-    std::string buildDeltaMessage(const LayerSnapshot& previous, const LayerSnapshot& current) const;
+    // watchedChanged — включать ли "watched" в дельту: сравнение делает
+    // publish (у него же и хранится отправленное), потому что эта функция
+    // ничего не запоминает.
+    std::string buildDeltaMessage(const LayerSnapshot& previous, const LayerSnapshot& current,
+                                  const nlohmann::json& watched, bool watchedChanged) const;
     std::string buildWorldListMessage() const;
     void handleClientMessage(const std::string& payload);
     void broadcastToAll(const std::string& payload);
@@ -424,6 +469,25 @@ private:
     std::uint64_t sentHistoryTick_ = 0;
     std::uint64_t sentHistoryInterval_ = 0;
     bool sentHistoryValid_ = false;
+
+    // За кем следит клиент. Ставится с сетевого потока (сообщение
+    // "watch"), читается с потока GameLoop при сборке сообщения — отсюда
+    // мьютекс: сама цель это всего три числа и строка, но менять и читать
+    // их одновременно нельзя. Registry этот запрос не трогает вовсе,
+    // поэтому в очередь на поток GameLoop (как регенерация) он не встаёт.
+    struct WatchTarget {
+        // "animal" — по id, "plant" — по клетке, "none" — никто не выбран.
+        std::string kind;
+        std::uint64_t id = 0;
+        int x = 0;
+        int y = 0;
+    };
+    mutable std::mutex watchMutex_;
+    WatchTarget watch_;
+    // Отправленные подробности выбранного, как строка: тело меняется почти
+    // каждый тик, и сравнение "изменилось ли" дешевле делать на готовом
+    // тексте, чем полем за полем.
+    std::string sentWatched_;
 };
 
 } // namespace goblins

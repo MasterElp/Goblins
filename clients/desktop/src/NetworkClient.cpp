@@ -139,6 +139,16 @@ void NetworkClient::sendSaveWorld(const std::string& name) {
     webSocket_.send(request.dump());
 }
 
+void NetworkClient::sendWatch(const std::string& kind, std::uint64_t id, int x, int y) {
+    nlohmann::json request;
+    request["type"] = "watch";
+    request["kind"] = kind;
+    request["id"] = id;
+    request["x"] = x;
+    request["y"] = y;
+    webSocket_.send(request.dump());
+}
+
 void NetworkClient::sendDeleteWorld(const std::string& name) {
     nlohmann::json request;
     request["type"] = "delete_world";
@@ -173,6 +183,7 @@ void NetworkClient::applyAnimals(const nlohmann::json& message) {
             continue;
         }
         WorldState::Animal parsed;
+        parsed.id = animal.value("id", static_cast<std::uint64_t>(0));
         parsed.x = animal.value("x", 0);
         parsed.y = animal.value("y", 0);
         parsed.species = animal.value("species", 0);
@@ -230,6 +241,50 @@ void NetworkClient::applyPopulationHistory(const nlohmann::json& message, bool r
         }
         working_.populationHistory.push_back(std::move(point));
     }
+}
+
+// Карточка выбранного существа. Приходит только когда изменилась, поэтому
+// отсутствие ключа означает "то же, что и было", а не "выбор снят": снятый
+// выбор сервер присылает явным kind == "none".
+void NetworkClient::applyWatched(const nlohmann::json& message) {
+    if (!message.contains("watched") || !message["watched"].is_object()) {
+        return;
+    }
+    const auto& watched = message["watched"];
+
+    WorldState::Watched parsed;
+    parsed.kind = watched.value("kind", std::string{});
+    if (parsed.kind == "none") {
+        working_.watched = WorldState::Watched{};
+        return;
+    }
+    parsed.id = watched.value("id", static_cast<std::uint64_t>(0));
+    parsed.x = watched.value("x", 0);
+    parsed.y = watched.value("y", 0);
+    parsed.species = watched.value("species", 0);
+    parsed.diet = watched.value("diet", std::string{});
+    parsed.sex = watched.value("sex", std::string{});
+    parsed.desire = watched.value("desire", std::string{});
+
+    if (watched.contains("groups") && watched["groups"].is_array()) {
+        for (const auto& group : watched["groups"]) {
+            if (!group.is_object() || !group.contains("values") || !group["values"].is_array()) {
+                continue;
+            }
+            WorldState::WatchedGroup parsedGroup;
+            parsedGroup.title = group.value("title", std::string{});
+            for (const auto& entry : group["values"]) {
+                // Пара "имя-число": порядок внутри группы осмысленный (тот
+                // же, что в таблице черт ядра), поэтому массив, а не объект.
+                if (!entry.is_array() || entry.size() < 2 || !entry[0].is_string() || !entry[1].is_number()) {
+                    continue;
+                }
+                parsedGroup.values.emplace_back(entry[0].get<std::string>(), entry[1].get<float>());
+            }
+            parsed.groups.push_back(std::move(parsedGroup));
+        }
+    }
+    working_.watched = std::move(parsed);
 }
 
 void NetworkClient::handleMessage(const std::string& payload) {
@@ -337,6 +392,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // относится к другому миру. Старый сервер её вовсе не пришлёт —
         // тогда график просто окажется пустым.
         applyPopulationHistory(json, /*replace=*/true);
+        applyWatched(json);
 
         // Параметры генерации — одним объектом (см. протокол в
         // server/NetworkServer.hpp): панель настроек строится из него
@@ -392,6 +448,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // клеткам, а заменяет прежний список.
         applyAnimals(json);
         applyPopulationHistory(json, /*replace=*/false);
+        applyWatched(json);
         publishState();
     } else if (type == "pause_state") {
         working_.paused = json.value("paused", working_.paused);

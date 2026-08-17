@@ -39,6 +39,19 @@ const std::vector<int>& valuesOf(const WorldState::PopulationPoint& point, Kind 
     return point.herbivores;
 }
 
+// Сумма по всем видам этой панели.
+int totalOf(const WorldState::PopulationPoint& point, Kind kind) {
+    int total = 0;
+    for (const int value : valuesOf(point, kind)) {
+        total += value;
+    }
+    return total;
+}
+
+// Линия суммы — светлее и толще любой видовой: это не ещё один вид, а
+// итог, и путать их взглядом нельзя.
+constexpr Color kTotalColor{235, 235, 240, 255};
+
 // Цвета — те же, что у видов на карте и в легенде экрана мира: линия
 // графика и пятно травы на карте должны читаться как одно и то же.
 Color seriesColor(Kind kind, int species) {
@@ -152,6 +165,17 @@ void drawChart(const History& history, Rectangle area, Kind kind, const char* ti
     const auto& values = valuesOf(shown, kind);
     int legendX = static_cast<int>(area.x);
     const int legendY = static_cast<int>(area.y) + kTitleFont + 5;
+    // Сумма по всем видам — первой в легенде и отдельной линией на
+    // графике: по видам видно, кто кого вытесняет, а по сумме — держится
+    // ли мир вообще. Одно другого не заменяет: три вида, меняющиеся
+    // местами, дают ровную сумму, а три вымирающих — падающую при точно
+    // так же пересекающихся кривых.
+    {
+        const char* label = TextFormat("total %d", totalOf(shown, kind));
+        DrawRectangle(legendX, legendY + 1, 9, 9, kTotalColor);
+        DrawText(label, legendX + 13, legendY, kAxisFont, titleColor);
+        legendX += 13 + MeasureText(label, kAxisFont) + 10;
+    }
     for (std::size_t s = 0; s < seriesCount; ++s) {
         const char* label = TextFormat("%d", s < values.size() ? values[s] : 0);
         const int entryWidth = 13 + MeasureText(label, kAxisFont) + 10;
@@ -168,11 +192,11 @@ void drawChart(const History& history, Rectangle area, Kind kind, const char* ti
     // Шкала — общая для всех видов панели (у каждого своя она означала бы,
     // что рядом лежащие линии несравнимы) и по максимуму за всю летопись, а
     // не за видимый хвост: иначе спад популяции выглядел бы как рост фона.
+    // Потолок — по сумме, а не по самому многочисленному виду: линия суммы
+    // всегда выше любой отдельной, и шкала обязана вмещать её целиком.
     int maxValue = 0;
     for (const auto& point : history) {
-        for (const int value : valuesOf(point, kind)) {
-            maxValue = std::max(maxValue, value);
-        }
+        maxValue = std::max(maxValue, totalOf(point, kind));
     }
     const int top = niceCeil(std::max(maxValue, 1));
 
@@ -204,6 +228,21 @@ void drawChart(const History& history, Rectangle area, Kind kind, const char* ti
         }
     }
 
+    // Сумма — последней, поверх видовых линий: она итог, и перекрывать её
+    // не должно ничто.
+    {
+        Vector2 previous{};
+        bool hasPrevious = false;
+        for (const auto& point : history) {
+            const Vector2 screen{xAt(history, plot, point.tick), yAt(plot, top, totalOf(point, kind))};
+            if (hasPrevious) {
+                DrawLineEx(previous, screen, 2.0f, kTotalColor);
+            }
+            previous = screen;
+            hasPrevious = true;
+        }
+    }
+
     if (hasHover) {
         const float x = xAt(history, plot, shown.tick);
         DrawLine(static_cast<int>(x), static_cast<int>(plot.y), static_cast<int>(x),
@@ -212,6 +251,7 @@ void drawChart(const History& history, Rectangle area, Kind kind, const char* ti
             DrawCircle(static_cast<int>(x), static_cast<int>(yAt(plot, top, values[s])), 2.5f,
                        seriesColor(kind, static_cast<int>(s)));
         }
+        DrawCircle(static_cast<int>(x), static_cast<int>(yAt(plot, top, totalOf(shown, kind))), 3.0f, kTotalColor);
     }
 
     const int axisY = static_cast<int>(plot.y + plot.height) + 4;
@@ -244,38 +284,41 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     if (history.size() < 2) {
         // Летопись новорождённого мира состоит из одной точки: линию по
         // ней не провести, и честнее сказать, чего ждём.
-        DrawText(state.connected ? "Population history: waiting for the world to tick (H to hide)"
+        DrawText(state.connected ? "Population history: waiting for the world to tick"
                                   : "Population history: not connected to the server",
                  static_cast<int>(bounds.x) + 10, static_cast<int>(bounds.y) + 10, kTitleFont, mutedColor);
         return;
     }
 
     constexpr float kPadding = 10.0f;
-    constexpr float kGap = 18.0f;
-    // Три панели, а не две: у травы, травоядных и хищников свои единицы и
+    constexpr float kGap = 14.0f;
+    // Три панели, а не одна: у травы, травоядных и хищников свои единицы и
     // свои порядки величины (тысячи клеток против десятков особей), и на
-    // одной шкале кривая хищников легла бы в ноль.
-    const float chartWidth = (bounds.width - kPadding * 2.0f - kGap * 2.0f) / 3.0f;
-    if (chartWidth < kValueLabelWidth + 40.0f) {
-        DrawText("Population history: window is too narrow", static_cast<int>(bounds.x) + 10,
+    // одной шкале кривая хищников легла бы в ноль. Друг под другом, а не в
+    // ряд: панель узкая и высокая (она стоит справа от карты), и три
+    // графика по трети её ширины были бы шириной с подпись.
+    const float chartWidth = bounds.width - kPadding * 2.0f;
+    const float chartHeight = (bounds.height - kPadding * 2.0f - kGap * 2.0f) / 3.0f;
+    if (chartWidth < kValueLabelWidth + 60.0f || chartHeight < kHeaderHeight + kFooterHeight + 30.0f) {
+        DrawText("Population history: panel is too small", static_cast<int>(bounds.x) + 10,
                  static_cast<int>(bounds.y) + 10, kTitleFont, mutedColor);
         return;
     }
-    const Rectangle plants{bounds.x + kPadding, bounds.y + kPadding, chartWidth, bounds.height - kPadding * 2.0f};
-    const Rectangle herbivores{plants.x + chartWidth + kGap, plants.y, chartWidth, plants.height};
-    const Rectangle predators{herbivores.x + chartWidth + kGap, plants.y, chartWidth, plants.height};
+    const Rectangle plants{bounds.x + kPadding, bounds.y + kPadding, chartWidth, chartHeight};
+    const Rectangle herbivores{plants.x, plants.y + chartHeight + kGap, chartWidth, chartHeight};
+    const Rectangle predators{plants.x, herbivores.y + chartHeight + kGap, chartWidth, chartHeight};
 
     // Курсор один на все панели: точка летописи общая, и вопрос, ради
     // которого на график вообще смотрят, — что было с травой в тот момент,
     // когда просело стадо, и что было со стадом, когда расплодились
-    // хищники.
+    // хищники. Панели стоят одна под другой, поэтому по горизонтали они
+    // совпадают, и достаточно поля любой из них.
     bool hasHover = false;
     std::size_t hoverIndex = 0;
     if (allowHover) {
         const Vector2 mouse = GetMousePosition();
         if (CheckCollisionPointRec(mouse, bounds)) {
-            const Rectangle plot =
-                plotOf(mouse.x < herbivores.x ? plants : (mouse.x < predators.x ? herbivores : predators));
+            const Rectangle plot = plotOf(plants);
             if (mouse.x >= plot.x && mouse.x <= plot.x + plot.width) {
                 hoverIndex = nearestPoint(history, plot, mouse.x);
                 hasHover = true;
@@ -294,10 +337,11 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
                                       static_cast<unsigned long long>(state.populationInterval)))
             : std::string(TextFormat("%zu points", history.size()));
 
-    drawChart(history, plants, Kind::Plants, "Grass by species -- tiles", hasHover, hoverIndex, footerNote.c_str());
-    drawChart(history, herbivores, Kind::Herbivores, "Herbivores by species -- animals", hasHover, hoverIndex,
-              nullptr);
-    drawChart(history, predators, Kind::Predators, "Predators by species -- animals", hasHover, hoverIndex, nullptr);
+    drawChart(history, plants, Kind::Plants, "Grass -- tiles", hasHover, hoverIndex, nullptr);
+    drawChart(history, herbivores, Kind::Herbivores, "Herbivores -- animals", hasHover, hoverIndex, nullptr);
+    // Подпись про число точек — под нижним графиком: она относится ко всей
+    // летописи, а не к одной панели, и повторять её трижды незачем.
+    drawChart(history, predators, Kind::Predators, "Predators -- animals", hasHover, hoverIndex, footerNote.c_str());
 }
 
 } // namespace PopulationGraph

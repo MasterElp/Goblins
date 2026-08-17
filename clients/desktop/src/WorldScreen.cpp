@@ -12,6 +12,7 @@
 #include <raylib.h>
 
 #include "ConstantsOverlay.hpp"
+#include "InfoPanel.hpp"
 #include "MapTexture.hpp"
 #include "PopulationGraph.hpp"
 #include "TileColors.hpp"
@@ -27,12 +28,48 @@ constexpr int kHudHeight = 32;
 constexpr float kMinZoom = 0.1f;
 constexpr float kMaxZoom = 4.0f;
 constexpr float kZoomStep = 1.1f;
-// Ширина панели генерации, когда она открыта. То же число, что было на
-// отдельном экране генерации — под ним подобраны ширины ползунков.
+// Ширина правой панели. То же число, что было у панели генерации на
+// отдельном экране, — под ним подобраны ширины ползунков, а карточка
+// существа и графики в него вписались.
 constexpr float kPanelWidth = 460.0f;
-// Полоса подсказки по клавишам вдоль нижнего края — под ней ничего не
-// рисуется, поэтому график популяции упирается именно в неё.
+// Полоса подсказки по клавишам вдоль нижнего края.
 constexpr float kHintHeight = 26.0f;
+
+// Правая панель одна на три содержимого: карточка того, на что смотришь,
+// параметры генерации и графики численности. Одно место, а не три угла
+// экрана: смотрят в них по очереди, а места они просят одинаково много.
+enum class Tab { Hidden, Info, Params, Graphs };
+
+const char* tabName(Tab tab) {
+    switch (tab) {
+        case Tab::Info: return "info";
+        case Tab::Params: return "params";
+        case Tab::Graphs: return "graphs";
+        case Tab::Hidden: break;
+    }
+    return "hidden";
+}
+
+Tab tabFromName(const std::string& name) {
+    if (name == "info") return Tab::Info;
+    if (name == "params") return Tab::Params;
+    if (name == "graphs") return Tab::Graphs;
+    return Tab::Hidden;
+}
+
+// Порядок перебора клавишей P: три вкладки, затем свёрнутая панель. Свёрнутое
+// состояние — часть того же круга, а не отдельная клавиша: панель и так
+// закрывает треть экрана, и убрать её должно быть можно тем же движением,
+// которым её листают.
+Tab nextTab(Tab tab) {
+    switch (tab) {
+        case Tab::Info: return Tab::Params;
+        case Tab::Params: return Tab::Graphs;
+        case Tab::Graphs: return Tab::Hidden;
+        case Tab::Hidden: break;
+    }
+    return Tab::Info;
+}
 
 } // namespace
 
@@ -56,8 +93,21 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     static bool showHeight = true;
     static bool showPlants = true;
     static bool showAnimals = true;
-    static bool panelOpen = false;
-    static bool showGraph = false;
+    static Tab tab = Tab::Hidden;
+    // За кем следим: выбранное кликом живёт, пока не выберут другое, — в
+    // этом и смысл слежения. Наведение мышью его не сбивает.
+    static InfoPanel::Target selection{};
+    // Последнее, о чём сказано серверу: он присылает подробности только по
+    // одной цели (см. "watch" в протоколе), и слать один и тот же запрос
+    // каждый кадр незачем. Хранится ровно то, что ушло в сообщении, а не
+    // сама цель: у почвы и у "ничего не выбрано" запрос одинаковый ("none"),
+    // и переезд курсора с одной пустой клетки на другую поводом для
+    // сообщения быть не должен.
+    static std::string sentWatchKind;
+    static std::uint64_t sentWatchId = 0;
+    static int sentWatchX = 0;
+    static int sentWatchY = 0;
+    static bool sentWatchValid = false;
     if (!initialized) {
         zoom = config.zoom;
         showRockiness = config.show_rockiness;
@@ -67,8 +117,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         showHeight = config.show_height;
         showPlants = config.show_plants;
         showAnimals = config.show_animals;
-        panelOpen = config.show_generation_panel;
-        showGraph = config.show_population_graph;
+        tab = tabFromName(config.panel_tab);
         initialized = true;
     }
     static bool confirmingExit = false;
@@ -92,18 +141,17 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // остальное. Верхняя полоса тянется только над картой, а не над
     // панелью: панель прокручивается целиком, и полоса поверх неё съедала
     // бы первую строку параметров.
+    const bool panelOpen = tab != Tab::Hidden;
     const float panelX = static_cast<float>(screenW) - kPanelWidth;
     const int viewportW = panelOpen ? std::max(1, static_cast<int>(panelX)) : screenW;
     const int viewportH = screenH - kHudHeight;
 
-    // График популяции — полосой по нижнему краю карты, а не оверлеем во
-    // весь экран, как константы: кривая нужна рядом с картой (просело
-    // стадо — тут же видно, где именно объеден луг). Высота от окна, но с
-    // потолком и полом: на низком окне график съел бы карту, на высоком —
-    // растянулся бы без пользы.
-    const float graphHeight = std::clamp(static_cast<float>(screenH) * 0.30f, 150.0f, 260.0f);
-    const Rectangle graphBounds{0.0f, static_cast<float>(screenH) - kHintHeight - graphHeight,
-                                static_cast<float>(viewportW), graphHeight};
+    // Полоса вкладок — вровень с верхней полосой над картой: это один и тот
+    // же ряд элементов управления, просто над разными половинами экрана.
+    const Rectangle panelBounds{panelX, 0, kPanelWidth, static_cast<float>(screenH)};
+    const Rectangle tabsBounds{panelX, 0, kPanelWidth, static_cast<float>(kHudHeight)};
+    const Rectangle panelContent{panelX + 10.0f, static_cast<float>(kHudHeight) + 8.0f, kPanelWidth - 20.0f,
+                                 static_cast<float>(screenH) - kHudHeight - 8.0f - kHintHeight};
 
     const Color backgroundColor{28, 28, 32, 255};
     const Color boulderColor{70, 66, 62, 255};
@@ -124,13 +172,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     const float scrollSpeedPx = kScrollTilesPerSecond * tileSizeF;
 
     const Vector2 mouse = GetMousePosition();
-    // Колесо над панелью настроек прокручивает её саму (GuiScrollPanel), а
-    // не меняет масштаб карты — иначе одно движение колеса делало бы сразу
-    // два несвязанных действия. Полоса графика популяции — по той же
-    // причине не карта: под ней курсор читает точку истории, а не тайл, и
-    // подсвечивать сквозь неё клетку (и уж тем более зумить) незачем.
-    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW) &&
-                              !(showGraph && CheckCollisionPointRec(mouse, graphBounds));
+    // Колесо над правой панелью прокручивает её саму (GuiScrollPanel) и
+    // читает точку на графике — но не меняет масштаб карты: одно движение
+    // колеса не должно делать сразу два несвязанных действия.
+    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW);
 
     // Пока открыт диалог подтверждения выхода или диалог сохранения, мир
     // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —
@@ -138,7 +183,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // слоя позади, а буквенные клавиши при вводе имени — с WASD/P/1-6.
     // Оверлей констант — по той же причине: он перекрывает экран целиком,
     // и слои под ним переключались бы вслепую.
-    if (!confirmingExit && !showSaveDialog && !ConstantsOverlay::visible()) {
+    const bool inputBlocked = confirmingExit || showSaveDialog || ConstantsOverlay::visible();
+    if (!inputBlocked) {
         if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
         if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
         if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) viewX -= scrollSpeedPx * dt;
@@ -175,12 +221,13 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             fitRequested = true;
         }
 
-        // Панель генерации — сворачиваемая: 460px справа нужны, только
-        // когда параметры действительно крутят, а смотреть на идущую
-        // симуляцию удобнее во всё окно.
-        if (IsKeyPressed(KEY_G)) {
-            panelOpen = !panelOpen;
-            config.show_generation_panel = panelOpen;
+        // Правая панель: одна клавиша листает её вкладки и сворачивает
+        // саму панель (см. nextTab). Раньше на панель параметров и на
+        // графики было по своей клавише, и обе панели могли занимать экран
+        // одновременно, хотя смотрят в них по очереди.
+        if (IsKeyPressed(KEY_P)) {
+            tab = nextTab(tab);
+            config.panel_tab = tabName(tab);
             goblins::saveClientConfig(configPath, config);
         }
 
@@ -239,24 +286,13 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             goblins::saveClientConfig(configPath, config);
         }
 
-        // График численности видов по времени. Отдельная клавиша, а не
-        // слой карты: слои 1-7 отвечают на вопрос "что сейчас на этой
-        // клетке", а график — "что было со всем миром до сих пор", и
-        // держать их в одном ряду значило бы путать эти два вопроса.
-        // Летопись при этом ведёт сервер, а не этот экран, — она приходит
-        // вместе с состоянием мира и не зависит от того, показан ли
-        // график и открыт ли вообще клиент.
-        if (IsKeyPressed(KEY_H)) {
-            showGraph = !showGraph;
-            config.show_population_graph = showGraph;
-            goblins::saveClientConfig(configPath, config);
-        }
-
         // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
         // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
         // подтверждения через pause_state/world_delta, чтобы все
-        // подключённые клиенты видели одно и то же состояние.
-        if (IsKeyPressed(KEY_P)) {
+        // подключённые клиенты видели одно и то же состояние. Пробел, а не
+        // буква: остановить и пустить время — самое частое действие на этом
+        // экране, и рука находит его не глядя.
+        if (IsKeyPressed(KEY_SPACE)) {
             network.sendTogglePause();
         }
     }
@@ -305,6 +341,77 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         hoverX = static_cast<int>(std::floor((mouse.x + viewX) / tileSizeF));
         hoverY = static_cast<int>(std::floor((mouse.y - kHudHeight + viewY) / tileSizeF));
         hasHoverTile = hoverX >= 0 && hoverX < snapshot.areaWidth && hoverY >= 0 && hoverY < snapshot.areaHeight;
+    }
+
+    // Что стоит на клетке, в порядке перебора кликом: сперва существа
+    // (сколько бы их ни было на одной клетке), потом растение, потом сама
+    // почва. Клик по клетке со зверем должен показывать зверя, а не землю
+    // под ним; повторный клик — того, кто стоит рядом с ним; и только
+    // перебрав всех — траву и почву.
+    const auto targetsAt = [&snapshot](int x, int y) {
+        std::vector<InfoPanel::Target> targets;
+        for (const auto& animal : snapshot.animals) {
+            if (animal.x == x && animal.y == y) {
+                targets.push_back(InfoPanel::Target{InfoPanel::Target::Kind::Animal, animal.id, x, y, true});
+            }
+        }
+        const std::size_t index = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
+        if (index < snapshot.plantSpeciesAt.size() && snapshot.plantSpeciesAt[index] >= 0) {
+            targets.push_back(InfoPanel::Target{InfoPanel::Target::Kind::Plant, 0, x, y, true});
+        }
+        targets.push_back(InfoPanel::Target{InfoPanel::Target::Kind::Soil, 0, x, y, true});
+        return targets;
+    };
+
+    if (!inputBlocked && hasHoverTile && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        const auto targets = targetsAt(hoverX, hoverY);
+        // Клик по той же клетке сдвигает выбор на следующего в списке,
+        // клик по новой — начинает список сначала.
+        std::size_t next = 0;
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            if (InfoPanel::sameTarget(targets[i], selection)) {
+                next = (i + 1) % targets.size();
+                break;
+            }
+        }
+        selection = targets[next];
+    }
+    // Правая кнопка снимает выбор: иначе от закреплённого существа нельзя
+    // было бы отвязаться, не выбрав вместо него что-то другое.
+    if (!inputBlocked && mouseOverMap && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+        selection = InfoPanel::Target{};
+    }
+
+    // Карточка показывает выбранное, а пока ничего не выбрано — то, что под
+    // курсором: наведение отвечает на вопрос "а это кто?", клик — "покажи
+    // мне его и дальше". Наведение при этом выбор не сбивает.
+    InfoPanel::Target infoTarget = selection;
+    if (infoTarget.kind == InfoPanel::Target::Kind::None && hasHoverTile) {
+        infoTarget = targetsAt(hoverX, hoverY).front();
+        infoTarget.pinned = false;
+    }
+
+    // Тело и геном приходят только по запросу (см. "watch" в протоколе):
+    // геном каждого животного в каждой дельте весил бы больше, чем всё
+    // остальное состояние мира. Поэтому серверу говорится ровно одна цель
+    // и ровно тогда, когда она сменилась.
+    {
+        const char* watchKind = infoTarget.kind == InfoPanel::Target::Kind::Animal   ? "animal"
+                                : infoTarget.kind == InfoPanel::Target::Kind::Plant ? "plant"
+                                                                                     : "none";
+        const std::uint64_t watchId =
+            infoTarget.kind == InfoPanel::Target::Kind::Animal ? infoTarget.animalId : 0;
+        const int watchX = infoTarget.kind == InfoPanel::Target::Kind::Plant ? infoTarget.x : 0;
+        const int watchY = infoTarget.kind == InfoPanel::Target::Kind::Plant ? infoTarget.y : 0;
+        if (!sentWatchValid || sentWatchKind != watchKind || sentWatchId != watchId || sentWatchX != watchX ||
+            sentWatchY != watchY) {
+            network.sendWatch(watchKind, watchId, watchX, watchY);
+            sentWatchKind = watchKind;
+            sentWatchId = watchId;
+            sentWatchX = watchX;
+            sentWatchY = watchY;
+            sentWatchValid = true;
+        }
     }
 
     ClearBackground(backgroundColor);
@@ -418,6 +525,42 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             DrawRectangleLines(static_cast<int>(screenX), static_cast<int>(screenY), tileSize, tileSize, cursorColor);
         }
 
+        // Выбранное — поверх всего остального на карте. У существа метка
+        // едет вместе с ним: его ищут по постоянному идентификатору, а не
+        // по клетке, в которой по нему щёлкнули, — в этом и весь смысл
+        // слежения. Пропало из списка (умерло, съедено) — метки нет, и
+        // карточка скажет, что именно случилось.
+        if (selection.kind != InfoPanel::Target::Kind::None) {
+            int markX = selection.x;
+            int markY = selection.y;
+            bool hasMark = selection.kind != InfoPanel::Target::Kind::Animal;
+            if (selection.kind == InfoPanel::Target::Kind::Animal) {
+                for (const auto& animal : snapshot.animals) {
+                    if (animal.id == selection.animalId) {
+                        markX = animal.x;
+                        markY = animal.y;
+                        hasMark = true;
+                        break;
+                    }
+                }
+            }
+            if (hasMark) {
+                const float screenX = static_cast<float>(markX) * tileSizeF - viewX;
+                const float screenY = static_cast<float>(markY) * tileSizeF - viewY + kHudHeight;
+                const Color selectionColor{255, 255, 255, 235};
+                if (selection.kind == InfoPanel::Target::Kind::Animal) {
+                    // Кольцо, а не рамка: на клетке может стоять ещё
+                    // десяток зверей, и рамка вокруг всей клетки не
+                    // показала бы, за кем именно следят.
+                    DrawCircleLines(static_cast<int>(screenX + tileSizeF * 0.5f),
+                                     static_cast<int>(screenY + tileSizeF * 0.5f), std::max(4.0f, tileSizeF * 0.55f),
+                                     selectionColor);
+                } else {
+                    DrawRectangleLinesEx(Rectangle{screenX, screenY, tileSizeF, tileSizeF}, 2.0f, selectionColor);
+                }
+            }
+        }
+
         EndScissorMode();
 
         // Статус слоёв почвы — под верхней панелью, слева: включённые
@@ -520,9 +663,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     const bool backPressed = GuiButton(Rectangle{buttonX, 2, 100, kHudHeight - 4}, "Back (Esc)");
     buttonX -= 110.0f;
     const bool savePressed = GuiButton(Rectangle{buttonX, 2, 100, kHudHeight - 4}, "Save world");
-    buttonX -= 130.0f;
-    const bool panelPressed =
-        GuiButton(Rectangle{buttonX, 2, 120, kHudHeight - 4}, panelOpen ? "Hide params (G)" : "Params (G)");
+    buttonX -= 110.0f;
+    const bool panelPressed = GuiButton(Rectangle{buttonX, 2, 100, kHudHeight - 4}, panelOpen ? "Hide (P)" : "Panel (P)");
     buttonX -= 80.0f;
     const bool pausePressed = GuiButton(Rectangle{buttonX, 2, 70, kHudHeight - 4}, snapshot.paused ? "Start" : "Stop");
 
@@ -531,48 +673,83 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         showSaveDialog = true;
     }
     if (panelPressed) {
-        panelOpen = !panelOpen;
-        config.show_generation_panel = panelOpen;
+        tab = panelOpen ? Tab::Hidden : Tab::Info;
+        config.panel_tab = tabName(tab);
         goblins::saveClientConfig(configPath, config);
     }
     if (pausePressed) {
         network.sendTogglePause();
     }
 
-    // Панель генерации. Рисуется после карты и полосы, но до модальных
+    // Правая панель. Рисуется после карты и полосы, но до модальных
     // диалогов: она часть экрана, а не наложение поверх него.
     if (panelOpen) {
-        goblins::RegenerationRequest panelParams;
-        bool saveParamsRequested = false;
-        const Rectangle panelBounds{panelX, 0, kPanelWidth, static_cast<float>(screenH)};
-        if (panel.draw(panelBounds, panelParams, saveParamsRequested)) {
-            network.sendRegenerate(panelParams);
+        DrawRectangleRec(panelBounds, Color{22, 22, 26, 255});
+
+        // Полоса вкладок — своей отрисовкой, а не кнопками raygui: у
+        // кнопки нет состояния "выбрана", а именно это и нужно показать.
+        const Tab tabs[] = {Tab::Info, Tab::Params, Tab::Graphs};
+        const char* labels[] = {"Info", "Params", "Graphs"};
+        const float tabWidth = tabsBounds.width / 3.0f;
+        for (int i = 0; i < 3; ++i) {
+            const Rectangle rect{tabsBounds.x + tabWidth * i, tabsBounds.y, tabWidth, tabsBounds.height};
+            const bool active = tab == tabs[i];
+            const bool hovered = !modalOpen && CheckCollisionPointRec(mouse, rect);
+            DrawRectangleRec(rect, active ? Color{40, 42, 50, 255}
+                                          : (hovered ? Color{30, 30, 36, 255} : hudColor));
+            const int labelWidth = MeasureText(labels[i], 16);
+            DrawText(labels[i], static_cast<int>(rect.x + rect.width * 0.5f) - labelWidth / 2,
+                     static_cast<int>(rect.y) + 8, 16, active ? textColor : mutedColor);
+            if (active) {
+                // Подчёркивание снизу — та же роль, что у корешка открытой
+                // вкладки: видно, какая из трёх сейчас перед глазами.
+                DrawRectangle(static_cast<int>(rect.x), static_cast<int>(rect.y + rect.height) - 2,
+                              static_cast<int>(rect.width), 2, cursorColor);
+            }
+            if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                tab = tabs[i];
+                config.panel_tab = tabName(tab);
+                goblins::saveClientConfig(configPath, config);
+            }
         }
-        if (saveParamsRequested) {
-            network.sendSaveGenerationConfig(panelParams);
+
+        switch (tab) {
+            case Tab::Info:
+                InfoPanel::draw(snapshot, infoTarget, panelContent);
+                break;
+            case Tab::Params: {
+                goblins::RegenerationRequest panelParams;
+                bool saveParamsRequested = false;
+                // Панель параметров рисует собственную прокрутку и хочет
+                // прямоугольник целиком — ей отдаётся всё под вкладками.
+                const Rectangle paramsBounds{panelX, static_cast<float>(kHudHeight), kPanelWidth,
+                                             static_cast<float>(screenH) - kHudHeight};
+                if (panel.draw(paramsBounds, panelParams, saveParamsRequested)) {
+                    network.sendRegenerate(panelParams);
+                }
+                if (saveParamsRequested) {
+                    network.sendSaveGenerationConfig(panelParams);
+                }
+                break;
+            }
+            case Tab::Graphs:
+                PopulationGraph::draw(snapshot, panelContent, !modalOpen);
+                break;
+            case Tab::Hidden:
+                break;
         }
     }
 
     if (modalOpen) GuiUnlock();
 
-    // График — после карты и панели, но до подписей по нижнему краю: они
-    // должны ложиться поверх него (см. bottomInfoY ниже), а не под него.
-    // Чтение значений под курсором отключается вместе с остальным вводом,
-    // пока открыт модальный диалог.
-    if (showGraph) {
-        PopulationGraph::draw(snapshot, graphBounds, !modalOpen);
-    }
-
     // Подсказка по клавишам — по нижнему краю слева, мелким приглушённым
     // текстом: в верхней полосе её теснят имя мира и кнопки, а нужна она
     // редко.
-    DrawText("WASD-scroll  Wheel-zoom  F-fit  1-7-layers  P-pause  G-params  H-graphs  C-constants  Esc-menu", 10,
-             screenH - 20, 14, mutedColor);
+    DrawText("WASD-scroll  Wheel-zoom  F-fit  1-7-layers  Space-pause  P-panel  LMB-track  RMB-clear  C-constants  "
+              "Esc-menu",
+             10, screenH - 20, 14, mutedColor);
 
-    // Строка с параметрами тайла под курсором (и сообщение сервера рядом с
-    // ней) — над графиком, когда он открыт: иначе они оказались бы под
-    // его подложкой и читались бы только по краям.
-    const int bottomInfoY = showGraph ? static_cast<int>(graphBounds.y) - 22 : screenH - 42;
+    const int bottomInfoY = screenH - 42;
 
     // Параметры тайла под курсором — по нижнему краю справа (над панелью
     // настроек, если она открыта, места нет — поэтому от края карты).

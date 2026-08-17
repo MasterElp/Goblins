@@ -15,6 +15,7 @@
 #include "core/components/DesireComponent.hpp"
 #include "core/components/HeightComponent.hpp"
 #include "core/components/HumusComponent.hpp"
+#include "core/components/IdentityComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
@@ -184,11 +185,16 @@ void NetworkServer::publish(bool force) {
         full = true;
     }
 
+    // Подробности выбранного существа собираются один раз на рассылку:
+    // они нужны и world_init, и дельте, а чтение registry не бесплатно.
+    const auto watched = buildWatchedJson();
+    const std::string watchedDump = watched.is_null() ? std::string{} : watched.dump();
+
     std::string payload;
     if (full) {
-        payload = buildInitMessage(current_);
+        payload = buildInitMessage(current_, watched);
     } else {
-        payload = buildDeltaMessage(sent_, current_);
+        payload = buildDeltaMessage(sent_, current_, watched, watchedDump != sentWatched_);
         if (payload.empty()) {
             lastPublish_ = now;
             return;
@@ -201,6 +207,7 @@ void NetworkServer::publish(bool force) {
     sentValid_ = true;
     sentTick_ = world_.registry().get<const TimeComponent>(world_.worldEntity()).tick;
     sentPaused_ = paused_.load();
+    sentWatched_ = watchedDump;
     // Точка отсчёта для летописи двигается только теперь, вместе с
     // остальным состоянием: пропущенная рассылка (клиент не разгрёб
     // очередь) не должна проглотить точки — они уйдут следующей дельтой.
@@ -300,8 +307,9 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
         .view<const PositionComponent, const AnimalComponent, const AnimalGenomeComponent, const DesireComponent>()
         .each([&](const entt::entity entity, const PositionComponent& pos, const AnimalComponent& animal,
                    const AnimalGenomeComponent& genome, const DesireComponent& desire) {
-            out.animals.push_back(LayerSnapshot::AnimalView{pos.x, pos.y, genome.species,
-                                                            growthPercent(animal.growth),
+            const auto* identity = registry.try_get<const IdentityComponent>(entity);
+            out.animals.push_back(LayerSnapshot::AnimalView{identity != nullptr ? identity->id : 0, pos.x, pos.y,
+                                                            genome.species, growthPercent(animal.growth),
                                                             growthPercent(animal.health),
                                                             registry.all_of<PredatorComponent>(entity), animal.sex,
                                                             desire.current});
@@ -315,14 +323,21 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
                   if (a.sex != b.sex) return a.sex < b.sex;
                   if (a.desire != b.desire) return a.desire < b.desire;
                   if (a.growth != b.growth) return a.growth < b.growth;
-                  return a.health < b.health;
+                  if (a.health != b.health) return a.health < b.health;
+                  // Двух неразличимых снаружи животных на одной клетке
+                  // порядок всё равно обязан расставить одинаково от тика к
+                  // тику, иначе дельта видела бы изменение там, где мир не
+                  // менялся; постоянный идентификатор — единственное, чем
+                  // они точно отличаются.
+                  return a.id < b.id;
               });
 }
 
 nlohmann::json NetworkServer::animalsToJson(const std::vector<LayerSnapshot::AnimalView>& animals) {
     auto array = nlohmann::json::array();
     for (const auto& animal : animals) {
-        array.push_back({{"x", animal.x},
+        array.push_back({{"id", animal.id},
+                          {"x", animal.x},
                           {"y", animal.y},
                           {"species", animal.species},
                           {"kind", animal.predator ? "predator" : "herbivore"},
@@ -334,7 +349,131 @@ nlohmann::json NetworkServer::animalsToJson(const std::vector<LayerSnapshot::Ani
     return array;
 }
 
-std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
+namespace {
+
+// Группа значений в "watched": заголовок и пары "имя-число" в осмысленном
+// порядке (тем же, в котором они перечислены в таблице черт или в самом
+// компоненте). Массив пар, а не объект: у объекта порядок ключей теряется,
+// а читать геном вразнобой — совсем не то же самое, что по таблице.
+nlohmann::json makeGroup(const char* title, std::initializer_list<std::pair<const char*, float>> values) {
+    auto pairs = nlohmann::json::array();
+    for (const auto& [name, value] : values) {
+        auto pair = nlohmann::json::array();
+        pair.push_back(name);
+        pair.push_back(value);
+        pairs.push_back(std::move(pair));
+    }
+    return nlohmann::json{{"title", title}, {"values", std::move(pairs)}};
+}
+
+// Геном — по таблице черт своей диеты, а не полем за полем: новая черта
+// уедет клиенту сама, как это уже сделано для архетипов видов.
+template <typename Traits, typename Genome>
+nlohmann::json makeGenomeGroup(const Traits& traits, const Genome& genome) {
+    auto pairs = nlohmann::json::array();
+    for (const auto& trait : traits) {
+        auto pair = nlohmann::json::array();
+        pair.push_back(trait.name);
+        pair.push_back(genome.*trait.gene);
+        pairs.push_back(std::move(pair));
+    }
+    return nlohmann::json{{"title", "Genome"}, {"values", std::move(pairs)}};
+}
+
+} // namespace
+
+nlohmann::json NetworkServer::buildWatchedJson() const {
+    WatchTarget target;
+    {
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        target = watch_;
+    }
+    if (target.kind != "animal" && target.kind != "plant") {
+        return nlohmann::json{};
+    }
+
+    const auto& registry = world_.registry();
+    nlohmann::json watched;
+
+    if (target.kind == "animal") {
+        // Ищем по идентификатору, а не по клетке: животное ходит, и к
+        // моменту сборки сообщения оно уже не там, где по нему кликнули, —
+        // в этом и смысл слежения.
+        for (const auto entity : registry.view<const IdentityComponent, const AnimalComponent>()) {
+            if (registry.get<const IdentityComponent>(entity).id != target.id) {
+                continue;
+            }
+            const auto& animal = registry.get<const AnimalComponent>(entity);
+            const auto& genome = registry.get<const AnimalGenomeComponent>(entity);
+            const auto& position = registry.get<const PositionComponent>(entity);
+            const auto& desire = registry.get<const DesireComponent>(entity);
+            const bool predator = registry.all_of<PredatorComponent>(entity);
+
+            watched["kind"] = "animal";
+            watched["id"] = target.id;
+            watched["x"] = position.x;
+            watched["y"] = position.y;
+            watched["species"] = genome.species;
+            watched["diet"] = predator ? "predator" : "herbivore";
+            watched["sex"] = sexName(animal.sex);
+            watched["desire"] = desireName(desire.current);
+
+            auto groups = nlohmann::json::array();
+            groups.push_back(makeGroup("Body", {{"age", animal.age},
+                                                 {"growth", animal.growth},
+                                                 {"health", animal.health},
+                                                 {"energy", animal.energy},
+                                                 {"water", animal.water},
+                                                 {"protein", static_cast<float>(animal.protein)},
+                                                 {"dung", static_cast<float>(animal.dung)},
+                                                 {"step_progress", animal.stepProgress},
+                                                 {"stress", animal.stress}}));
+            groups.push_back(makeGroup("Desires", {{"hunger", desire.hunger},
+                                                    {"thirst", desire.thirst},
+                                                    {"mating", desire.mating},
+                                                    {"fear", desire.fear}}));
+            groups.push_back(makeGenomeGroup(predator ? predatorTraits() : herbivoreTraits(), genome));
+            watched["groups"] = std::move(groups);
+            return watched;
+        }
+        // Не нашлось — животное умерло или было съедено, пока за ним
+        // следили. Это тоже ответ, и клиенту важно его получить: иначе он
+        // показывал бы последнее известное состояние как текущее.
+        return nlohmann::json{{"kind", "gone"}};
+    }
+
+    if (!world_.area().inBounds(target.x, target.y)) {
+        return nlohmann::json{{"kind", "gone"}};
+    }
+    // Растение ищется по клетке (на тайле оно одно) и через индекс
+    // размещения Area, а не обходом всех растений мира: их тысячи, а
+    // сообщение собирается по нескольку раз в секунду.
+    for (const auto entity : world_.area().cellAt(target.x, target.y).entities) {
+        if (!registry.all_of<PlantComponent, PlantGenomeComponent>(entity)) {
+            continue;
+        }
+        const auto& plant = registry.get<const PlantComponent>(entity);
+        const auto& genome = registry.get<const PlantGenomeComponent>(entity);
+
+        watched["kind"] = "plant";
+        watched["x"] = target.x;
+        watched["y"] = target.y;
+        watched["species"] = genome.species;
+
+        auto groups = nlohmann::json::array();
+        groups.push_back(makeGroup("Body", {{"age", plant.age},
+                                             {"growth", plant.growth},
+                                             {"moisture", plant.moisture},
+                                             {"minerals", static_cast<float>(plant.minerals)},
+                                             {"stress", plant.stress}}));
+        groups.push_back(makeGenomeGroup(kGrassTraits, genome));
+        watched["groups"] = std::move(groups);
+        return watched;
+    }
+    return nlohmann::json{{"kind", "gone"}};
+}
+
+std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const nlohmann::json& watched) const {
     nlohmann::json message;
     message["type"] = "world_init";
     message["area"]["width"] = layers.width;
@@ -428,6 +567,13 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
 
     message["animals"] = animalsToJson(layers.animals);
 
+    // Подробности выбранного — в world_init тоже: подключившийся (или
+    // переподключившийся) клиент должен увидеть открытую карточку
+    // существа сразу, а не после первого его шага.
+    if (!watched.is_null()) {
+        message["watched"] = watched;
+    }
+
     // Летопись численности — целиком: world_init по определению содержит
     // всё, из чего клиент строит картину мира с нуля, а прошлое мира —
     // такая же его часть, как текущая карта. Клиент заменяет ею свою
@@ -452,9 +598,18 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers) const {
     return message.dump();
 }
 
-std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, const LayerSnapshot& current) const {
+std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, const LayerSnapshot& current,
+                                              const nlohmann::json& watched, bool watchedChanged) const {
     nlohmann::json message;
     bool anyChange = false;
+
+    // Выбранное существо — единственная часть дельты, которая взводит
+    // anyChange сама: на паузе мир не меняется вовсе, но клик по другому
+    // зверю должен показать его карточку, не дожидаясь снятия паузы.
+    if (watchedChanged) {
+        message["watched"] = watched.is_null() ? nlohmann::json{{"kind", "none"}} : watched;
+        anyChange = true;
+    }
 
     // Каменистость сюда не входит: её меняет только генерация, а она
     // рассылает новый world_init.
@@ -573,6 +728,16 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
         paused_.store(newState);
         std::cout << "World " << (newState ? "paused" : "resumed") << " by client request.\n";
         broadcastPauseState();
+    } else if (type == "watch") {
+        // Только запоминаем выбор — ECS registry отсюда (сетевой поток)
+        // трогать нельзя, подробности соберёт publish на потоке GameLoop.
+        WatchTarget target;
+        target.kind = json.value("kind", std::string{"none"});
+        target.id = json.value("id", static_cast<std::uint64_t>(0));
+        target.x = json.value("x", 0);
+        target.y = json.value("y", 0);
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        watch_ = target;
     } else if (type == "regenerate") {
         if (!json.contains("params")) {
             return;
