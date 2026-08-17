@@ -30,9 +30,23 @@ constexpr float kGroupHeight = 40.0f;
 // регенерации и дальше не меняется, у вторых — только на запущенной
 // симуляции и тем позже, чем меньше значение. Внутри каждой полосы —
 // группировка по тому, чего параметр касается.
+// Размер, совпадающий с готовым выбором. Пресеты — не украшение: 200x200 и
+// 400x400 это те два размера, ради которых размер вообще понадобилось
+// выбирать (мир "побольше" и "совсем большой"), а всё остальное набирается
+// вручную.
+bool isPresetArea(int width, int height) {
+    return (width == 200 && height == 200) || (width == 400 && height == 400);
+}
+
 template <typename Ops>
-void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
+void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customArea) {
     ops.group("GENERATION -- applied on Regenerate");
+
+    ops.section("Map size");
+    // Размер Области — первым: он решает, сколько места вообще будет у
+    // рек, лугов и стада, и менять его после подбора всего остального
+    // значит подбирать всё заново.
+    ops.areaRow(edited.area_width, edited.area_height, customArea);
 
     ops.section("Seed");
     // Один seed на весь мир — не три отдельных (террейн/булыжники/трава):
@@ -172,6 +186,16 @@ struct MeasureOps {
     }
     void intRow(const char*, int&, int, int) { height += kRowHeight; }
     void unsignedSeedRow(const char*, unsigned&) { height += kRowHeight; }
+    // Строка размера выше остальных на два ползунка, когда размер
+    // произвольный. Решение "показывать ли их" одно и то же здесь и в
+    // отрисовке — оно считается по тем же самым полям, поэтому измеренная
+    // высота не разойдётся с нарисованной.
+    void areaRow(int& width, int& height_, bool& customArea) {
+        height += kRowHeight;
+        if (customArea || !isPresetArea(width, height_)) {
+            height += kRowHeight * 2;
+        }
+    }
 };
 
 // Рисует те же строки, что и MeasureOps считает — порядок и состав вызовов
@@ -213,6 +237,41 @@ struct DrawOps {
         y += kRowHeight;
     }
 
+    // Готовые размеры кнопками, всё остальное — двумя ползунками под
+    // ними. Кнопки, а не ползунок по всем значениям подряд: 200 и 400 —
+    // те самые размеры, ради которых выбор и заводился, и попадать в них
+    // мышью с точностью до тайла было бы издевательством.
+    void areaRow(int& width, int& height_, bool& customArea) {
+        GuiLabel(Rectangle{x, y, rowWidth, 18}, TextFormat("Area: %d x %d tiles", width, height_));
+
+        const float buttonWidth = (rowWidth - 16) / 3.0f;
+        const float buttonY = y + 20;
+        const float buttonHeight = kRowHeight - 24;
+        const bool custom = customArea || !isPresetArea(width, height_);
+        if (GuiButton(Rectangle{x, buttonY, buttonWidth, buttonHeight}, "200 x 200")) {
+            width = 200;
+            height_ = 200;
+            customArea = false;
+        }
+        if (GuiButton(Rectangle{x + buttonWidth + 8, buttonY, buttonWidth, buttonHeight}, "400 x 400")) {
+            width = 400;
+            height_ = 400;
+            customArea = false;
+        }
+        if (GuiButton(Rectangle{x + (buttonWidth + 8) * 2, buttonY, buttonWidth, buttonHeight},
+                      custom ? "Custom (below)" : "Custom")) {
+            // Значения не трогаем: "Custom" — это не другой размер, а
+            // разрешение набрать его руками, начиная с текущего.
+            customArea = true;
+        }
+        y += kRowHeight;
+
+        if (custom) {
+            intRow("Width (tiles)", width, goblins::kMinAreaSide, goblins::kMaxAreaSide);
+            intRow("Height (tiles)", height_, goblins::kMinAreaSide, goblins::kMaxAreaSide);
+        }
+    }
+
     void unsignedSeedRow(const char* label, unsigned& value) {
         float f = static_cast<float>(value);
         GuiLabel(Rectangle{x, y, rowWidth - 70, 18}, TextFormat("%s: %u", label, value));
@@ -234,10 +293,15 @@ void SettingsPanel::loadFrom(const goblins::RegenerationRequest& current, bool f
         return;
     }
     edited_ = current;
+    // Мир нестандартного размера открывает строку размера сразу с
+    // ползунками: иначе панель показывала бы "200x200 / 400x400 / Custom"
+    // и ни одну из кнопок нажатой, хотя размер у мира вполне конкретный.
+    customArea_ = !isPresetArea(edited_.area_width, edited_.area_height);
     loaded_ = true;
 }
 
-bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequest, bool& outSaveRequested) {
+bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequest, bool& outSaveRequested,
+                          bool worldGenerated) {
     // Кнопки (Regenerate/Save values/Reset) — вне прокрутки, в
     // отдельной полосе внизу панели, всегда видимы: раньше их приходилось
     // домётывать до конца длинного списка параметров, чтобы нажать.
@@ -250,7 +314,7 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     // GuiScrollPanel настоящую высоту — иначе скролл не появится или
     // обрежет строки.
     MeasureOps measure;
-    layoutParams(measure, edited_);
+    layoutParams(measure, edited_, customArea_);
     const float contentHeight = measure.height + kSectionGap;
 
     static Rectangle view{};
@@ -262,7 +326,7 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
                       static_cast<int>(view.height));
 
     DrawOps draw{scrollBounds.x + scroll_.x + 8, scrollBounds.y + scroll_.y, scrollBounds.width - 34};
-    layoutParams(draw, edited_);
+    layoutParams(draw, edited_, customArea_);
 
     EndScissorMode();
 
@@ -270,8 +334,13 @@ bool SettingsPanel::draw(Rectangle bounds, goblins::RegenerationRequest& outRequ
     const float footerRowWidth = footerBounds.width - 16;
     float footerY = footerBounds.y + 8;
 
+    // Пока мира нет (сервер только поднялся или игрок нажал "New world" и
+    // ещё не создал мир), эта кнопка не "перегенерировать", а "создать":
+    // перегенерировать в пустом мире нечего, и подпись об этом должна
+    // говорить прямо.
     bool regenerate = false;
-    if (GuiButton(Rectangle{footerX, footerY, footerRowWidth, 30}, "Regenerate")) {
+    if (GuiButton(Rectangle{footerX, footerY, footerRowWidth, 30},
+                  worldGenerated ? "Regenerate" : "Create world")) {
         regenerate = true;
     }
     footerY += 30 + 6;

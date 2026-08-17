@@ -303,6 +303,10 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.areaHeight = json["area"]["height"].get<int>();
         working_.tick = json.value("tick", static_cast<std::uint64_t>(0));
         working_.paused = json.value("paused", false);
+        // Мир пересоздаётся только через world_init, поэтому и признак
+        // "мир сгенерирован" приходит только здесь — в дельте ему
+        // взяться неоткуда.
+        working_.generated = json.value("generated", true);
 
         const int scale = json.value("scale", 1000);
         milliScale_ = scale > 0 ? 1.0f / static_cast<float>(scale) : 0.001f;

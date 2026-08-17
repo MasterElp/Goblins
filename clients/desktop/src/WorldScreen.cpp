@@ -61,6 +61,12 @@ Tab tabFromName(const std::string& name) {
 // состояние — часть того же круга, а не отдельная клавиша: панель и так
 // закрывает треть экрана, и убрать её должно быть можно тем же движением,
 // которым её листают.
+// Просьба открыть вкладку параметров при следующем показе экрана (см.
+// requestParamsTab в заголовке). Флаг, а не параметр draw: просит один
+// экран (выбор мира), а исполняет другой, и между ними нет ничего, кроме
+// возвращённого AppScreen.
+bool g_paramsRequested = false;
+
 Tab nextTab(Tab tab) {
     switch (tab) {
         case Tab::Info: return Tab::Params;
@@ -73,8 +79,12 @@ Tab nextTab(Tab tab) {
 
 } // namespace
 
+void requestParamsTab() {
+    g_paramsRequested = true;
+}
+
 AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std::string& configPath,
-               SettingsPanel& panel) {
+               SettingsPanel& panel, bool& closeRequested) {
     // Персистентны между кадрами, пока это состояние активно (при
     // возврате в меню и обратно позиция прокрутки сохраняется — это
     // осознанное поведение, не забытый сброс).
@@ -120,7 +130,18 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         tab = tabFromName(config.panel_tab);
         initialized = true;
     }
+    // Игрок пришёл сюда с "New world" — мир ещё не создан, и первое, что
+    // ему нужно, это параметры генерации.
+    if (g_paramsRequested) {
+        tab = Tab::Params;
+        config.panel_tab = tabName(tab);
+        goblins::saveClientConfig(configPath, config);
+        g_paramsRequested = false;
+    }
     static bool confirmingExit = false;
+    // Диалог сохранения открыт из-за крестика, а не из-за Esc/Back: тогда
+    // подтверждение закрывает приложение, а не возвращает в меню.
+    static bool exitingApp = false;
     // Диалог ввода имени при сохранении — открывается кнопкой "Save
     // world", буфер предзаполняется именем текущего мира (пусто, если
     // мир ещё не сохранён).
@@ -724,7 +745,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 // прямоугольник целиком — ей отдаётся всё под вкладками.
                 const Rectangle paramsBounds{panelX, static_cast<float>(kHudHeight), kPanelWidth,
                                              static_cast<float>(screenH) - kHudHeight};
-                if (panel.draw(paramsBounds, panelParams, saveParamsRequested)) {
+                if (panel.draw(paramsBounds, panelParams, saveParamsRequested, snapshot.generated)) {
                     network.sendRegenerate(panelParams);
                 }
                 if (saveParamsRequested) {
@@ -827,6 +848,25 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                  snapshot.noticeIsError ? Color{230, 110, 110, 255} : textColor);
     }
 
+    // Мира ещё нет: сервер поднялся с пустой Областью или игрок пришёл
+    // сюда с "New world". Пустая карта сама по себе об этом не говорит —
+    // она выглядит как ровная земля, — поэтому говорим прямо и там, где
+    // на неё смотрят.
+    if (snapshot.connected && !snapshot.generated) {
+        const char* firstLine = "This world has not been generated yet.";
+        const char* secondLine = tab == Tab::Params ? "Set the parameters on the right and press \"Create world\"."
+                                                     : "Press P to open the generation parameters.";
+        const int firstWidth = MeasureText(firstLine, 20);
+        const int secondWidth = MeasureText(secondLine, 16);
+        const int boxWidth = std::max(firstWidth, secondWidth) + 40;
+        const int boxX = viewportW / 2 - boxWidth / 2;
+        const int boxY = kHudHeight + viewportH / 2 - 40;
+        DrawRectangle(boxX, boxY, boxWidth, 80, Color{18, 18, 20, 235});
+        DrawRectangleLines(boxX, boxY, boxWidth, 80, Color{90, 90, 98, 255});
+        DrawText(firstLine, viewportW / 2 - firstWidth / 2, boxY + 20, 20, textColor);
+        DrawText(secondLine, viewportW / 2 - secondWidth / 2, boxY + 48, 16, mutedColor);
+    }
+
     if (snapshot.paused) {
         const char* pausedLabel = "PAUSED";
         const int labelWidth = MeasureText(pausedLabel, 24);
@@ -840,6 +880,19 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // if/else, а не независимые if с одним и тем же нажатием. Диалог
     // имени при сохранении имеет приоритет: Esc в нём просто отменяет
     // ввод имени, а не открывает диалог выхода.
+    // Крестик окна раylib само окно не закрывает — он только поднимает
+    // флаг (см. main.cpp), и здесь этот флаг превращается в тот же вопрос
+    // о сохранении, что и при выходе в меню. Иначе несохранённый мир
+    // терялся бы молча, а мир — это часы прожитого времени.
+    if (closeRequested) {
+        closeRequested = false;
+        confirmingExit = true;
+        exitingApp = true;
+        // Ввод имени поверх вопроса о выходе только запутал бы: имя
+        // спросят снова, если игрок выберет "Save".
+        showSaveDialog = false;
+    }
+
     const bool escapePressed = IsKeyPressed(KEY_ESCAPE);
     if (showSaveDialog) {
         if (escapePressed) {
@@ -848,9 +901,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     } else if (!confirmingExit) {
         if (backPressed || escapePressed) {
             confirmingExit = true;
+            exitingApp = false;
         }
     } else if (escapePressed) {
         confirmingExit = false;
+        exitingApp = false;
     }
 
     if (showSaveDialog) {
@@ -889,30 +944,34 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         const int boxY = screenH / 2 - boxH / 2;
         DrawRectangle(boxX, boxY, boxW, boxH, hudColor);
         DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
-        DrawText("Save world before exiting?", boxX + 20, boxY + 16, 18, textColor);
+        DrawText(exitingApp ? "Save world before quitting?" : "Save world before exiting?", boxX + 20, boxY + 16, 18,
+                 textColor);
 
         const bool saveExit =
             GuiButton(Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 56, 160, 30},
-                      "Save & Exit");
+                      exitingApp ? "Save & Quit" : "Save & Exit");
         const bool discardExit =
             GuiButton(Rectangle{static_cast<float>(boxX) + 200, static_cast<float>(boxY) + 56, 160, 30},
-                      "Discard & Exit");
+                      exitingApp ? "Discard & Quit" : "Discard & Exit");
         const bool cancelExit = GuiButton(
             Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 94, 340, 26}, "Cancel (Esc)");
 
-        if (saveExit) {
-            network.sendSaveWorld();
+        // Мир сохраняет сервер, между тиками, и ответа клиент не ждёт: и
+        // при выходе в меню, и при закрытии окна порядок один и тот же —
+        // попросить сохранить, попросить остановить мир, уйти.
+        if (saveExit || discardExit) {
+            if (saveExit) {
+                network.sendSaveWorld();
+            }
             network.sendStopSimulation();
+            const bool quit = exitingApp;
             confirmingExit = false;
-            return AppScreen::MainMenu;
-        }
-        if (discardExit) {
-            network.sendStopSimulation();
-            confirmingExit = false;
-            return AppScreen::MainMenu;
+            exitingApp = false;
+            return quit ? AppScreen::Exit : AppScreen::MainMenu;
         }
         if (cancelExit) {
             confirmingExit = false;
+            exitingApp = false;
         }
     }
 

@@ -53,7 +53,17 @@ int main(int argc, char** argv) {
     SettingsPanel generationPanel;
     AppScreen screen = AppScreen::MainMenu;
 
-    while (!WindowShouldClose()) {
+    // Крестик окна не закрывает приложение сам: WindowShouldClose() лишь
+    // сообщает о нажатии (raylib сбрасывает признак на следующем кадре),
+    // а решает экран. На экране мира это вопрос "сохранить мир перед
+    // выходом?" — несохранённый мир иначе терялся бы молча; на остальных
+    // экранах сохранять нечего, и приложение закрывается сразу.
+    bool closeRequested = false;
+    while (screen != AppScreen::Exit) {
+        if (WindowShouldClose()) {
+            closeRequested = true;
+        }
+
         BeginDrawing();
 
         switch (screen) {
@@ -67,11 +77,19 @@ int main(int argc, char** argv) {
                 screen = WorldSelectScreen::draw(network);
                 break;
             case AppScreen::World:
-                screen = WorldScreen::draw(network, config, configPath, generationPanel);
+                // closeRequested экран мира забирает себе: он же и задаёт
+                // вопрос о сохранении.
+                screen = WorldScreen::draw(network, config, configPath, generationPanel, closeRequested);
+                break;
+            case AppScreen::Exit:
                 break;
         }
 
         EndDrawing();
+
+        if (closeRequested && screen != AppScreen::World) {
+            break;
+        }
     }
 
     CloseWindow();

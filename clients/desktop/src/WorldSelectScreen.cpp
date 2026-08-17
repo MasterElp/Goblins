@@ -6,6 +6,8 @@
 #include <raygui.h>
 #include <raylib.h>
 
+#include "WorldScreen.hpp"
+
 namespace WorldSelectScreen {
 
 namespace {
@@ -104,23 +106,23 @@ AppScreen draw(NetworkClient& network) {
         return AppScreen::WorldSelect;
     }
 
-    // Сохранённых миров нет — выбирать не из чего, поэтому сразу просим
-    // сервер сгенерировать новый и уходим на экран мира. На диск он при
-    // этом не пишется (см. StartSimulationRequest) — сохранит его игрок
-    // сам, кнопкой "Save world". Кадром позже этот экран уже не
-    // рисуется, так что запрос уходит ровно один раз.
+    // Сохранённых миров нет — выбирать не из чего, поэтому уходим прямо к
+    // параметрам генерации нового. Мир при этом НЕ создаётся сам:
+    // размер карты, seed и всё остальное выбирают до создания, а не
+    // перегенерацией уже созданного (кнопка "Create world" на панели).
     if (snapshot.worlds.empty()) {
-        DrawText("No saved worlds yet - generating a new one...", 30, screenH / 2 - 10, 20, textColor);
-        network.sendStartSimulation();
+        DrawText("No saved worlds yet - opening generation parameters...", 30, screenH / 2 - 10, 20, textColor);
+        WorldScreen::requestParamsTab();
         return AppScreen::World;
     }
 
     if (!pendingDelete.empty()) GuiLock();
     if (GuiButton(Rectangle{30, 92, 220, 34}, "New world")) {
-        network.sendStartSimulation();
+        WorldScreen::requestParamsTab();
         return AppScreen::World;
     }
-    DrawText("New world uses the current generation parameters (G on the world screen).", 262, 102, 14, mutedColor);
+    DrawText("New world opens the generation parameters -- pick the map size and press \"Create world\".", 262, 102,
+             14, mutedColor);
 
     const float listY = 140.0f;
     const float listBottom = static_cast<float>(screenH) - 50.0f;

@@ -26,10 +26,19 @@ public:
     // делать — отправить save_generation_config с теми же значениями:
     // "Save values" сохраняет набранное на панели, а не то, чем
     // сгенерирован текущий мир).
-    bool draw(Rectangle bounds, goblins::RegenerationRequest& outRequest, bool& outSaveRequested);
+    // worldGenerated меняет только подпись главной кнопки: в пустом мире
+    // (сервер только поднялся, игрок нажал "New world") она называется
+    // "Create world", а не "Regenerate" — перегенерировать там нечего.
+    bool draw(Rectangle bounds, goblins::RegenerationRequest& outRequest, bool& outSaveRequested,
+              bool worldGenerated);
 
 private:
     goblins::RegenerationRequest edited_{};
     Vector2 scroll_{0, 0};
     bool loaded_ = false;
+    // Размер Области набирается руками, а не выбран кнопкой-пресетом.
+    // Живёт здесь, а не в самом запросе: это состояние панели ("покажи
+    // ползунки"), а не свойство мира — мир 200x200, набранный вручную, и
+    // мир 200x200, выбранный кнопкой, одинаковы.
+    bool customArea_ = false;
 };

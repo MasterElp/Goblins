@@ -565,6 +565,13 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["animal_species"] = {{"herbivores", speciesToJson(animalSpecies.herbivores, herbivoreTraits())},
                                   {"predators", speciesToJson(animalSpecies.predators, predatorTraits())}};
 
+    // Сгенерирован ли мир вообще. Сервер поднимается с пустой Областью и
+    // ждёт, пока мир создадут с панели генерации, — и клиент должен
+    // отличать "мир, в котором ничего нет" от "мира ещё нет": в первом
+    // случае показывать пустую карту правильно, во втором она сбивает с
+    // толку.
+    message["generated"] = !world_.registry().view<const PositionComponent>().empty();
+
     message["animals"] = animalsToJson(layers.animals);
 
     // Подробности выбранного — в world_init тоже: подключившийся (или
@@ -815,6 +822,12 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
         }
 
         ServerConfig toSave = baseConfig_;
+        // Размер Области попадает в config.json вместе с остальным: он
+        // теперь такой же параметр генерации, как seed, и "Save values"
+        // должна делать умолчанием при следующем запуске именно то, что
+        // набрано на панели.
+        toSave.area.width = std::clamp(toWrite.area_width, kMinAreaSide, kMaxAreaSide);
+        toSave.area.height = std::clamp(toWrite.area_height, kMinAreaSide, kMaxAreaSide);
         toSave.seed = toWrite.seed;
         toSave.terrain = toWrite.terrain;
         toSave.boulder_count = toWrite.boulder_count;

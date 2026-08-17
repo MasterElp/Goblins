@@ -32,6 +32,17 @@ struct AreaSize {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AreaSize, width, height)
 
+// Пределы стороны Области. Общие для клиента (ползунки размера на панели
+// генерации) и сервера (проверка присланного запроса): расходись они, и
+// клиент предлагал бы размер, который сервер молча урежет.
+//
+// Нижняя граница — чтобы в мире вообще уместились река, пруд и стадо;
+// верхняя — цена полного снапшота: в world_init уходит десяток плотных
+// массивов на всю Область (512x512 — это уже больше двух миллионов чисел),
+// и дальше сообщение перестаёт помещаться в разумное время отправки.
+inline constexpr int kMinAreaSide = 32;
+inline constexpr int kMaxAreaSide = 512;
+
 // Зеркало core::TerrainParams (core/generation/TerrainParams.hpp) — но
 // JSON-сериализуемое. Дублирование полей осознанное: core не знает о
 // JSON и конфигурации вообще (07_TechStack.md, п.6), поэтому именно
@@ -200,12 +211,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, 
                                     saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
-// сети (протокол "regenerate", см. NetworkServer.hpp) без пересоздания
-// World: размер Области — нет, она фиксирована при создании World и
-// затрагивает GameLoop/NetworkServer, которые держат на неё ссылку;
-// террейн и булыжники — да, это просто новый набор Entity на том же
-// Area.
+// сети (протокол "regenerate", см. NetworkServer.hpp). Размер Области
+// сюда входит наравне с остальным: World::reset пересоздаёт Область на
+// месте, а GameLoop и NetworkServer держат ссылку на сам World, а не на
+// его Область, — тем же путём в мир приходит и загруженное сохранение
+// другого размера. Раньше размер был исключением ("фиксирован при
+// создании World"), и сменить его можно было только перезапуском сервера
+// с другим area в config.json.
 struct RegenerationRequest {
+    // Размер Области нового мира, в тайлах. Ядро ничего не знает об этих
+    // границах — проверяет их сервер при разборе запроса (kMinAreaSide /
+    // kMaxAreaSide выше).
+    int area_width = 100;
+    int area_height = 100;
+
     unsigned seed = 54321;
     TerrainConfig terrain{};
     int boulder_count = 40;
@@ -224,7 +243,8 @@ struct RegenerationRequest {
 // в этом случае подставит seed=54321, и старый мир на диске (сами Entity,
 // не "generation") от этого не пострадает, только надпись "чем
 // сгенерирован" в панели будет неточной для таких файлов.
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, seed, terrain, boulder_count, plants, animals)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, area_width, area_height, seed, terrain,
+                                    boulder_count, plants, animals)
 
 struct ClientConfig {
     std::string host = "127.0.0.1";

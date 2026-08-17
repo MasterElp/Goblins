@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <iomanip>
@@ -107,6 +108,16 @@ goblins::WorldGenParams toWorldGenParams(const goblins::RegenerationRequest& req
 // получить чистую Область.
 bool worldIsEmpty(const goblins::World& world) {
     return world.registry().view<const goblins::PositionComponent>().empty();
+}
+
+// Размер Области приходит от клиента (панель генерации), поэтому
+// проверяется здесь, а не принимается на веру: из ядра эти границы не
+// видны, а мир на два тайла или на десять тысяч не сгенерировался бы ни
+// осмысленно, ни быстро.
+goblins::RegenerationRequest withValidArea(goblins::RegenerationRequest request) {
+    request.area_width = std::clamp(request.area_width, goblins::kMinAreaSide, goblins::kMaxAreaSide);
+    request.area_height = std::clamp(request.area_height, goblins::kMinAreaSide, goblins::kMaxAreaSide);
+    return request;
 }
 
 void printWorldStats(const goblins::World& world, int boulderCount) {
@@ -339,6 +350,8 @@ int main(int argc, char** argv) {
                                     savesDirectory);
 
     goblins::RegenerationRequest generationConfig;
+    generationConfig.area_width = config.area.width;
+    generationConfig.area_height = config.area.height;
     generationConfig.seed = config.seed;
     generationConfig.terrain = config.terrain;
     generationConfig.boulder_count = config.boulder_count;
@@ -431,15 +444,21 @@ int main(int argc, char** argv) {
                 // затем перегенерировали или так и не сыграли ни тика) —
                 // список превращался в мусор, который приходилось чистить
                 // руками.
-                const auto request = network.currentGenerationConfig();
+                const auto request = withValidArea(network.currentGenerationConfig());
                 // std::flush — эта строка обязана попасть в консоль ДО
                 // generateTerrain, даже если он зависнет (см. комментарий
                 // у printGenerationStats); без явного flush "\n" не
                 // гарантирует сброс буфера, если stdout не line-buffered
                 // (например, при перенаправлении в файл).
-                std::cout << "Creating a new world (seed=" << request.seed << ")...\n" << std::flush;
+                std::cout << "Creating a new world (seed=" << request.seed << ", area " << request.area_width << "x"
+                           << request.area_height << ")...\n"
+                           << std::flush;
+                // Размер Области — из запроса, а не из config.json: его
+                // выбирают на панели генерации вместе с остальным, и мир
+                // пересоздаётся целиком (World::reset), как при загрузке
+                // сохранения другого размера.
                 const auto genStats =
-                    goblins::generateWorld(world, config.area.width, config.area.height, toWorldGenParams(request));
+                    goblins::generateWorld(world, request.area_width, request.area_height, toWorldGenParams(request));
                 printGenerationStats(genStats);
                 printWorldStats(world, request.boulder_count);
                 printPlantStats(world);
@@ -467,7 +486,13 @@ int main(int argc, char** argv) {
                     populationHistory.record(world);
                     // Параметры генерации — из файла мира: панель на
                     // экране World Generation должна показывать, чем
-                    // сгенерирован именно загруженный мир.
+                    // сгенерирован именно загруженный мир. Размер Области
+                    // при этом берётся у самого мира, а не из его секции
+                    // "generation": у сохранений, сделанных до появления
+                    // размера в запросе, там стоит значение по умолчанию,
+                    // и панель показывала бы 100x100 для мира 400x400.
+                    generation.area_width = info.area_width;
+                    generation.area_height = info.area_height;
                     network.setCurrentGenerationConfig(generation);
                     network.setCurrentWorldName(info.name);
                     std::cout << "World '" << info.name << "' loaded (tick " << info.tick << ", area "
@@ -538,21 +563,24 @@ int main(int argc, char** argv) {
         // и выполняем здесь, на потоке GameLoop, до вызова tick(): сама
         // регенерация трогает ECS registry, а это не тот поток, откуда
         // пришёл сетевой запрос (см. NetworkServer::handleClientMessage).
-        if (const auto request = network.takePendingRegeneration()) {
+        if (const auto pending = network.takePendingRegeneration()) {
+            const auto request = withValidArea(*pending);
             // Печатаем ДО generateTerrain (+ явный flush) — если генерация
             // зависнет (см. GenerationStats::riverTimedOut), эта строка с
             // параметрами запроса всё равно попадёт в консоль и укажет,
             // что именно регенерировалось перед зависанием.
-            std::cout << "Regenerating (seed=" << request->seed << ")...\n" << std::flush;
+            std::cout << "Regenerating (seed=" << request.seed << ", area " << request.area_width << "x"
+                       << request.area_height << ")...\n"
+                       << std::flush;
             const auto genStats =
-                goblins::generateWorld(world, config.area.width, config.area.height, toWorldGenParams(*request));
+                goblins::generateWorld(world, request.area_width, request.area_height, toWorldGenParams(request));
 
             // Мир создан заново — летопись прежнего к нему не относится
             // (как и при "New world" выше).
             populationHistory.clear();
             populationHistory.record(world);
 
-            network.setCurrentGenerationConfig(*request);
+            network.setCurrentGenerationConfig(request);
             // Перегенерированный мир — уже не тот, что лежит в файле, из
             // которого он мог быть загружен: до явного "Save world" он
             // безымянный, и сохранение заведёт ему новый файл, а не
@@ -564,7 +592,7 @@ int main(int argc, char** argv) {
             network.broadcastWorldList();
 
             printGenerationStats(genStats);
-            printWorldStats(world, request->boulder_count);
+            printWorldStats(world, request.boulder_count);
             printPlantStats(world);
             printAnimalStats(world);
         }
