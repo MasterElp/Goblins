@@ -4,13 +4,13 @@ add_library(core STATIC
     src/systems/TimeSystem.cpp
     src/systems/HydrologySystem.cpp
     src/systems/PlantSystem.cpp
-    src/systems/HerbivoreSystem.cpp
+    src/systems/AnimalSystem.cpp
     src/generation/BoulderScatter.cpp
     src/generation/TerrainGenerator.cpp
     src/generation/PlantGenetics.cpp
     src/generation/GrassSeeding.cpp
-    src/generation/HerbivoreGenetics.cpp
-    src/generation/HerbivoreSeeding.cpp
+    src/generation/AnimalGenetics.cpp
+    src/generation/AnimalSeeding.cpp
 )
 
 target_include_directories(core PUBLIC include)

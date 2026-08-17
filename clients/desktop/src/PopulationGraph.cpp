@@ -28,16 +28,26 @@ constexpr float kFooterHeight = 17.0f;
 
 using History = std::vector<WorldState::PopulationPoint>;
 
-enum class Kind { Plants, Herbivores };
+enum class Kind { Plants, Herbivores, Predators };
 
 const std::vector<int>& valuesOf(const WorldState::PopulationPoint& point, Kind kind) {
-    return kind == Kind::Plants ? point.plants : point.herbivores;
+    switch (kind) {
+        case Kind::Plants: return point.plants;
+        case Kind::Predators: return point.predators;
+        case Kind::Herbivores: break;
+    }
+    return point.herbivores;
 }
 
 // Цвета — те же, что у видов на карте и в легенде экрана мира: линия
 // графика и пятно травы на карте должны читаться как одно и то же.
 Color seriesColor(Kind kind, int species) {
-    return kind == Kind::Plants ? TileColors::plantSpecies(species) : TileColors::herbivoreSpecies(species);
+    switch (kind) {
+        case Kind::Plants: return TileColors::plantSpecies(species);
+        case Kind::Predators: return TileColors::predatorSpecies(species);
+        case Kind::Herbivores: break;
+    }
+    return TileColors::herbivoreSpecies(species);
 }
 
 // Круглый потолок шкалы: 1, 2, 5, 10, 20, 50, ... Ось с потолком "по
@@ -242,7 +252,10 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
 
     constexpr float kPadding = 10.0f;
     constexpr float kGap = 18.0f;
-    const float chartWidth = (bounds.width - kPadding * 2.0f - kGap) * 0.5f;
+    // Три панели, а не две: у травы, травоядных и хищников свои единицы и
+    // свои порядки величины (тысячи клеток против десятков особей), и на
+    // одной шкале кривая хищников легла бы в ноль.
+    const float chartWidth = (bounds.width - kPadding * 2.0f - kGap * 2.0f) / 3.0f;
     if (chartWidth < kValueLabelWidth + 40.0f) {
         DrawText("Population history: window is too narrow", static_cast<int>(bounds.x) + 10,
                  static_cast<int>(bounds.y) + 10, kTitleFont, mutedColor);
@@ -250,16 +263,19 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     }
     const Rectangle plants{bounds.x + kPadding, bounds.y + kPadding, chartWidth, bounds.height - kPadding * 2.0f};
     const Rectangle herbivores{plants.x + chartWidth + kGap, plants.y, chartWidth, plants.height};
+    const Rectangle predators{herbivores.x + chartWidth + kGap, plants.y, chartWidth, plants.height};
 
-    // Курсор один на обе панели: точка летописи общая, и вопрос, ради
+    // Курсор один на все панели: точка летописи общая, и вопрос, ради
     // которого на график вообще смотрят, — что было с травой в тот момент,
-    // когда просело стадо.
+    // когда просело стадо, и что было со стадом, когда расплодились
+    // хищники.
     bool hasHover = false;
     std::size_t hoverIndex = 0;
     if (allowHover) {
         const Vector2 mouse = GetMousePosition();
         if (CheckCollisionPointRec(mouse, bounds)) {
-            const Rectangle plot = plotOf(mouse.x < herbivores.x ? plants : herbivores);
+            const Rectangle plot =
+                plotOf(mouse.x < herbivores.x ? plants : (mouse.x < predators.x ? herbivores : predators));
             if (mouse.x >= plot.x && mouse.x <= plot.x + plot.width) {
                 hoverIndex = nearestPoint(history, plot, mouse.x);
                 hasHover = true;
@@ -281,6 +297,7 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     drawChart(history, plants, Kind::Plants, "Grass by species -- tiles", hasHover, hoverIndex, footerNote.c_str());
     drawChart(history, herbivores, Kind::Herbivores, "Herbivores by species -- animals", hasHover, hoverIndex,
               nullptr);
+    drawChart(history, predators, Kind::Predators, "Predators by species -- animals", hasHover, hoverIndex, nullptr);
 }
 
 } // namespace PopulationGraph

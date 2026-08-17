@@ -2,9 +2,10 @@
 
 #include <utility>
 
-#include "core/components/HerbivoreComponent.hpp"
-#include "core/components/HerbivoreGenomeComponent.hpp"
-#include "core/components/HerbivoreSpeciesComponent.hpp"
+#include "core/components/AnimalComponent.hpp"
+#include "core/components/AnimalGenomeComponent.hpp"
+#include "core/components/AnimalSpeciesComponent.hpp"
+#include "core/components/PredatorComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
@@ -35,12 +36,19 @@ std::vector<int> countPlants(const World& world) {
     return counts;
 }
 
-std::vector<int> countHerbivores(const World& world) {
+// Животные — по одному вектору на диету: индекс вида у травоядных и у
+// хищников свой, и сложить их в один вектор значило бы смешать два разных
+// нумерования. wantPredators выбирает, чьё поголовье считается.
+std::vector<int> countAnimals(const World& world, bool wantPredators) {
     const auto& registry = world.registry();
-    const auto& archetypes = registry.get<const HerbivoreSpeciesComponent>(world.worldEntity()).archetypes;
+    const auto& species = registry.get<const AnimalSpeciesComponent>(world.worldEntity());
+    const auto& archetypes = wantPredators ? species.predators : species.herbivores;
     std::vector<int> counts(archetypes.size(), 0);
-    registry.view<const HerbivoreComponent, const HerbivoreGenomeComponent>().each(
-        [&](const HerbivoreComponent& /*animal*/, const HerbivoreGenomeComponent& genome) {
+    registry.view<const AnimalComponent, const AnimalGenomeComponent>().each(
+        [&](const entt::entity entity, const AnimalComponent& /*animal*/, const AnimalGenomeComponent& genome) {
+            if (registry.all_of<PredatorComponent>(entity) != wantPredators) {
+                return;
+            }
             if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
                 ++counts[static_cast<std::size_t>(genome.species)];
             }
@@ -48,15 +56,19 @@ std::vector<int> countHerbivores(const World& world) {
     return counts;
 }
 
-// Точка — массивом из трёх элементов: тик, численность травы по видам,
-// численность травоядных по видам. Одно место на файл сохранения и на
-// протокол: разъехавшись, они читались бы одним и тем же клиентом
-// по-разному.
+// Точка — массивом: тик, численность травы по видам, травоядных по видам,
+// хищников по видам. Одно место на файл сохранения и на протокол:
+// разъехавшись, они читались бы одним и тем же клиентом по-разному.
+//
+// Хищники — четвёртым элементом, дописанным к трём прежним, а не новым
+// полем в объекте: летописи миров, прожитых до их появления, короче на
+// элемент, и читающая сторона обязана это пережить (см. fromJson).
 nlohmann::json encodePoint(const PopulationHistory::Point& point) {
     auto entry = nlohmann::json::array();
     entry.push_back(point.tick);
     entry.push_back(point.plants);
     entry.push_back(point.herbivores);
+    entry.push_back(point.predators);
     return entry;
 }
 
@@ -95,7 +107,8 @@ void PopulationHistory::record(const World& world) {
     Point point;
     point.tick = tick;
     point.plants = countPlants(world);
-    point.herbivores = countHerbivores(world);
+    point.herbivores = countAnimals(world, /*wantPredators=*/false);
+    point.predators = countAnimals(world, /*wantPredators=*/true);
     points_.push_back(std::move(point));
 
     if (points_.size() > kMaxPoints) {
@@ -166,6 +179,12 @@ void PopulationHistory::fromJson(const nlohmann::json& json) {
         }
         point.plants = readInts(entry[1]);
         point.herbivores = readInts(entry[2]);
+        // Точка из мира, прожитого до появления хищников, короче на
+        // элемент. Это не битый файл, а другое прошлое: хищников в тот тик
+        // не было вовсе, и пустой вектор говорит именно это.
+        if (entry.size() > 3) {
+            point.predators = readInts(entry[3]);
+        }
         points_.push_back(std::move(point));
     }
 

@@ -92,15 +92,23 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     ops.floatRow("Initial coverage", edited.plants.grass_coverage, 0.0f, 0.4f, 3);
 
     ops.section("Herbivores");
-    // Число видов травоядных — 1..8 (ядро обрежет к этим границам): один
-    // вид — вполне осмысленный мир, а больше восьми при общем бюджете
-    // преимуществ перестают отличаться друг от друга, да и поголовье
-    // каждого становится слишком мелким, чтобы животные находили пару.
-    ops.intRow("Species", edited.herbivores.species, 1, 8);
-    // Стартовое поголовье в штуках, а не долей карты: травоядных десятки.
-    // Дальше стадо живёт само — размножается, голодает и вымирает по
-    // законам HerbivoreSystem. Ноль — мир вовсе без животных.
-    ops.intRow("Initial head count", edited.herbivores.count, 0, 400);
+    // Число видов — 1..8 (ядро обрежет к этим границам): один вид — вполне
+    // осмысленный мир, а больше восьми при общем бюджете преимуществ
+    // перестают отличаться друг от друга, да и поголовье каждого
+    // становится слишком мелким, чтобы животные находили пару.
+    ops.intRow("Species", edited.animals.herbivore_species, 1, 8);
+    // Стартовое поголовье в штуках, а не долей карты: животных десятки.
+    // Дальше оно живёт само — размножается, голодает, гибнет от зубов и
+    // вымирает по законам AnimalSystem. Ноль — мир вовсе без травоядных.
+    ops.intRow("Initial head count", edited.animals.herbivore_count, 0, 400);
+
+    ops.section("Predators");
+    // Хищников по умолчанию в десять с лишним раз меньше, чем добычи, и
+    // это не украшение: они едят её быстрее, чем она успевает
+    // расплодиться. Ноль — мир без хищников (трава и стадо будут жить как
+    // жили).
+    ops.intRow("Species", edited.animals.predator_species, 1, 6);
+    ops.intRow("Initial head count", edited.animals.predator_count, 0, 100);
 
     ops.group("WORLD PROPERTIES -- chosen here, read every tick");
 
@@ -144,10 +152,11 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited) {
     ops.floatRow("Humus decay (per tick)", edited.plants.humus_decay_rate, 0.001f, 0.2f, 3);
 
     ops.section("Animal life");
-    // Та же мутация, что и у растений, но своя: наследование телёнка
-    // считается по таблице черт травоядного, и настраивать их вместе
-    // значило бы связать два независимых мира одним ползунком.
-    ops.floatRow("Mutation rate", edited.herbivores.mutation_rate, 0.0f, 0.3f, 3);
+    // Та же мутация, что и у растений, но своя: наследование детёныша
+    // считается по таблицам черт животных, и настраивать их вместе значило
+    // бы связать два независимых мира одним ползунком. Одна на обе диеты —
+    // это скорость наследственных изменений в мире, а не свойство диеты.
+    ops.floatRow("Mutation rate", edited.animals.mutation_rate, 0.0f, 0.3f, 3);
 }
 
 // Только считает высоту, ничего не рисует — используется до

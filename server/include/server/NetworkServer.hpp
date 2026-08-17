@@ -13,8 +13,8 @@
 
 #include "config/Config.hpp"
 #include "core/World.hpp"
+#include "core/components/AnimalComponent.hpp"
 #include "core/components/DesireComponent.hpp"
-#include "core/components/HerbivoreComponent.hpp"
 #include "server/PopulationHistory.hpp"
 #include "world/WorldSaveInfo.hpp"
 
@@ -43,7 +43,7 @@ struct SaveWorldRequest {
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 15):
+// Протокол (версия 16):
 //   Состояние мира уходит клиенту двумя разными сообщениями, потому что
 //   оно состоит из двух разных по природе частей. Полный world_init —
 //   всё, включая то, что между регенерациями не меняется вообще
@@ -60,14 +60,17 @@ struct SaveWorldRequest {
 //     {"type": "world_init", "area": {"width", "height"}, "tick": N,
 //      "paused": bool, "world": "имя текущего мира или пустая строка",
 //      "scale": 1000,  -- делитель для целочисленных слоёв (см. ниже)
-//      "seed": N, "terrain": {...},
-//      "boulder_count": N,
-//      "plants": {...}, "herbivores": {...},  -- вместе с
-//              seed/terrain/boulder_count это полный RegenerationRequest:
-//              панель настроек клиента строится из этого сообщения целиком,
-//              без вкомпилированных умолчаний. Один seed на весь мир, а не
-//              по одному на стадию — внутри генерации он расходится по
-//              стадиям со смещением (core/Simulation.cpp)
+//      "generation": {"seed": N, "terrain": {...}, "boulder_count": N,
+//                     "plants": {...}, "animals": {...}},
+//              -- полный RegenerationRequest одним объектом, ровно тот же,
+//              что лежит в файле мира под тем же именем: панель настроек
+//              клиента строится из этого сообщения целиком, без
+//              вкомпилированных умолчаний. Одним объектом, а не полем на
+//              секцию, чтобы имена настроек не сталкивались с именами
+//              состояния мира (список животных ниже тоже хочет называться
+//              "animals"). Один seed на весь мир, а не по одному на стадию
+//              — внутри генерации он расходится по стадиям со смещением
+//              (core/Simulation.cpp)
 //      "constants": [{"group", "name", "value"}, ...],  -- числа, зашитые
 //              в законы мира (core/Diagnostics.hpp): не настраиваются и
 //              никогда не меняются, клиент показывает их только для
@@ -76,29 +79,38 @@ struct SaveWorldRequest {
 //      "water_sources": [{"x", "y"}, ...],  -- истоки рек + "родники"
 //              (WaterSourceComponent), тег без данных, как boulders
 //      "plant_species": [{"species": N, <черты генома>}, ...],
-//      "herbivore_species": [{"species": N, <черты генома>}, ...],
-//      "herbivores": [{"x", "y", "species", "sex", "desire", "growth"}, ...]
+//      "animal_species": {"herbivores": [{"species": N, <черты>}, ...],
+//                          "predators": [...]},
+//      "animals": [{"x", "y", "species", "kind", "sex", "desire", "growth",
+//                    "health"}, ...]
 //              -- второй канал состояния, рядом с тайловыми слоями: у
 //              подвижных существ нет "своей клетки", их десятки на десятки
 //              тысяч клеток, и плотный массив на всю Область ради них был
 //              бы и дороже, и лживее (на одном тайле их может стоять
 //              несколько). Поэтому — список, целиком, и в world_init, и в
-//              дельте (см. ниже)
+//              дельте (см. ниже). "kind" — диета ("herbivore"/"predator"),
+//              она же говорит, в каком из двух списков animal_species
+//              искать вид по индексу
 //      "history": {"interval": N, "full": true,
-//                  "points": [[тик, [трава по видам], [животные по видам]], ...]}
+//                  "points": [[тик, [трава по видам], [травоядные по
+//                              видам], [хищники по видам]], ...]}
 //              -- летопись численности (server/PopulationHistory.hpp):
 //              сколько клеток занимал каждый вид травы и сколько было
-//              особей каждого вида на такой-то тик. Ведёт её сервер с
-//              первого тика мира и кладёт в файл сохранения, поэтому
-//              клиент видит всю жизнь мира, а не время своего наблюдения.
-//              Точки — массивами, а не объектами: их до тысячи, и имена
-//              полей весили бы больше самих чисел. "interval" — шаг между
-//              точками в тиках; он удваивается, когда точек становится
-//              больше потолка и летопись прореживается вдвое. "full"
-//              значит "замени свою летопись этой" (в world_init всегда).
+//              особей каждого вида животных на такой-то тик. Ведёт её
+//              сервер с первого тика мира и кладёт в файл сохранения,
+//              поэтому клиент видит всю жизнь мира, а не время своего
+//              наблюдения. Точки — массивами, а не объектами: их до
+//              тысячи, и имена полей весили бы больше самих чисел.
+//              "interval" — шаг между точками в тиках; он удваивается,
+//              когда точек становится больше потолка и летопись
+//              прореживается вдвое. "full" значит "замени свою летопись
+//              этой" (в world_init всегда). Четвёртый элемент точки
+//              (хищники) появился позже трёх первых, поэтому читающая
+//              сторона обязана пережить его отсутствие: летопись мира,
+//              прожитого до появления хищников, короче на элемент.
 //      "layers": {"rockiness", "moisture", "compaction", "minerals",
-//                 "height", "water", "humus", "species", "growth",
-//                 "seeds"}}
+//                 "height", "water", "humus", "carcass", "species",
+//                 "growth", "seeds"}}
 //              -- плоские массивы целых, row-major, по одному значению на
 //              тайл. Целые, а не float: в JSON число с плавающей точкой
 //              печатается как double (два десятка знаков на значение), а
@@ -108,10 +120,11 @@ struct SaveWorldRequest {
 //              счётные величины как есть, species — индекс вида или -1
 //              (клетка пуста). water == 0 значит "воды нет" (на сервере
 //              у тайла просто нет WaterComponent), humus == 0 — "перегноя
-//              нет". seeds — вид лежащего в клетке семени (SeedComponent)
-//              или -1: отдельный слой, а не признак у species, потому что
-//              семя лежит под растением, и в одной клетке бывает и то, и
-//              другое.
+//              нет". "carcass" — мясо лежащей на тайле падали в тысячных
+//              долях, 0 значит "падали нет". "seeds" — вид лежащего в
+//              клетке семени (SeedComponent) или -1: отдельный слой, а не
+//              признак у species, потому что семя лежит под растением, и в
+//              одной клетке бывает и то, и другое.
 //   Сервер -> клиент, не чаще snapshot_interval_ms, только если что-то
 //   изменилось (на паузе не шлётся вовсе — миру нечего сообщать):
 //     {"type": "world_delta", "tick": N, "paused": bool,
@@ -122,7 +135,7 @@ struct SaveWorldRequest {
 //              world_init). Пары "индекс тайла - новое значение", только
 //              изменившиеся клетки; слой без изменений в сообщение не
 //              попадает вовсе.
-//      Список животных ("herbivores") в дельте идёт целиком, а не
+//      Список животных ("animals") в дельте идёт целиком, а не
 //      изменениями: животное меняет клетку каждый шаг, и "дельта списка"
 //      описывала бы почти весь список — при десятках животных это дешевле
 //      и проще, чем ключи и сравнения по идентификаторам. Не изменился —
@@ -309,6 +322,7 @@ private:
         std::vector<int> terrainHeight;
         std::vector<int> water;
         std::vector<int> humus;
+        std::vector<int> carcass;
         std::vector<int> species;
         std::vector<int> growth;
         // Семена: вид того, что вырастет, или -1. Отдельный слой от
@@ -319,23 +333,26 @@ private:
         // одного и того же снимка, что и дельты.
         std::vector<int> rockiness;
 
-        // Животные — не слой, а список: см. "herbivores" в описании
-        // протокола выше. Лежат в том же снимке, потому что сравниваются
-        // с отправленным ровно так же, как слои.
-        struct HerbivoreView {
+        // Животные — не слой, а список: см. "animals" в описании протокола
+        // выше. Лежат в том же снимке, потому что сравниваются с
+        // отправленным ровно так же, как слои.
+        struct AnimalView {
             int x = 0;
             int y = 0;
             int species = 0;
             int growth = 0;   // целые проценты, как и у растений
+            int health = 0;   // тоже проценты: раненого видно на карте
+            bool predator = false;
             Sex sex = Sex::Female;
             Desire desire = Desire::Idle;
 
-            bool operator==(const HerbivoreView& other) const {
+            bool operator==(const AnimalView& other) const {
                 return x == other.x && y == other.y && species == other.species && growth == other.growth &&
-                       sex == other.sex && desire == other.desire;
+                       health == other.health && predator == other.predator && sex == other.sex &&
+                       desire == other.desire;
             }
         };
-        std::vector<HerbivoreView> herbivores;
+        std::vector<AnimalView> animals;
 
         void resize(int w, int h);
     };
@@ -345,7 +362,7 @@ private:
     // Список животных в том виде, в котором он уходит клиенту. Одна
     // функция на world_init и на дельту: список там и там целиком и
     // одинаковый, поэтому и собирается одним местом.
-    static nlohmann::json herbivoresToJson(const std::vector<LayerSnapshot::HerbivoreView>& herbivores);
+    static nlohmann::json animalsToJson(const std::vector<LayerSnapshot::AnimalView>& animals);
     std::string buildInitMessage(const LayerSnapshot& layers) const;
     // Возвращает пустую строку, если ничего не изменилось.
     std::string buildDeltaMessage(const LayerSnapshot& previous, const LayerSnapshot& current) const;
