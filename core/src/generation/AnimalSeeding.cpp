@@ -108,9 +108,12 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
         if (terrain == entt::null) {
             continue;
         }
-        const auto* water = world.registry().try_get<const WaterComponent>(terrain);
-        if (water != nullptr && water->depth > kWadeDepth) {
-            continue; // в реку не ставим — животное туда и само не пойдёт
+        // В воду не ставим — животное туда и само не пойдёт: вода для него
+        // такая же стена, как булыжник (AnimalSystem.cpp, standable).
+        // Разойдись эти две проверки, и стадо оказалось бы расставленным
+        // там, откуда оно не может сойти.
+        if (world.registry().all_of<WaterComponent>(terrain)) {
+            continue;
         }
 
         const std::size_t speciesIndex =
@@ -211,7 +214,6 @@ void seedAnimals(World& world, const AnimalParams& params, unsigned seed) {
 // Константы этой стадии — наружу только для чтения (core/Diagnostics.hpp).
 void appendAnimalSeedingConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* g = "Animal seeding";
-    out.push_back({g, "kWadeDepth", kWadeDepth});
     out.push_back({g, "kInitialReserveShare", kInitialReserveShare});
     out.push_back({g, "kAttemptMultiplier", static_cast<float>(kAttemptMultiplier)});
 }

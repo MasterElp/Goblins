@@ -664,16 +664,25 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         int targetY = animal.y;
 
         // Куда животное вообще может встать: не за границей Области, не на
-        // занятый непроходимым объектом тайл и не в глубокую воду. Этим же
-        // проверяется и годность еды: до туши, лежащей посреди разлившейся
-        // реки, не дойти — значит, для животного это не еда, а вид.
+        // занятый непроходимым объектом тайл и не в воду. Вода — стена:
+        // животное не плавает и брода не знает, поэтому клетка, где вода
+        // есть вообще (waterAt > 0, то есть на тайле висит WaterComponent),
+        // непроходима для него так же, как булыжник. Река делит карту, а не
+        // замедляет ход.
         //
-        // Без этой проверки хищник вставал у самой воды напротив
+        // Этим же проверяется и годность еды: до туши, лежащей посреди
+        // разлившейся реки, не дойти — значит, для животного это не еда, а
+        // вид. Без этой проверки хищник вставал у самой воды напротив
         // недосягаемой туши и голодал насмерть, каждый тик заново выбирая
         // её целью: в мире была еда, до которой он не мог дойти, и он не
         // умел этого понять.
+        //
+        // Тот же закон действует и при расселении первого поголовья
+        // (AnimalSeeding.cpp): в воду не ставим — животное туда и само не
+        // пойдёт. Разойдись эти две проверки, и стадо оказалось бы
+        // расставленным там, откуда оно не может сойти.
         auto standable = [&](std::size_t cell, int nx, int ny) {
-            return !world.area().isBlocked(nx, ny) && terrain[cell] != entt::null && waterAt[cell] <= kWadeDepth;
+            return !world.area().isBlocked(nx, ny) && terrain[cell] != entt::null && waterAt[cell] <= 0.0f;
         };
 
         // Ближайшая клетка в пределах видимости, удовлетворяющая условию.
@@ -827,8 +836,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             }
             case Desire::Water: {
                 // Пьёт со своей клетки или с любой соседней: животное
-                // стоит на берегу, а не заходит в реку (в глубокую воду оно
-                // и шагнуть не может, см. kWadeDepth).
+                // стоит на берегу, а не заходит в реку — шагнуть в воду оно
+                // и не может (см. standable). Своя клетка в проверке всё
+                // равно нужна: паводок может залить ту, на которой животное
+                // стоит.
                 std::size_t source = cellCount;
                 if (waterAt[here] > 0.0f) {
                     source = here;
@@ -933,19 +944,29 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         const bool fleeing = desire.current == Desire::Flee;
 
+        // Куда идти, когда желаемого не видно (или когда до него нет
+        // дороги, см. ниже): направление отрезка поиска. Берётся из
+        // постоянного идентификатора и номера отрезка, поэтому пересчёт
+        // даёт то же самое, сколько раз за тик его ни спроси.
+        auto roamTarget = [&](int& rx, int& ry) {
+            std::uint64_t roam = mixSeed(animal.id, tick / kRoamTicks);
+            const int dir = static_cast<int>(nextState(roam) % 8u);
+            rx = animal.x + kDx8[dir] * kRoamReach;
+            ry = animal.y + kDy8[dir] * kRoamReach;
+        };
+
         // Желаемого не видно — значит, надо искать. Ищущее животное идёт в
         // одну сторону целый отрезок пути (kRoamTicks), а не топчется на
         // месте: за пределами собственной видимости другого способа
         // что-нибудь найти у него нет. Ищут все трое — и еду, и воду, и
         // пару; река, до которой не дошли, убивает вернее любых зубов.
+        bool roaming = false;
         if (!fleeing && !hasTarget &&
             (desire.current == Desire::Food || desire.current == Desire::Water ||
              desire.current == Desire::Mate)) {
-            std::uint64_t roam = mixSeed(animal.id, tick / kRoamTicks);
-            const int dir = static_cast<int>(nextState(roam) % 8u);
-            targetX = animal.x + kDx8[dir] * kRoamReach;
-            targetY = animal.y + kDy8[dir] * kRoamReach;
+            roamTarget(targetX, targetY);
             hasTarget = true;
+            roaming = true;
         }
 
         if (!fleeing && !hasTarget && randomUnit(random) >= kWanderChance) {
@@ -954,46 +975,41 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         // Куда именно: из проходимых соседей выбирается тот, что ближе к
         // цели (а бегущим — тот, что дальше от опасности); без цели —
-        // случайный. На занятый непроходимым объектом тайл животное не
-        // идёт, а вот на клетку с травой и с другим животным — сколько
-        // угодно.
-        const int aimX = fleeing ? threatX[a] : targetX;
-        const int aimY = fleeing ? threatY[a] : targetY;
-        auto scoreOf = [&](int x, int y) {
-            const float dx = static_cast<float>(aimX - x);
-            const float dy = static_cast<float>(aimY - y);
-            return dx * dx + dy * dy;
-        };
-
+        // случайный. На занятый непроходимым объектом тайл и в воду
+        // животное не идёт, а вот на клетку с травой и с другим животным —
+        // сколько угодно.
         int stepX = animal.x;
         int stepY = animal.y;
         bool stepFound = false;
-        float bestScore = 0.0f;
         const int firstDir = static_cast<int>(randomUnit(random) * 8.0f) % 8;
 
-        // Второй проход — вброд: см. ниже, зачем он нужен.
-        for (int pass = 0; pass < 2 && !stepFound; ++pass) {
-            const bool wading = pass == 1;
+        // Один и тот же перебор соседей для любой цели: идущий выбирает
+        // ближайшего к ней, бегущий — самого дальнего от опасности,
+        // разница только в знаке сравнения. Возвращает, приближает ли
+        // найденный шаг к цели: этим отличается дорога от тупика.
+        auto stepToward = [&](int aimX, int aimY, bool aimless) {
+            auto scoreOf = [&](int x, int y) {
+                const float dx = static_cast<float>(aimX - x);
+                const float dy = static_cast<float>(aimY - y);
+                return dx * dx + dy * dy;
+            };
+
+            stepFound = false;
+            float bestScore = 0.0f;
             for (int n = 0; n < 8; ++n) {
                 const int dir = (firstDir + n) % 8;
                 const int nx = animal.x + kDx8[dir];
                 const int ny = animal.y + kDy8[dir];
-                if (!world.area().inBounds(nx, ny)) {
+                if (!world.area().inBounds(nx, ny) || !standable(index(nx, ny), nx, ny)) {
                     continue;
                 }
-                const std::size_t j = index(nx, ny);
-                if (wading ? (world.area().isBlocked(nx, ny) || terrain[j] == entt::null) : !standable(j, nx, ny)) {
-                    continue;
-                }
-                if (!fleeing && !hasTarget) {
+                if (aimless) {
                     stepX = nx;
                     stepY = ny;
                     stepFound = true;
                     break; // случайное блуждание: первый же годный сосед по кругу
                 }
                 const float distance = scoreOf(nx, ny);
-                // Бегущий уходит дальше всего, идущий — ближе всего. Один и
-                // тот же перебор соседей, разный знак сравнения.
                 const bool better = fleeing ? distance > bestScore : distance < bestScore;
                 if (!stepFound || better) {
                     bestScore = distance;
@@ -1002,25 +1018,30 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     stepFound = true;
                 }
             }
-
-            // Прижатое водой животное лезет в воду. По суше оно ходит
-            // только там, где неглубоко (kWadeDepth), и это правильно: в
-            // реку по своей воле никто не идёт. Но вода в этом мире
-            // прибывает (HydrologySystem), и животное, которому разлив
-            // отрезал сушу, оказывалось запертым на пятачке в две клетки:
-            // оно видело добычу и падаль в четырёх шагах, топталось между
-            // теми же двумя клетками и умирало от голода у самой воды.
-            // Поэтому: если ни один сухой сосед не подводит ближе к цели
-            // (а бегущему — дальше от опасности), зверь идёт вброд.
-            const bool improved =
-                stepFound && (!hasTarget || (fleeing ? bestScore > scoreOf(animal.x, animal.y)
+            return stepFound && (aimless || (fleeing ? bestScore > scoreOf(animal.x, animal.y)
                                                      : bestScore < scoreOf(animal.x, animal.y)));
-            if (improved) {
-                break;
-            }
-            if (pass == 0) {
-                stepFound = false; // пробуем ещё раз, уже по воде
-            }
+        };
+
+        const bool aimless = !fleeing && !hasTarget;
+        const bool approached = stepToward(fleeing ? threatX[a] : targetX, fleeing ? threatY[a] : targetY, aimless);
+
+        // Дороги нет: ни один сосед не подводит к цели ближе — между
+        // животным и желаемым вода или камень. Стоять и смотреть на
+        // недостижимое нельзя: голод сам не пройдёт, а цель будет
+        // выбираться заново каждый тик, одна и та же, — зверь так и умрёт
+        // на берегу напротив луга. Поэтому упёршийся идёт вдоль преграды —
+        // тем же отрезком поиска, каким ищут невидимое: обойти реку или
+        // не обойти, он не знает, но стоя не узнает точно.
+        //
+        // Раньше на этом месте животное лезло в воду вброд. Теперь вода
+        // непроходима совсем, и обход — единственное, что у него осталось:
+        // паводок (HydrologySystem) режет карту на острова, и застрявшему
+        // на острове зверю остаётся только доесть его и умереть.
+        if (!approached && !aimless && !fleeing && !roaming) {
+            int detourX = animal.x;
+            int detourY = animal.y;
+            roamTarget(detourX, detourY);
+            stepToward(detourX, detourY, false);
         }
         if (!stepFound) {
             continue;

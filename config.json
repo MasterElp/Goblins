@@ -1,14 +1,16 @@
 {
+    "animals": {
+        "herbivore_count": 120,
+        "herbivore_species": 2,
+        "mutation_rate": 0.05999999865889549,
+        "predator_count": 10,
+        "predator_species": 1
+    },
     "area": {
-        "height": 100,
-        "width": 100
+        "height": 200,
+        "width": 200
     },
     "boulder_count": 16,
-    "herbivores": {
-        "count": 40,
-        "mutation_rate": 0.05999999865889549,
-        "species": 2
-    },
     "host": "127.0.0.1",
     "plants": {
         "grass_coverage": 0.05999999865889549,
