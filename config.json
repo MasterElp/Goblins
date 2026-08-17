@@ -2,44 +2,44 @@
     "animals": {
         "herbivore_count": 120,
         "herbivore_species": 2,
-        "mutation_rate": 0.05999999865889549,
+        "mutation_rate": 60,
         "predator_count": 10,
         "predator_species": 1
     },
     "area": {
-        "height": 200,
-        "width": 200
+        "height": 100,
+        "width": 100
     },
-    "boulder_count": 16,
+    "boulder_count": 40,
     "host": "127.0.0.1",
     "plants": {
-        "grass_coverage": 0.05999999865889549,
-        "grass_species": 7,
-        "humus_decay_rate": 0.019999999552965164,
-        "mutation_rate": 0.15140844881534576
+        "grass_coverage": 60,
+        "grass_species": 5,
+        "humus_decay_period": 50,
+        "mutation_rate": 60
     },
     "port": 9002,
     "saves_dir": "saves",
-    "seed": 347143,
+    "seed": 54321,
     "snapshot_interval_ms": 100,
     "terrain": {
-        "max_erosion_depth": 1.5281691551208496,
-        "minerals_average": 9.74178409576416,
-        "mountain_hardness": 0.6000000238418579,
-        "mountain_height": 29.530515670776367,
-        "noise_frequency": 0.019999999552965164,
+        "feature_size": 50,
+        "max_erosion_depth": 500,
+        "minerals_average": 10,
+        "mountain_hardness": 600,
+        "mountain_height": 16000,
         "noise_octaves": 4,
-        "pond_depth": 2.2300469875335693,
-        "rain_amount": 0.02464788779616356,
+        "pond_depth": 900,
+        "rain_amount": 50,
         "rain_interval_ticks": 400,
-        "river_count": 2,
-        "river_depth": 0.8873239159584045,
-        "river_sinuosity": 0.7159624695777893,
-        "river_width": 5.002347469329834,
-        "soil_erosion_rate": 0.22652582824230194,
-        "water_evaporation_rate": 0.001490610302425921,
-        "water_source_count": 10,
-        "water_source_depth": 2.1126761436462402
+        "river_count": 3,
+        "river_depth": 900,
+        "river_sinuosity": 500,
+        "river_width": 30,
+        "soil_erosion_rate": 50,
+        "water_evaporation_period": 5,
+        "water_source_count": 3,
+        "water_source_depth": 1000
     },
     "tick_interval_ms": 200
 }

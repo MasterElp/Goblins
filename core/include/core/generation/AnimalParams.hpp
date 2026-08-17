@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/Scale.hpp"
+
 namespace goblins {
 
 // Параметры этапа "Появление животных" (02_CorePrinciples.md, п.5) —
@@ -34,7 +36,8 @@ struct AnimalParams {
     // отличаться от родительского — доля вложения черты (см. Genetics.hpp),
     // а не доля самого значения гена. Одно на всех животных: это скорость
     // наследственных изменений в этом мире, а не свойство диеты.
-    float mutationRate = 0.06f;
+    // В тысячных долях вложения черты (core/Scale.hpp).
+    int mutationRate = 60;
 };
 
 } // namespace goblins

@@ -6,6 +6,13 @@
 
 namespace {
 
+// Мир сервера целочислен (core/Scale.hpp): доли приходят тысячными, а
+// глубины — тысячными единицы глубины. Клиенту для смешения цветов удобна
+// доля 0..1, и делитель у неё один на все слои — потому что шкала у мира
+// одна. Прежде делитель приезжал в поле "scale" каждого world_init; теперь
+// делить не на что и присылать нечего.
+constexpr float kFromThousandths = 0.001f;
+
 // Слой в дельте — плоский массив пар "индекс тайла, новое значение"
 // (см. протокол в server/NetworkServer.hpp). Индекс проверяется:
 // сообщение приходит извне, и битые данные не должны приводить к записи
@@ -187,8 +194,8 @@ void NetworkClient::applyAnimals(const nlohmann::json& message) {
         parsed.x = animal.value("x", 0);
         parsed.y = animal.value("y", 0);
         parsed.species = animal.value("species", 0);
-        parsed.growth = animal.value("growth", 0) * 0.01f;
-        parsed.health = animal.value("health", 100) * 0.01f;
+        parsed.growth = animal.value("growth", 0) * kFromThousandths;
+        parsed.health = animal.value("health", 1000) * kFromThousandths;
         parsed.predator = animal.value("kind", std::string{}) == "predator";
         parsed.sex = animal.value("sex", std::string{});
         parsed.desire = animal.value("desire", std::string{});
@@ -308,9 +315,6 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // взяться неоткуда.
         working_.generated = json.value("generated", true);
 
-        const int scale = json.value("scale", 1000);
-        milliScale_ = scale > 0 ? 1.0f / static_cast<float>(scale) : 0.001f;
-
         working_.boulders.clear();
         if (json.contains("boulders")) {
             for (const auto& b : json["boulders"]) {
@@ -329,22 +333,25 @@ void NetworkClient::handleMessage(const std::string& payload) {
         const nlohmann::json empty = nlohmann::json::object();
         const auto& layers = json.contains("layers") ? json["layers"] : empty;
 
-        working_.moisture = decodeScaled(layers, "moisture", cellCount, milliScale_);
-        working_.rockiness = decodeScaled(layers, "rockiness", cellCount, milliScale_);
-        working_.height = decodeScaled(layers, "height", cellCount, milliScale_);
-        working_.waterDepth = decodeScaled(layers, "water", cellCount, milliScale_);
+        // Мир целый (core/Scale.hpp), и по сети идут ровно его числа:
+        // доли в тысячных, глубины в тысячных единицы глубины. Клиенту для
+        // смешения цветов удобнее доля 0..1, поэтому здесь и только здесь
+        // они делятся на тысячу. Прежнего поля "scale" в протоколе больше
+        // нет — делитель один и постоянный, потому что шкала мира одна.
+        working_.moisture = decodeScaled(layers, "moisture", cellCount, kFromThousandths);
+        working_.rockiness = decodeScaled(layers, "rockiness", cellCount, kFromThousandths);
+        working_.height = decodeScaled(layers, "height", cellCount, kFromThousandths);
+        working_.waterDepth = decodeScaled(layers, "water", cellCount, kFromThousandths);
         working_.minerals = decodeInts(layers, "minerals", cellCount, 0);
         working_.humus = decodeInts(layers, "humus", cellCount, 0);
         // -1 — пустая клетка (растение это Entity, и его отсутствие в
         // плотном массиве выражается значением-заглушкой).
         working_.plantSpeciesAt = decodeInts(layers, "species", cellCount, -1);
-        // Развитость приходит целыми процентами — внутри клиента удобнее
-        // долей 0..1, как и остальные слои.
-        working_.plantGrowth = decodeScaled(layers, "growth", cellCount, 0.01f);
+        working_.plantGrowth = decodeScaled(layers, "growth", cellCount, kFromThousandths);
         // Семена — тем же способом, что и растения: -1 значит "семени в
         // клетке нет".
         working_.seedSpeciesAt = decodeInts(layers, "seeds", cellCount, -1);
-        working_.carcass = decodeScaled(layers, "carcass", cellCount, milliScale_);
+        working_.carcass = decodeScaled(layers, "carcass", cellCount, kFromThousandths);
 
         if (json.contains("plant_species")) {
             working_.plantSpecies.clear();
@@ -434,12 +441,11 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.tick = json.value("tick", working_.tick);
         working_.paused = json.value("paused", working_.paused);
 
-        const float scale = milliScale_;
-        const auto toFraction = [scale](int raw) { return static_cast<float>(raw) * scale; };
+        const auto toFraction = [](int raw) { return static_cast<float>(raw) * kFromThousandths; };
         applyChangedCells(json, "moisture", working_.moisture, toFraction);
         applyChangedCells(json, "height", working_.height, toFraction);
         applyChangedCells(json, "water", working_.waterDepth, toFraction);
-        applyChangedCells(json, "growth", working_.plantGrowth, [](int raw) { return raw * 0.01f; });
+        applyChangedCells(json, "growth", working_.plantGrowth, toFraction);
         applyChangedCells(json, "minerals", working_.minerals, [](int raw) { return raw; });
         applyChangedCells(json, "humus", working_.humus, [](int raw) { return raw; });
         applyChangedCells(json, "carcass", working_.carcass, toFraction);

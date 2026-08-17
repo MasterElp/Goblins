@@ -37,14 +37,6 @@ namespace goblins {
 
 namespace {
 
-// Делитель для слоёв, которые на сервере хранятся долями (влажность,
-// плотность, каменистость, глубина воды, высота). По сети они уходят
-// целыми в тысячных долях: в JSON число с плавающей точкой печатается
-// как double — два десятка знаков на значение, — а массив тут плотный,
-// на всю Область. Тысячных хватает: клиент по этим числам выбирает
-// оттенок тайла.
-constexpr int kMilliScale = 1000;
-
 // Порог невыбранной очереди отправки у клиента, при котором очередная
 // рассылка пропускается: клиент не успевает принимать, и копить для него
 // данные бессмысленно. Изменения не теряются — следующая дельта считается
@@ -53,15 +45,10 @@ constexpr int kMilliScale = 1000;
 // мира к миру оно не меняется.
 constexpr std::size_t kSnapshotBacklogBytes = 1024 * 1024;
 
-int encodeMilli(float value) {
-    return static_cast<int>(std::lround(static_cast<double>(value) * kMilliScale));
-}
-
-// Развитость растения — целые проценты, а не доля: значение нужно
-// клиенту только чтобы выбрать насыщенность цвета тайла.
-int growthPercent(float growth) {
-    return static_cast<int>(std::lround(std::clamp(growth, 0.0f, 1.0f) * 100.0f));
-}
+// Перевода в тысячные доли (прежний encodeMilli) здесь больше нет и быть
+// не может: мир и так целый (core/Scale.hpp), и слои уходят по сети ровно
+// теми числами, какими лежат в компонентах. Заодно исчезло поле "scale" из
+// протокола — делить клиенту не на что.
 
 // Дельта одного слоя — плоский массив пар "индекс тайла, новое
 // значение". Пустой, если слой не изменился вовсе; вызывающая сторона
@@ -247,8 +234,8 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     registry.view<const PositionComponent, const SoilComponent>().each(
         [&](const PositionComponent& pos, const SoilComponent& soil) {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
-            out.moisture[i] = encodeMilli(soil.moisture);
-            out.rockiness[i] = encodeMilli(soil.rockiness);
+            out.moisture[i] = soil.moisture;
+            out.rockiness[i] = soil.rockiness;
             out.minerals[i] = soil.minerals;
         });
 
@@ -258,7 +245,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     // несёт, клиент нормализует по min/max текущей карты.
     registry.view<const PositionComponent, const HeightComponent>().each(
         [&](const PositionComponent& pos, const HeightComponent& h) {
-            out.terrainHeight[static_cast<std::size_t>(pos.y) * width + pos.x] = encodeMilli(h.height);
+            out.terrainHeight[static_cast<std::size_t>(pos.y) * width + pos.x] = h.height;
         });
 
     // Вода и перегной на сервере разреженны (нет компонента = нет
@@ -267,7 +254,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     // выражает и появление воды, и её уход.
     registry.view<const PositionComponent, const WaterComponent>().each(
         [&](const PositionComponent& pos, const WaterComponent& w) {
-            out.water[static_cast<std::size_t>(pos.y) * width + pos.x] = encodeMilli(w.depth);
+            out.water[static_cast<std::size_t>(pos.y) * width + pos.x] = w.depth;
         });
 
     registry.view<const PositionComponent, const HumusComponent>().each(
@@ -279,14 +266,14 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     // плотным слоем: ноль значит "туши здесь нет".
     registry.view<const PositionComponent, const CarcassComponent>().each(
         [&](const PositionComponent& pos, const CarcassComponent& tileCarcass) {
-            out.carcass[static_cast<std::size_t>(pos.y) * width + pos.x] = encodeMilli(tileCarcass.meat);
+            out.carcass[static_cast<std::size_t>(pos.y) * width + pos.x] = tileCarcass.meat;
         });
 
     registry.view<const PositionComponent, const PlantComponent, const PlantGenomeComponent>().each(
         [&](const PositionComponent& pos, const PlantComponent& plant, const PlantGenomeComponent& genome) {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
             out.species[i] = genome.species;
-            out.growth[i] = growthPercent(plant.growth);
+            out.growth[i] = plant.growth;
         });
 
     // Семена (SeedComponent) — вид того, что из семени вырастет, или -1.
@@ -308,8 +295,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
                    const AnimalGenomeComponent& genome, const DesireComponent& desire) {
             const auto* identity = registry.try_get<const IdentityComponent>(entity);
             out.animals.push_back(LayerSnapshot::AnimalView{identity != nullptr ? identity->id : 0, pos.x, pos.y,
-                                                            genome.species, growthPercent(animal.growth),
-                                                            growthPercent(animal.health),
+                                                            genome.species, animal.growth, animal.health,
                                                             registry.all_of<PredatorComponent>(entity), animal.sex,
                                                             desire.current});
         });
@@ -354,7 +340,9 @@ namespace {
 // порядке (тем же, в котором они перечислены в таблице черт или в самом
 // компоненте). Массив пар, а не объект: у объекта порядок ключей теряется,
 // а читать геном вразнобой — совсем не то же самое, что по таблице.
-nlohmann::json makeGroup(const char* title, std::initializer_list<std::pair<const char*, float>> values) {
+// Значения — целые: мир целочислен (core/Scale.hpp), и панель наблюдения
+// показывает ровно то, чем он живёт, без перевода в доли по дороге.
+nlohmann::json makeGroup(const char* title, std::initializer_list<std::pair<const char*, int>> values) {
     auto pairs = nlohmann::json::array();
     for (const auto& [name, value] : values) {
         auto pair = nlohmann::json::array();
@@ -423,8 +411,8 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                                                  {"health", animal.health},
                                                  {"energy", animal.energy},
                                                  {"water", animal.water},
-                                                 {"protein", static_cast<float>(animal.protein)},
-                                                 {"dung", static_cast<float>(animal.dung)},
+                                                 {"protein", animal.protein},
+                                                 {"dung", animal.dung},
                                                  {"step_progress", animal.stepProgress}}));
             // Голод и жажда не хранятся в мире — они и есть тело, прочитанное
             // с другой стороны (core/Needs.hpp, та же формула, по которой
@@ -466,7 +454,7 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
         auto groups = nlohmann::json::array();
         groups.push_back(makeGroup("Body", {{"age", plant.age},
                                              {"growth", plant.growth},
-                                             {"minerals", static_cast<float>(plant.minerals)},
+                                             {"minerals", plant.minerals},
                                              {"stress", plant.stress}}));
         groups.push_back(makeGenomeGroup(kGrassTraits, genome));
         watched["groups"] = std::move(groups);
@@ -480,7 +468,6 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["type"] = "world_init";
     message["area"]["width"] = layers.width;
     message["area"]["height"] = layers.height;
-    message["scale"] = kMilliScale;
     message["paused"] = paused_.load();
     message["tick"] = world_.registry().get<const TimeComponent>(world_.worldEntity()).tick;
 

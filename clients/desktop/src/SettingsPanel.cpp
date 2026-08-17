@@ -55,32 +55,31 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     ops.unsignedSeedRow("World seed", edited.seed);
 
     ops.section("Terrain shape");
-    // Масштаб рельефа: меньше — крупнее формы. Частоты остальных слоёв
-    // (каменистость, утрамбованность, минералы) — кратные от неё, ядро
-    // считает их само.
-    ops.floatRow("Scale (smaller = bigger shapes)", edited.terrain.noise_frequency, 0.002f, 0.2f);
+    // Размер узора в тайлах: больше — крупнее формы. Масштабы остальных
+    // слоёв (каменистость, минералы) — доли от него, ядро считает их само.
+    ops.intRow("Feature size (tiles)", edited.terrain.feature_size, 5, 500);
     ops.intRow("Octaves (detail layers)", edited.terrain.noise_octaves, 1, 8);
     // Высота высочайшей вершины — в тех же единицах, что глубина воды.
     // Чем больше, тем круче спуск от истока к краю мира; при высоте
     // порядка глубины реки рельефа фактически нет и вода расползается по
     // плоскому.
-    ops.floatRow("Mountain height", edited.terrain.mountain_height, 1.0f, 60.0f);
+    ops.intRow("Mountain height", edited.terrain.mountain_height, 1000, 60000);
     // Насколько высота делает почву твёрдой: горы и подножия —
     // преимущественно камень и слежавшийся грунт. 0 — каменистость сама по
     // себе, от шума; 1 — почти повторяет рельеф.
-    ops.floatRow("Mountains are rocky", edited.terrain.mountain_hardness, 0.0f, 1.0f);
+    ops.intRow("Mountains are rocky (per mille)", edited.terrain.mountain_hardness, 0, 1000);
 
     ops.section("Rivers");
     ops.intRow("Count", edited.terrain.river_count, 0, 20);
-    ops.floatRow("Width (tiles)", edited.terrain.river_width, 1.0f, 12.0f);
-    ops.floatRow("Sinuosity", edited.terrain.river_sinuosity, 0.0f, 1.0f);
-    ops.floatRow("Depth", edited.terrain.river_depth, 0.2f, 5.0f);
+    ops.intRow("Width (tenths of a tile)", edited.terrain.river_width, 10, 120);
+    ops.intRow("Sinuosity (per mille)", edited.terrain.river_sinuosity, 0, 1000);
+    ops.intRow("Depth", edited.terrain.river_depth, 200, 5000);
 
     ops.section("Ponds");
     // Средняя глубина воды пруда — в тех же единицах, что и глубина реки.
     // Где именно быть пруду и какого размера, решает рельеф (Priority-
     // Flood), а не отдельные фильтры по размеру.
-    ops.floatRow("Depth", edited.terrain.pond_depth, 0.0f, 5.0f);
+    ops.intRow("Depth", edited.terrain.pond_depth, 0, 5000);
 
     ops.section("Springs");
     // Сколько "родников" в случайных точках карты — плюс ровно по одному
@@ -92,7 +91,7 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     ops.section("Soil & boulders");
     // Среднее по карте; дальше минералы разносит течение (HydrologySystem)
     // и возвращает в почву перегной.
-    ops.floatRow("Minerals average", edited.terrain.minerals_average, 0.0f, 50.0f);
+    ops.intRow("Minerals average", edited.terrain.minerals_average, 0, 50);
     ops.intRow("Boulder count", edited.boulder_count, 0, 300);
 
     ops.section("Grass seeding");
@@ -103,7 +102,7 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     ops.intRow("Species", edited.plants.grass_species, 3, 12);
     // Стартовая заселённость, а не итоговая: дальше трава расселяется
     // сама и занимает всё, что ей подходит.
-    ops.floatRow("Initial coverage", edited.plants.grass_coverage, 0.0f, 0.4f, 3);
+    ops.intRow("Initial coverage (per mille)", edited.plants.grass_coverage, 0, 400);
 
     ops.section("Herbivores");
     // Число видов — 1..8 (ядро обрежет к этим границам): один вид — вполне
@@ -132,37 +131,37 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // тем выше его поверхность и тем дальше он способен протолкнуть воду по
     // руслу. Скорости течения как настройки больше нет вовсе — вода просто
     // встаёт на один уровень внутри лужи (см. README, "Гидрология").
-    ops.floatRow("Source column depth", edited.terrain.water_source_depth, 0.0f, 10.0f);
+    ops.intRow("Source column depth", edited.terrain.water_source_depth, 0, 10000);
 
     ops.section("Water balance");
-    // Вторая половина баланса воды. Испарение снимает эту глубину с КАЖДОЙ
-    // водной клетки за тик; источники же отдают ровно столько, сколько
-    // унесёт течение, поэтому именно испарение (вместе с провалом за край
-    // мира) и решает, сколько воды карта в итоге держит. Слишком маленькое
-    // испарение = карта, залитая целиком.
-    ops.floatRow("Evaporation (per tick)", edited.terrain.water_evaporation_rate, 0.0f, 0.005f, 5);
+    // Вторая половина баланса воды. Раз во столько тиков КАЖДАЯ водная
+    // клетка теряет одну тысячную глубины; источники же отдают ровно
+    // столько, сколько унесёт течение, поэтому именно испарение (вместе с
+    // провалом за край мира) и решает, сколько воды карта в итоге держит.
+    // Слишком редкое испарение = карта, залитая целиком.
+    ops.intRow("Evaporation: ticks per unit", edited.terrain.water_evaporation_period, 1, 200);
     // Дождь: раз во сколько тиков он начинается и какой глубины каждая
     // капля. Дождь идёт несколько тиков и роняет капли в случайные точки
     // (форма — закон, см. kRainDurationTicks/kRainDropsPerTick), поэтому
     // за раз намокает лишь малая часть карты. Ноль в интервале — дождей в
     // этом мире нет.
     ops.intRow("Rain every (ticks)", edited.terrain.rain_interval_ticks, 0, 2000);
-    ops.floatRow("Rain drop depth", edited.terrain.rain_amount, 0.0f, 0.3f, 4);
+    ops.intRow("Rain drop depth", edited.terrain.rain_amount, 0, 300);
 
     ops.section("Erosion");
     // Доля перенесённой воды, превращающаяся в вымытую породу. Порода не
     // исчезает: ровно столько же оседает там, куда пришла вода.
-    ops.floatRow("Erosion rate", edited.terrain.soil_erosion_rate, 0.0f, 0.5f);
+    ops.intRow("Erosion rate (per mille)", edited.terrain.soil_erosion_rate, 0, 500);
     // Потолок выемки относительно соседа — без него клетка под источником
     // размывается без остановки в бездонную яму.
-    ops.floatRow("Max scour depth", edited.terrain.max_erosion_depth, 0.0f, 3.0f);
+    ops.intRow("Max scour depth", edited.terrain.max_erosion_depth, 0, 3000);
 
     ops.section("Plant life");
     // Мутация — доля вложения черты, а не доля значения гена (у всех черт
     // вложение живёт в одном диапазоне, поэтому настройка одна на весь
     // геном).
-    ops.floatRow("Mutation rate", edited.plants.mutation_rate, 0.0f, 0.3f, 3);
-    // Сколько крупиц минералов перегной возвращает в почву за тик.
+    ops.intRow("Mutation rate (per mille)", edited.plants.mutation_rate, 0, 300);
+    // Раз во сколько тиков перегной возвращает в почву одну крупицу.
     ops.intRow("Humus: ticks per grain", edited.plants.humus_decay_period, 1, 1000);
 
     ops.section("Animal life");
@@ -170,7 +169,7 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // считается по таблицам черт животных, и настраивать их вместе значило
     // бы связать два независимых мира одним ползунком. Одна на обе диеты —
     // это скорость наследственных изменений в мире, а не свойство диеты.
-    ops.floatRow("Mutation rate", edited.animals.mutation_rate, 0.0f, 0.3f, 3);
+    ops.intRow("Mutation rate (per mille)", edited.animals.mutation_rate, 0, 300);
 }
 
 // Только считает высоту, ничего не рисует — используется до
@@ -180,10 +179,6 @@ struct MeasureOps {
 
     void group(const char*) { height += kGroupHeight + kSectionGap; }
     void section(const char*) { height += kRowHeight + kSectionGap; }
-    void floatRow(const char*, float&, float, float, int precision = 4) {
-        (void)precision;
-        height += kRowHeight;
-    }
     void intRow(const char*, int&, int, int) { height += kRowHeight; }
     void unsignedSeedRow(const char*, unsigned&) { height += kRowHeight; }
     // Строка размера выше остальных на два ползунка, когда размер
@@ -218,16 +213,12 @@ struct DrawOps {
         y += kRowHeight + kSectionGap;
     }
 
-    // precision — знаков после запятой в подписи; по умолчанию 4 хватает
-    // почти всем параметрам, но у совсем маленьких (например,
-    // water_evaporation_rate, доли тысячной) %.4f показал бы "0.0000" —
-    // неотличимо от нуля.
-    void floatRow(const char* label, float& value, float lo, float hi, int precision = 4) {
-        GuiLabel(Rectangle{x, y, rowWidth, 18}, TextFormat("%s: %.*f", label, precision, value));
-        GuiSliderBar(Rectangle{x, y + 20, rowWidth, kRowHeight - 24}, nullptr, nullptr, &value, lo, hi);
-        y += kRowHeight;
-    }
-
+    // Дробной строки (floatRow) здесь больше нет: в панели генерации не
+    // осталось ни одного дробного параметра — мир целочислен, и настройки
+    // у него целые (core/Scale.hpp). Вместе с ней ушла и подпись с
+    // точностью в знаках после запятой, которую приходилось задавать
+    // отдельно каждому "слишком мелкому" параметру вроде испарения, иначе
+    // ползунок показывал бы "0.0000" — неотличимо от нуля.
     void intRow(const char* label, int& value, int lo, int hi) {
         float f = static_cast<float>(value);
         GuiLabel(Rectangle{x, y, rowWidth, 18}, TextFormat("%s: %d", label, value));

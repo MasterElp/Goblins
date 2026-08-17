@@ -53,35 +53,42 @@ inline constexpr int kMaxAreaSide = 512;
 // дна русла, испарение, сток за край карты, пороги), живут константами
 // рядом с местом использования в core и не тянутся через конфигурацию,
 // сеть и файл сохранения ради того, чтобы никогда не быть изменёнными.
+// Все числа целые — как и всё состояние мира (core/Scale.hpp). Доли
+// (каменистость гор, извилистость) — в тысячных, высоты и глубины — в
+// тысячных единицы глубины, ширина реки — в десятых долях тайла. Дробных
+// ползунков в панели генерации больше нет ни одного.
 struct TerrainConfig {
-    // Масштаб рельефа. Частоты остальных слоёв шума (каменистость,
-    // утрамбованность, минералы) — фиксированные кратные от неё, см.
-    // core::TerrainParams::noiseFrequency.
-    float noise_frequency = 0.02f;
+    // Размер узора рельефа в тайлах: во сколько тайлов укладывается одна
+    // крупная форма. Масштабы остальных слоёв шума (каменистость,
+    // минералы) — фиксированные доли от него, см.
+    // core::TerrainParams::featureSize.
+    int feature_size = 50;
     int noise_octaves = 4;
 
-    // Высота высочайшей вершины мира — в тех же единицах, что глубина воды.
-    // См. core::TerrainParams::mountainHeight.
-    float mountain_height = 16.0f;
+    // Высота высочайшей вершины мира — в тех же единицах, что глубина воды
+    // (тысячные, см. core::TerrainParams::mountainHeight).
+    int mountain_height = 16000;
 
-    // Насколько высота рельефа делает почву твёрдой: горы и их подножия —
-    // преимущественно камень и слежавшийся грунт. Связь именно такая, а не
-    // обратная ("камень поднимает рельеф", как было раньше) — см.
+    // Насколько высота рельефа делает почву каменистой (в тысячных): горы
+    // и их подножия сложены камнем. Связь именно такая, а не обратная
+    // ("камень поднимает рельеф", как было раньше) — см.
     // core::TerrainParams::mountainHardness.
-    float mountain_hardness = 0.6f;
+    int mountain_hardness = 600;
 
     int river_count = 3;
-    float river_width = 3.0f;
-    float river_sinuosity = 0.5f;
-    float river_depth = 0.9f;
+    // В десятых долях тайла: 30 — это три тайла.
+    int river_width = 30;
+    // В тысячных: 0 — прямая линия, 1000 — максимальный меандр.
+    int river_sinuosity = 500;
+    int river_depth = 900;
 
     // Средняя глубина воды пруда — в тех же единицах, что и river_depth
     // (глубина тайла, не множитель).
-    float pond_depth = 0.9f;
+    int pond_depth = 900;
 
     // Минералы (SoilComponent.minerals): среднее по карте значение при
-    // генерации — см. core::TerrainParams::mineralsAverage.
-    float minerals_average = 10.0f;
+    // генерации. Крупицы счётные, шкалы у них нет.
+    int minerals_average = 10;
 
     // Источники воды (WaterSourceComponent): сколько "родников" в
     // случайных точках карты (плюс автоматически — ровно один на исток
@@ -91,24 +98,25 @@ struct TerrainConfig {
     // ни вытекло, поэтому мир заливает не глубина столба, а число
     // источников.
     int water_source_count = 3;
-    float water_source_depth = 1.0f;
+    int water_source_depth = 1000;
 
-    // Отток воды и дожди — вторая половина баланса воды, см.
-    // core::TerrainParams::waterEvaporationRate.
-    float water_evaporation_rate = 0.0002f;
+    // Отток воды и дожди — вторая половина баланса воды. Испарение задано
+    // сроком: раз во сколько тиков вода теряет тысячную глубины (см.
+    // core::TerrainParams::waterEvaporationPeriod).
+    int water_evaporation_period = 5;
     int rain_interval_ticks = 400;
-    float rain_amount = 0.05f;
+    int rain_amount = 50;
 
-    // Эрозия: скорость вымывания породы потоком и потолок выемки
-    // относительно соседа — тоже свойства мира, см.
+    // Эрозия: скорость вымывания породы потоком (в тысячных долях) и
+    // потолок выемки относительно соседа — тоже свойства мира, см.
     // core::TerrainParams::soilErosionRate/maxErosionDepth.
-    float soil_erosion_rate = 0.05f;
-    float max_erosion_depth = 0.5f;
+    int soil_erosion_rate = 50;
+    int max_erosion_depth = 500;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, noise_frequency, noise_octaves, mountain_height,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, feature_size, noise_octaves, mountain_height,
                                     mountain_hardness, river_count, river_width, river_sinuosity, river_depth, pond_depth,
                                     minerals_average, water_source_count, water_source_depth,
-                                    water_evaporation_rate, rain_interval_ticks, rain_amount,
+                                    water_evaporation_period, rain_interval_ticks, rain_amount,
                                     soil_erosion_rate, max_erosion_depth)
 
 // Зеркало core::PlantParams (core/generation/PlantParams.hpp) — по той же
@@ -125,12 +133,14 @@ struct PlantConfig {
     // Какая доля клеток засевается при генерации. Дальше трава
     // расселяется сама (PlantSystem), поэтому это стартовая
     // заселённость, а не итоговая.
-    float grass_coverage = 0.06f;
+    // В тысячных долях карты: 60 — это прежние 6%.
+    int grass_coverage = 60;
 
     // Свойства мира (core::WorldPropertiesComponent), как и
     // water_flow_rate у террейна: выбираются при генерации, во время
     // симуляции PlantSystem их только читает.
-    float mutation_rate = 0.06f;
+    // В тысячных долях вложения черты: 60 — это прежние 6%.
+    int mutation_rate = 60;
 
     // Раз во сколько тиков перегной возвращает в почву одну крупицу
     // минералов — срок, а не дробная скорость (см.
@@ -162,8 +172,8 @@ struct AnimalConfig {
     // Свойство мира (core::WorldPropertiesComponent): выбирается при
     // генерации, во время симуляции AnimalSystem его только читает. Одно на
     // всех животных — это скорость наследственных изменений в этом мире, а
-    // не свойство диеты.
-    float mutation_rate = 0.06f;
+    // не свойство диеты. В тысячных долях вложения черты, как и у растений.
+    int mutation_rate = 60;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AnimalConfig, herbivore_species, predator_species,
                                     herbivore_count, predator_count, mutation_rate)

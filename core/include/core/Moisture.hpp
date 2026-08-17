@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Scale.hpp"
+
 namespace goblins {
 
 // Влажность почвы — ОДИН закон мира на генерацию и на симуляцию.
@@ -25,24 +27,31 @@ namespace goblins {
 // Во сколько тайлов влияние воды спадает примерно вдвое.
 constexpr float kMoistureFalloff = 8.0f;
 
-// Насколько вода поднимает влажность вплотную к себе.
-constexpr float kWaterMoistureBoost = 0.7f;
+// Насколько вода поднимает влажность вплотную к себе (в тысячных).
+constexpr int kWaterMoistureBoost = 700;
 
 // Фоновая влажность земли вдали от любой воды: почва не превращается в
 // пустыню просто потому, что до реки далеко.
-constexpr float kBackgroundMoisture = 0.5f;
+constexpr int kBackgroundMoisture = 500;
 
 // Насколько каменистость снижает влажность — камень хуже держит влагу.
-constexpr float kRockMoistureReduction = 0.3f;
+constexpr int kRockMoistureReduction = 300;
 
-// Равновесная влажность тайла: фон плюс близость воды, ослабленные
-// каменистостью. distanceToWater — в тайлах (8-связный BFS от воды),
-// отрицательное значение означает "воды на карте нет вовсе".
-inline float moistureTarget(int distanceToWater, float rockiness) {
+// Равновесная влажность тайла (0..kFull): фон плюс близость воды,
+// ослабленные каменистостью. distanceToWater — в тайлах (8-связный BFS от
+// воды), отрицательное значение означает "воды на карте нет вовсе".
+//
+// Экспонента остаётся дробной: это способ посчитать, а не хранимая
+// величина мира, и результат тут же становится целым. Целых чисел мир
+// требует от своего СОСТОЯНИЯ (core/Scale.hpp), а не от арифметики,
+// которой оно выводится.
+inline int moistureTarget(int distanceToWater, int rockiness) {
     const float proximity =
         distanceToWater >= 0 ? std::exp(-static_cast<float>(distanceToWater) / kMoistureFalloff) : 0.0f;
-    const float supply = std::clamp(kBackgroundMoisture + proximity * kWaterMoistureBoost, 0.0f, 1.0f);
-    return std::clamp(supply * (1.0f - rockiness * kRockMoistureReduction), 0.0f, 1.0f);
+    const int supply =
+        std::clamp(kBackgroundMoisture + static_cast<int>(proximity * kWaterMoistureBoost), 0, kFull);
+    return std::clamp(supply - supply * std::clamp(rockiness, 0, kFull) * kRockMoistureReduction / (kFull * kFull), 0,
+                      kFull);
 }
 
 } // namespace goblins

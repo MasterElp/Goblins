@@ -7,7 +7,7 @@ namespace goblins {
 // каждом тайле стоит ровно один такой Entity — терраформирующий слой,
 // сгенерированный один раз при инициализации мира.
 //
-// moisture/rockiness нормализованы в [0, 1]:
+// moisture/rockiness — доли в тысячных, 0..kFull (core/Scale.hpp):
 // - moisture   — влажность (выше рядом с водой);
 // - rockiness  — каменистость: сколько в клетке камня, а не земли.
 //
@@ -30,8 +30,8 @@ namespace goblins {
 // HydrologySystem, где минералы двигаются между соседними тайлами по
 // правилу игры в песочную кучу).
 struct SoilComponent {
-    float moisture = 0.0f;
-    float rockiness = 0.0f;
+    int moisture = 0;
+    int rockiness = 0;
     int minerals = 0;
 };
 

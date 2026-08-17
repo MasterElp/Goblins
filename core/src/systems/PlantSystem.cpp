@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Humus.hpp"
+#include "core/Scale.hpp"
 #include "core/components/HumusComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
@@ -30,7 +31,7 @@ constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 // добыча минералов умножаются на размер (от kMinSizeShare у проростка до
 // 1 у взрослого). Без этого проросток конкурировал бы за воду наравне со
 // взрослой травой и почти никогда не приживался бы на занятом лугу.
-constexpr float kMinSizeShare = 0.3f;
+constexpr int kMinSizeShare = 300;
 
 // Насколько взрослое растение сушит свою клетку за тик.
 // SoilComponent.moisture — не запас воды, а состояние почвы, которое
@@ -39,35 +40,35 @@ constexpr float kMinSizeShare = 0.3f;
 // способна кормить бесконечно: куст растёт, пока подсыхание не сравнялось
 // с тем, что возвращает вода. Не бесплатный полив, а конкуренция —
 // с рекой, а через неё и с соседями.
-constexpr float kSoilDrying = 0.004f;
+constexpr int kSoilDrying = 4;
 
 // Стресс. Ниже kVitalityFloor (доля от идеального роста) растение
 // начинает страдать тем быстрее, чем хуже дела; при полном нуле
 // (например, чужая почва) умирает примерно за 1/kStressGain тиков.
 // Восстановление медленнее накопления: пережитая засуха не забывается
 // мгновенно.
-constexpr float kVitalityFloor = 0.5f;
-constexpr float kStressGain = 0.01f;
-constexpr float kStressRelief = 0.004f;
+constexpr int kVitalityFloor = 500;
+constexpr int kStressGain = 10;
+constexpr int kStressRelief = 4;
 // Затопление — отдельная, куда более быстрая смерть: трава на воде не
 // растёт (не "плохо растёт"), и разлившаяся река выкашивает луг за
 // десяток тиков, а не за сотню.
-constexpr float kDrownStress = 0.1f;
+constexpr int kDrownStress = 100;
 
 // Размножение. Семя может дать только достаточно выросшее и не бедствующее
 // растение, и каждое семя стоит родителю части роста, крупицы минералов и
 // доли запаса влаги — именно эта цена, а не отдельный "лимит потомков",
 // не даёт траве залить мир за десяток тиков: после каждого семени
 // растению нужно заново отрастить потраченное.
-constexpr float kSeedMinGrowth = 0.5f;
-constexpr float kSeedMaxStress = 0.4f;
+constexpr int kSeedMinGrowth = 500;
+constexpr int kSeedMaxStress = 400;
 // Цена семени в биомассе — заметно больше, чем "чуть-чуть": она должна
 // сбрасывать растение НИЖЕ порога kSeedMinGrowth, иначе высеваться можно
 // подряд каждый тик и скорость роста ни на что не влияет. С такой ценой
 // частота потомства упирается ещё и в growthRate (нужно отрастить
 // потраченное), то есть плодовитость приходится покупать дважды.
-constexpr float kSeedGrowthCost = 0.45f;
-constexpr float kSeedlingGrowth = 0.02f;
+constexpr int kSeedGrowthCost = 450;
+constexpr int kSeedlingGrowth = 20;
 
 // Куда семя ложиться не станет: клетка суше, чем нужно потомку, чтобы
 // расти хотя бы вполсилы. Один порог вместо двух прежних (пригодность
@@ -75,7 +76,7 @@ constexpr float kSeedlingGrowth = 0.02f;
 // гарантия выживания, только отказ от заведомо мёртвых мест. Тот же
 // порог использует и первичное расселение (kSeedingMinSupply в
 // GrassSeeding.cpp).
-constexpr float kSeedMinSupply = 0.5f;
+constexpr int kSeedMinSupply = 500;
 
 // Семя, оставленное в своей же клетке (когда ронять потомка некуда),
 // лежит не вечно: сперва спит положенный геному срок
@@ -87,7 +88,7 @@ constexpr float kSeedMinSupply = 0.5f;
 // соразмерна жизни травы (сотни тиков): семя переживает родителя, но не
 // несколько поколений подряд — семенной банк в мире есть, вечного
 // семенного банка нет.
-constexpr float kSeedWaitTicks = 400.0f;
+constexpr int kSeedWaitTicks = 400;
 
 // Намерение посеять: собирается при обходе растений, исполняется после
 // него. Отдельный шаг нужен потому, что на одну свободную клетку могут
@@ -119,7 +120,9 @@ void PlantSystem(World& world, CommandQueue& commands) {
 
     auto& registry = world.registry();
     const auto& worldProperties = registry.get<const WorldPropertiesComponent>(world.worldEntity());
-    const float mutationRate = worldProperties.plantMutationRate;
+    // Настройка мира целая (тысячные доли вложения), а расклад бюджета
+    // черт дробный: перевод один раз здесь, на границе (core/Scale.hpp).
+    const float mutationRate = static_cast<float>(worldProperties.plantMutationRate) / kFull;
     const int humusDecayPeriod = std::max(1, worldProperties.humusDecayPeriod);
     const auto plantSeed = static_cast<std::uint64_t>(worldProperties.plantRandomSeed);
     const std::uint64_t tick = registry.get<const TimeComponent>(world.worldEntity()).tick;
@@ -134,7 +137,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
     // Глубина воды, а не флаг "вода есть": переносимая глубина у каждого
     // вида своя (PlantGenomeComponent::waterTolerance), поэтому решение
     // "тонет или нет" принимается для каждого растения отдельно, ниже.
-    std::vector<float> waterAt(cellCount, 0.0f);
+    std::vector<int> waterAt(cellCount, 0);
     std::vector<unsigned char> occupied(cellCount, 0);
     // Почва СОСЕДНИХ клеток — именно снимком, снятым до того, как хоть
     // одно растение начало пить и есть. Растение правит почву только своей
@@ -198,7 +201,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         }
         auto& soil = registry.get<SoilComponent>(terrain[i]);
 
-        const float size = kMinSizeShare + (1.0f - kMinSizeShare) * plant.growth;
+        const int size = kMinSizeShare + (kFull - kMinSizeShare) * plant.growth / kFull;
         // Тонет растение или нет, решает не факт наличия воды, а её
         // глубина против переносимой этим геномом (water_tolerance).
         // Мокрая земля и мелкая лужа после дождя росту не мешают вовсе;
@@ -215,59 +218,63 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // Запаса влаги в теле тоже нет — растение пьёт из клетки прямо
         // сейчас, а не живёт накопленным. Засуху переживает не тот, у кого
         // больше запас, а тот, кому изначально нужно меньше.
-        const float supply = genome.moistureNeed > 0.0f
-                                 ? std::clamp(soil.moisture / genome.moistureNeed, 0.0f, 1.0f)
-                                 : 1.0f;
+        const int supply =
+            genome.moistureNeed > 0 ? std::min(kFull, soil.moisture * kFull / genome.moistureNeed) : kFull;
 
         // Растущее растение сушит свою клетку — отсюда и предел, сколько
         // травы клетка способна кормить бесконечно: HydrologySystem тянет
         // влажность обратно к цели, и куст встаёт там, где эти две
         // скорости сравнялись.
-        soil.moisture = std::clamp(soil.moisture - kSoilDrying * size, 0.0f, 1.0f);
+        soil.moisture = std::clamp(soil.moisture - kSoilDrying * size / kFull, 0, kFull);
 
         // Минералы: крупица уходит из почвы в растение тогда, когда рост в
         // неё упёрся. Больше mineralNeed растение не запасает — иначе одна
         // старая трава высосала бы всю клетку и вернула бы туда перегноем
         // гораздо больше, чем ей когда-либо было нужно.
-        const int mineralCap = std::max(1, static_cast<int>(std::ceil(genome.mineralNeed)));
+        const int mineralCap = std::max(1, genome.mineralNeed);
 
         // Рост: скорость * обеспеченность влагой, но не выше того, что
         // позволяют накопленные минералы. Потолок никогда не уменьшает уже
         // достигнутый размер — отданная семени крупица минералов не должна
         // заставлять взрослое растение съёжиться.
-        const float vitality = drowning ? 0.0f : supply;
-        const float wanted = plant.growth + genome.growthRate * vitality;
+        //
+        // Скорость роста дробна по существу (скорость генома, ослабленная
+        // влагой), поэтому неделящийся остаток остаётся в growthProgress —
+        // целым, а не дробью. Без него растение при малой обеспеченности
+        // не росло бы вовсе: целое деление отбросило бы весь прирост.
+        const int vitality = drowning ? 0 : supply;
+        plant.growthProgress += genome.growthRate * vitality;
+        const int wanted = std::min(kFull, plant.growth + plant.growthProgress / kFull);
+        plant.growthProgress %= kFull;
+
         // Сколько крупиц нужно, чтобы дорасти до желаемого. Пока их нет в
         // почве, растение просто не растёт — и ждёт, а не выгребает клетку
         // про запас: минералы туда ещё принесёт течение или перегной.
         const int wantedMinerals =
-            genome.mineralNeed > 0.0f
-                ? std::min(mineralCap, static_cast<int>(std::ceil(wanted * genome.mineralNeed)))
-                : 0;
+            genome.mineralNeed > 0 ? std::min(mineralCap, (wanted * genome.mineralNeed + kFull - 1) / kFull) : 0;
         while (plant.minerals < wantedMinerals && soil.minerals > 0) {
             --soil.minerals;
             ++plant.minerals;
         }
 
-        const float mineralCeiling =
-            genome.mineralNeed > 0.0f ? static_cast<float>(plant.minerals) / genome.mineralNeed : 1.0f;
-        const float ceiling = std::min(1.0f, std::max(plant.growth, mineralCeiling));
-        plant.growth = std::clamp(wanted, 0.0f, ceiling);
+        const int mineralCeiling = genome.mineralNeed > 0 ? plant.minerals * kFull / genome.mineralNeed : kFull;
+        const int ceiling = std::min(kFull, std::max(plant.growth, mineralCeiling));
+        plant.growth = std::clamp(wanted, 0, ceiling);
 
         if (drowning) {
             plant.stress += kDrownStress;
         } else if (vitality < kVitalityFloor) {
-            plant.stress += kStressGain * (1.0f - vitality / kVitalityFloor);
+            plant.stress += kStressGain * (kVitalityFloor - vitality) / kVitalityFloor;
         } else {
-            plant.stress = std::max(0.0f, plant.stress - kStressRelief);
+            plant.stress = std::max(0, plant.stress - kStressRelief);
         }
 
-        plant.age += 1.0f;
+        plant.age += 1;
 
         // Смерть от старости или от условий. Entity исчезает не сейчас, а
         // при разрешении очереди команд (05_Entity.md, п.5) — до конца
         // тика клетка считается занятой, и никто не посеет туда семя.
-        if (plant.age >= genome.maxAge || plant.stress >= 1.0f) {
+        if (plant.age >= genome.maxAge || plant.stress >= kFull) {
             commands.enqueue([entity, x = position.x, y = position.y](World& w) {
                 if (!w.registry().valid(entity)) {
                     return;
@@ -303,7 +310,11 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // идентификатор Entity, потому что при загрузке мира
         // идентификаторы выдаются заново, а координаты — те же.
         std::uint64_t random = mixSeed(plantSeed, mixSeed(tick, static_cast<std::uint64_t>(i)));
-        if (randomUnit(random) >= genome.seedChance * plant.growth) {
+        // Шанс — тысячные за тик, ослабленные развитостью: недоросшее
+        // растение сеет реже. Бросок целый (randomBelow), поэтому и
+        // сравнивать есть с чем без всякого перевода в доли.
+        if (static_cast<int>(randomBelow(random, static_cast<std::uint64_t>(kFull) * kFull)) >=
+            genome.seedChance * plant.growth) {
             continue;
         }
 
@@ -323,9 +334,9 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // сторону подходящей почвы, но не превращается в ровный
         // наступающий фронт.
         std::size_t candidates[8];
-        float weights[8];
+        int weights[8];
         int candidateCount = 0;
-        float totalWeight = 0.0f;
+        int totalWeight = 0;
         for (int dir = 0; dir < 8; ++dir) {
             const int nx = position.x + kDx8[dir];
             const int ny = position.y + kDy8[dir];
@@ -351,9 +362,8 @@ void PlantSystem(World& world, CommandQueue& commands) {
             // Отдельной функции пригодности почвы больше нет, и порогов
             // при ней тоже: клетка суше, чем нужно потомку в половину
             // силы, — не место для семени.
-            const float targetSupply = child.moistureNeed > 0.0f
-                                           ? std::clamp(targetSoil.moisture / child.moistureNeed, 0.0f, 1.0f)
-                                           : 1.0f;
+            const int targetSupply =
+                child.moistureNeed > 0 ? std::min(kFull, targetSoil.moisture * kFull / child.moistureNeed) : kFull;
             if (targetSupply < kSeedMinSupply) {
                 continue;
             }
@@ -371,7 +381,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // заросшем лугу свободных клеток нет вовсе, и без семян
         // освободившуюся клетку занимал бы только тот, кто случайно
         // окажется рядом в нужный тик.
-        if (candidateCount == 0 || totalWeight <= 0.0f) {
+        if (candidateCount == 0 || totalWeight <= 0) {
             if (seeded[i] != 0) {
                 continue; // одна клетка — одно семя; бросок пропал впустую, но и цена не уплачена
             }
@@ -379,7 +389,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
 
             // Цена та же, что и у семени, брошенного в соседнюю клетку:
             // семя есть семя, и растению всё равно, куда оно упало.
-            plant.growth = std::max(0.0f, plant.growth - kSeedGrowthCost);
+            plant.growth = std::max(0, plant.growth - kSeedGrowthCost);
             --plant.minerals;
 
             SeedComponent seed;
@@ -394,11 +404,11 @@ void PlantSystem(World& world, CommandQueue& commands) {
             continue;
         }
 
-        float roll = randomUnit(random) * totalWeight;
+        int roll = static_cast<int>(randomBelow(random, static_cast<std::uint64_t>(totalWeight)));
         int picked = candidateCount - 1;
         for (int c = 0; c < candidateCount; ++c) {
             roll -= weights[c];
-            if (roll <= 0.0f) {
+            if (roll < 0) {
                 picked = c;
                 break;
             }
@@ -436,7 +446,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
 
         // Цена семени для родителя.
         auto& parent = registry.get<PlantComponent>(intent.parent);
-        parent.growth = std::max(0.0f, parent.growth - kSeedGrowthCost);
+        parent.growth = std::max(0, parent.growth - kSeedGrowthCost);
         --parent.minerals;
 
         PlantComponent seedling;
@@ -492,7 +502,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         }
         const std::size_t i = index(position.x, position.y);
 
-        seed.age += 1.0f;
+        seed.age += 1;
 
         // Не дождалось. Крупица минералов уходит в перегной той же
         // клетки — туда же, куда её вернуло бы и проросшее из этого семени

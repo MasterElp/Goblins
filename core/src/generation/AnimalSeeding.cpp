@@ -4,6 +4,7 @@
 #include <cmath>
 #include <span>
 
+#include "core/Scale.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
@@ -27,7 +28,7 @@ namespace {
 // собственной ёмкости. Не полный (мир не должен выглядеть подарком) и не
 // пустой (иначе первые же тики выкосили бы поголовье до того, как оно
 // найдёт воду).
-constexpr float kInitialReserveShare = 0.6f;
+constexpr int kInitialReserveShare = 600;
 
 // Ограничение попыток, как в BoulderScatter и GrassSeeding: на карте, где
 // почти всё — вода и камень, случайный поиск свободной клетки не должен
@@ -123,7 +124,7 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
         const AnimalGenomeComponent genome = mutateGenome(
             traits, archetype, archetype, mutationRate, mixSeed(state, static_cast<std::uint64_t>(placed)));
 
-        if (!foodInSight<Food>(world, x, y, static_cast<int>(std::lround(genome.perception)))) {
+        if (!foodInSight<Food>(world, x, y, genome.perception)) {
             continue;
         }
 
@@ -132,14 +133,15 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
         // случайный в пределах до первой половины жизни, размер — тот, до
         // которого животное успело бы дорасти к этому возрасту. Иначе оно
         // взрослело, размножалось и умирало синхронными волнами.
-        animal.age = randomUnit(state) * genome.maxAge * 0.5f;
-        animal.sex = randomUnit(state) < 0.5f ? Sex::Female : Sex::Male;
-        animal.energy = genome.energyCapacity * kInitialReserveShare;
-        animal.water = genome.waterCapacity * kInitialReserveShare;
+        animal.age =
+            static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maxAge / 2))));
+        animal.sex = randomBelow(state, 2) == 0 ? Sex::Female : Sex::Male;
+        animal.energy = genome.energyCapacity * kInitialReserveShare / kFull;
+        animal.water = genome.waterCapacity * kInitialReserveShare / kFull;
 
-        const float grownTo =
-            genome.maturityAge > 0.0f ? std::clamp(animal.age / genome.maturityAge, 0.0f, 1.0f) : 1.0f;
-        const int wanted = static_cast<int>(std::ceil(grownTo * genome.proteinNeed));
+        const int grownTo =
+            genome.maturityAge > 0 ? std::min(kFull, animal.age * kFull / genome.maturityAge) : kFull;
+        const int wanted = (grownTo * genome.proteinNeed + kFull - 1) / kFull;
         // Белок первого поголовья — не из воздуха: ровно столько, сколько
         // есть в клетке, и ровно столько же вернётся в мир падалью.
         //
@@ -154,8 +156,8 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
         }
         animal.protein = std::max(0, wanted);
         soil.minerals -= animal.protein;
-        animal.growth = genome.proteinNeed > 0.0f
-                             ? std::min(grownTo, static_cast<float>(animal.protein) / genome.proteinNeed)
+        animal.growth = genome.proteinNeed > 0
+                             ? std::min(grownTo, animal.protein * kFull / genome.proteinNeed)
                              : grownTo;
 
         // Желания в момент рождения мира — те, что следуют из тела: сытое
@@ -192,6 +194,9 @@ void seedAnimals(World& world, const AnimalParams& params, unsigned seed) {
     // тиками (05_Entity.md, п.3).
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.animalMutationRate = params.mutationRate;
+    // Как и у травы: целая настройка мира — дробная доля для раскладов
+    // бюджета (core/Scale.hpp).
+    const float mutationRate = static_cast<float>(params.mutationRate) / kFull;
     worldProperties.animalRandomSeed = seed;
 
     // --- Виды: архетипы на World Entity (см. AnimalSpeciesComponent) ---
@@ -205,16 +210,16 @@ void seedAnimals(World& world, const AnimalParams& params, unsigned seed) {
     // кого охотиться, — значит добыча к этому моменту должна стоять на
     // карте. Та же причина, по которой сам этот этап идёт после травы.
     releaseAnimals<HerbivoreComponent, PlantComponent>(world, speciesComponent.herbivores, herbivoreTraits(),
-                                                        params.herbivoreCount, params.mutationRate, state);
+                                                        params.herbivoreCount, mutationRate, state);
     releaseAnimals<PredatorComponent, HerbivoreComponent>(world, speciesComponent.predators, predatorTraits(),
-                                                           params.predatorCount, params.mutationRate, state);
+                                                           params.predatorCount, mutationRate, state);
 }
 
 
 // Константы этой стадии — наружу только для чтения (core/Diagnostics.hpp).
 void appendAnimalSeedingConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* g = "Animal seeding";
-    out.push_back({g, "kInitialReserveShare", kInitialReserveShare});
+    out.push_back({g, "kInitialReserveShare", static_cast<float>(kInitialReserveShare)});
     out.push_back({g, "kAttemptMultiplier", static_cast<float>(kAttemptMultiplier)});
 }
 

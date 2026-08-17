@@ -40,8 +40,13 @@ namespace goblins::genetics {
 // не лучше другого, оно лишь определяет, ГДЕ виду хорошо.
 //
 // Требование к типу Genome: поле `int species` (индекс архетипа) и
-// float-поля, на которые ссылаются черты. Больше механика о существе
-// ничего не знает — ни что оно ест, ни как размножается.
+// int-поля, на которые ссылаются черты. Больше механика о существе ничего
+// не знает — ни что оно ест, ни как размножается.
+//
+// Гены целые, как и всё остальное состояние мира (core/Scale.hpp), а
+// расклад бюджета внутри этого файла остаётся дробным — он не состояние, а
+// способ вывести значения генов один раз при рождении. Дробное становится
+// целым ровно на границе: в genomeOf, при записи в геном.
 
 template <typename Genome>
 struct Trait {
@@ -49,11 +54,11 @@ struct Trait {
     // клиенту (server/WorldSave.cpp, server/NetworkServer.cpp).
     const char* name;
     // Поле генома, которым эта черта является.
-    float Genome::* gene;
+    int Genome::* gene;
     // Значение гена при нулевом и при полном вложении. Порядок задаёт
     // направление: atZero всегда "хуже для существа", atOne — "лучше".
-    float atZero;
-    float atOne;
+    int atZero;
+    int atOne;
     // Цена единицы вложения. 0 — черта бесплатна (выбор ниши, а не
     // преимущество) и в бюджете не участвует.
     float weight;
@@ -143,11 +148,11 @@ void fitToBudget(std::span<const Trait<Genome>> traits, Allocation& allocation) 
 
 template <typename Genome>
 float advantageOf(const Genome& genome, const Trait<Genome>& trait) {
-    const float span = trait.atOne - trait.atZero;
-    if (span == 0.0f) {
+    const int span = trait.atOne - trait.atZero;
+    if (span == 0) {
         return 0.0f;
     }
-    return std::clamp((genome.*trait.gene - trait.atZero) / span, 0.0f, 1.0f);
+    return std::clamp(static_cast<float>(genome.*trait.gene - trait.atZero) / static_cast<float>(span), 0.0f, 1.0f);
 }
 
 // Насколько два вида различаются: средняя разница вложений по всем чертам,
@@ -175,12 +180,18 @@ Allocation allocationOf(std::span<const Trait<Genome>> traits, const Genome& gen
 
 // Геном по раскладу бюджета. species не выставляется — его знает
 // вызывающая сторона.
+//
+// Здесь и только здесь дробный расклад становится целыми генами. Округляем
+// к ближайшему, а не отбрасываем дробную часть: отбрасывание всегда
+// сдвигало бы вид в сторону atZero, то есть в сторону "хуже", и тем
+// сильнее, чем мельче шкала черты.
 template <typename Genome>
 Genome genomeOf(std::span<const Trait<Genome>> traits, const Allocation& allocation) {
     Genome genome;
     for (std::size_t t = 0; t < traits.size(); ++t) {
         const auto& trait = traits[t];
-        genome.*trait.gene = trait.atZero + (trait.atOne - trait.atZero) * allocation[t];
+        const float span = static_cast<float>(trait.atOne - trait.atZero);
+        genome.*trait.gene = trait.atZero + static_cast<int>(std::lround(span * allocation[t]));
     }
     return genome;
 }

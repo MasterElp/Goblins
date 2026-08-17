@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "core/Moisture.hpp"
+#include "core/Random.hpp"
+#include "core/Scale.hpp"
 #include "core/components/HeightComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -33,9 +35,9 @@ constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 // Влажность: цель — общая с генерацией функция moistureTarget
 // (core/Moisture.hpp), одна на весь проект. Здесь она не применяется
 // разом, а служит целью, к которой влажность движется по
-// kMoistureAdaptRate за тик: вода передвинулась — почва подсыхает или
+// сотой доле разницы за тик: вода передвинулась — почва подсыхает или
 // увлажняется постепенно, а не мгновенно.
-constexpr float kMoistureAdaptRate = 0.01f;
+constexpr int kMoistureAdaptDivisor = 100;
 
 // Утрамбованности в почве больше нет, и размягчать её у воды больше
 // некому. Она жила ради одного потребителя — пригодности почвы для
@@ -52,7 +54,11 @@ constexpr float kMoistureAdaptRate = 0.01f;
 // куском больше верхнего порога за один тик, отсюда резкая граница
 // "глубоко / сухо" вместо мелководья. Теряется теперь только то, что ниже
 // самого порога, — меньше, чем испаряется за 25 тиков.
-constexpr float kWaterMinDepth = 0.001f;
+// На целой шкале (core/Scale.hpp) самая мелкая различимая глубина — одна
+// тысячная, она же единица. Отдельного порога "ниже этого воды нет" больше
+// не нужно: ноль и есть отсутствие воды, а меньше единицы не бывает. Всё,
+// что прежний порог 0.001 объяснял про потери на кромке, целая шкала
+// решает тем, что терять там нечего.
 
 // Сколько клеток в "луже" — сама клетка и восемь соседей. Делить сумму
 // правок надо именно на это ПОСТОЯННОЕ число, а не на то, во скольких
@@ -62,6 +68,11 @@ constexpr float kWaterMinDepth = 0.001f;
 // вода не появляется и не исчезает на кромке водоёма, где число групп у
 // клеток разное.
 constexpr int kPoolCells = 9;
+
+// "Соседа с известным дном не нашлось". Прежде эту роль играла
+// бесконечность float; на целой шкале её место занимает заведомо
+// недостижимая высота — выше любой горы, какую можно заказать генерации.
+constexpr int kNoNeighborBed = 1 << 30;
 
 // Сколько воды почва удерживает у себя и НЕ отдаёт течению — плёнка,
 // смачивающая грунт. Течёт только то, что выше этой глубины.
@@ -76,7 +87,7 @@ constexpr int kPoolCells = 9;
 //
 // Величина заведомо мала по сравнению с руслом (глубина реки — единицы),
 // поэтому на само течение рек и прудов не влияет.
-constexpr float kWaterRetention = 0.02f;
+constexpr int kWaterRetention = 20;
 
 // Край карты — обрыв в пустоту (kVoidHeight из HeightComponent.hpp,
 // docs/01_Cosmology.md): Область висит в космосе островом, и за её границей
@@ -92,7 +103,7 @@ constexpr float kWaterRetention = 0.02f;
 // "вымываться" в его сторону — SoilComponent.moisture нормализована в
 // [0, 1], поэтому 0.5 здесь и есть те "50" из исходного запроса на
 // минералы.
-constexpr float kMineralMoistureThreshold = 0.5f;
+constexpr int kMineralMoistureThreshold = 500;
 
 // Минералы: выравнивание с единственным соседом за тик, а не раздача
 // всем сразу. Клетка A ищет среди соседей, которые "притягивают" минералы
@@ -137,12 +148,12 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // Свойства мира, выбранные один раз при генерации — System только
     // читает, никогда не пишет (06_GameLoop.md, п.1a).
     const auto& worldProperties = world.registry().get<const WorldPropertiesComponent>(world.worldEntity());
-    const float waterSourceDepth = worldProperties.waterSourceDepth;
-    const float waterEvaporationRate = worldProperties.waterEvaporationRate;
+    const int waterSourceDepth = worldProperties.waterSourceDepth;
+    const int waterEvaporationPeriod = std::max(1, worldProperties.waterEvaporationPeriod);
     const int rainIntervalTicks = worldProperties.rainIntervalTicks;
-    const float rainAmount = worldProperties.rainAmount;
-    const float soilErosionRate = worldProperties.soilErosionRate;
-    const float maxErosionDepth = worldProperties.maxErosionDepth;
+    const int rainAmount = worldProperties.rainAmount;
+    const int soilErosionRate = worldProperties.soilErosionRate;
+    const int maxErosionDepth = worldProperties.maxErosionDepth;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -152,14 +163,19 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // entt.hpp — поэтому конвертируем в entt::entity явно, заранее.
     const entt::entity kNullEntity = entt::null;
     std::vector<entt::entity> entities(cellCount, kNullEntity);
-    std::vector<float> moisture(cellCount, 0.0f);
-    std::vector<float> rockiness(cellCount, 0.0f);
+    std::vector<int> moisture(cellCount, 0);
+    std::vector<int> rockiness(cellCount, 0);
     std::vector<int> minerals(cellCount, 0);
-    std::vector<float> terrainHeight(cellCount, 0.0f);
-    std::vector<float> waterDepth(cellCount, 0.0f);
+    std::vector<int> terrainHeight(cellCount, 0);
+    std::vector<int> waterDepth(cellCount, 0);
+    // Неделящийся остаток разлива прошлого тика (см. WaterComponent).
+    std::vector<int> flowRemainder(cellCount, 0);
     std::vector<bool> isWaterSource(cellCount, false);
 
     auto& registry = world.registry();
+    // Номер тика нужен и испарению (5b), и дождю: оба заданы сроком, а не
+    // скоростью, и оба спрашивают у мира, который сейчас тик.
+    const std::uint64_t tick = registry.get<const TimeComponent>(world.worldEntity()).tick;
     auto view = registry.view<PositionComponent, SoilComponent, HeightComponent>();
     for (const auto entity : view) {
         const auto& position = view.get<PositionComponent>(entity);
@@ -178,6 +194,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
 
         if (const auto* water = registry.try_get<WaterComponent>(entity)) {
             waterDepth[i] = water->depth;
+            flowRemainder[i] = water->flowRemainder;
         }
         isWaterSource[i] = registry.all_of<WaterSourceComponent>(entity);
     }
@@ -187,7 +204,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     std::vector<int> distanceToWater(cellCount, -1);
     std::queue<int> bfs;
     for (std::size_t i = 0; i < cellCount; ++i) {
-        if (waterDepth[i] > 0.0f) {
+        if (waterDepth[i] > 0) {
             distanceToWater[i] = 0;
             bfs.push(static_cast<int>(i));
         }
@@ -212,14 +229,22 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     }
 
     // --- 3. Влажность: релаксация к цели ---
-    std::vector<float> nextMoisture(moisture);
+    // Шаг целый и не меньше единицы в нужную сторону: доля от разницы
+    // (сотая, как было) на целой шкале почти всегда давала бы ноль, и
+    // влажность встала бы, не дойдя до цели. "Не меньше тысячной за тик" —
+    // то же самое движение, только выраженное в наличных единицах.
+    std::vector<int> nextMoisture(moisture);
     for (std::size_t i = 0; i < cellCount; ++i) {
         if (entities[i] == entt::null) {
             continue;
         }
 
-        const float target = moistureTarget(distanceToWater[i], rockiness[i]);
-        nextMoisture[i] = moisture[i] + (target - moisture[i]) * kMoistureAdaptRate;
+        const int target = moistureTarget(distanceToWater[i], rockiness[i]);
+        const int gap = target - moisture[i];
+        if (gap != 0) {
+            const int step = gap / kMoistureAdaptDivisor;
+            nextMoisture[i] = moisture[i] + (step != 0 ? step : (gap > 0 ? 1 : -1));
+        }
     }
 
     // --- 5. Течение: вода в "луже" встаёт на один уровень.
@@ -246,34 +271,38 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // это усреднение по перекрывающимся группам гасит рябь, из-за которой
     // прежний вариант с выбором одного соседа приходилось чинить в три
     // прохода. ---
-    std::vector<float> nextWaterDepth(waterDepth);
-    std::vector<float> nextTerrainHeight(terrainHeight);
+    std::vector<int> nextWaterDepth(waterDepth);
+    std::vector<int> nextTerrainHeight(terrainHeight);
 
     // Сумма правок глубины по всем группам, куда попала клетка (делится на
     // kPoolCells ниже), и самое низкое ЧУЖОЕ дно среди них — потолок для
     // размыва и осаждения в 5.1.
-    std::vector<float> depthDelta(cellCount, 0.0f);
-    std::vector<float> lowestNeighborBed(cellCount, std::numeric_limits<float>::infinity());
+    //
+    // Сумма 64-битная: до девяти групп по глубине в тысячных на карте, где
+    // глубина бывает в десятки тысяч, — 32 бит хватило бы, но с запасом
+    // спокойнее, а стоит он ничего.
+    std::vector<long long> depthDelta(cellCount, 0);
+    std::vector<int> lowestNeighborBed(cellCount, kNoNeighborBed);
 
     // Буферы одной группы: сама клетка плюс до восьми соседей.
     int poolCell[kPoolCells];
-    float poolBed[kPoolCells];
-    float poolMobile[kPoolCells];
+    int poolBed[kPoolCells];
+    int poolMobile[kPoolCells];
     int poolOrder[kPoolCells];
 
     for (std::size_t i = 0; i < cellCount; ++i) {
         // Течёт только вода выше удерживаемой почвой плёнки
         // (kWaterRetention): её "дном" для разлива служит верх этой плёнки,
         // сама она остаётся на месте.
-        if (waterDepth[i] - kWaterRetention <= 0.0f) {
+        if (waterDepth[i] - kWaterRetention <= 0) {
             continue;
         }
         const int x = static_cast<int>(i) % width;
         const int y = static_cast<int>(i) / width;
-        const float surface = terrainHeight[i] + waterDepth[i];
+        const int surface = terrainHeight[i] + waterDepth[i];
 
         auto addMember = [&](std::size_t k, int& count) {
-            const float held = std::min(waterDepth[k], kWaterRetention);
+            const int held = std::min(waterDepth[k], kWaterRetention);
             poolCell[count] = static_cast<int>(k);
             poolBed[count] = terrainHeight[k] + held;
             poolMobile[count] = waterDepth[k] - held;
@@ -289,7 +318,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
                 continue;
             }
             const std::size_t ni = index(nx, ny);
-            if (waterDepth[ni] <= 0.0f && terrainHeight[ni] >= surface) {
+            if (waterDepth[ni] <= 0 && terrainHeight[ni] >= surface) {
                 continue; // сухо и выше нашего уровня — воде туда не подняться
             }
             addMember(ni, members);
@@ -305,7 +334,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         // вверх — как только пробный уровень не достаёт до следующего по
         // высоте дна, он и есть ответ (эта клетка и все выше неё остаются
         // сухими).
-        float volume = 0.0f;
+        long long volume = 0;
         for (int n = 0; n < members; ++n) {
             volume += poolMobile[n];
             poolOrder[n] = n;
@@ -320,19 +349,37 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             poolOrder[b + 1] = key;
         }
 
-        float level = poolBed[poolOrder[0]];
-        float bedSum = 0.0f;
+        // Уровень целый — та же тысячная доля глубины, что и всё
+        // остальное. Округление вниз оставляет неразлитый остаток в группе,
+        // и он достаётся тем клеткам, чьё дно ниже: доливаем по единице
+        // снизу вверх, пока остаток не кончится. Так вода и сохраняется
+        // точно, и ложится туда, куда легла бы дробная.
+        long long level = poolBed[poolOrder[0]];
+        long long bedSum = 0;
+        int flooded = members;
         for (int k = 0; k < members; ++k) {
             bedSum += poolBed[poolOrder[k]];
-            const float candidate = (volume + bedSum) / static_cast<float>(k + 1);
+            const long long candidate = (volume + bedSum) / (k + 1);
             if (k + 1 == members || candidate <= poolBed[poolOrder[k + 1]]) {
                 level = candidate;
+                flooded = k + 1;
                 break;
             }
         }
 
+        long long spread = 0;
         for (int n = 0; n < members; ++n) {
-            const float target = std::max(0.0f, level - poolBed[n]);
+            spread += std::max<long long>(0, level - poolBed[n]);
+        }
+        long long leftover = volume - spread;
+
+        for (int k = 0; k < members; ++k) {
+            const int n = poolOrder[k];
+            long long target = std::max<long long>(0, level - poolBed[n]);
+            if (leftover > 0 && k < flooded) {
+                ++target;
+                --leftover;
+            }
             depthDelta[static_cast<std::size_t>(poolCell[n])] += target - poolMobile[n];
         }
     }
@@ -349,18 +396,33 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     //     оседает нанос.
     // Сколько за тик суммарно вымыло, столько же и раздаётся по
     // углублениям.
-    float totalEroded = 0.0f;
-    std::vector<float> depositCapacity(cellCount, 0.0f);
-    float totalCapacity = 0.0f;
+    long long totalEroded = 0;
+    std::vector<int> depositCapacity(cellCount, 0);
+    long long totalCapacity = 0;
+    std::vector<int> nextFlowRemainder(cellCount, 0);
 
     for (std::size_t i = 0; i < cellCount; ++i) {
-        const float delta = depthDelta[i] / static_cast<float>(kPoolCells);
-        if (delta == 0.0f) {
+        // Деление на постоянное kPoolCells в целых числах теряло бы до
+        // восьми тысячных глубины на клетке каждый тик — вчетверо больше,
+        // чем испаряется. Поэтому делим ВМЕСТЕ с остатком, оставшимся с
+        // прошлого тика, а новый остаток кладём обратно: сумма правок по
+        // карте равна нулю по построению, и с перенесённым остатком она
+        // остаётся нулевой и после деления. Деление с округлением вниз (а
+        // не к нулю) — чтобы отдающая клетка не выигрывала у принимающей.
+        const long long total = depthDelta[i] + flowRemainder[i];
+        long long delta = total / kPoolCells;
+        long long remainder = total - delta * kPoolCells;
+        if (remainder < 0) {
+            --delta;
+            remainder += kPoolCells;
+        }
+        nextFlowRemainder[i] = static_cast<int>(remainder);
+        if (delta == 0) {
             continue;
         }
-        nextWaterDepth[i] += delta;
+        nextWaterDepth[i] += static_cast<int>(delta);
 
-        if (delta >= 0.0f || std::isinf(lowestNeighborBed[i])) {
+        if (delta >= 0 || lowestNeighborBed[i] == kNoNeighborBed) {
             continue; // приняла воду (или не с кем было делиться) — не размываем
         }
         // Размываем только там, где вода идёт НЕ по готовому руслу: если
@@ -375,7 +437,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         // здесь больше нет — её самой больше нет в почве, — и склон горы
         // держится одной каменистостью, как и сказано в
         // docs/01_Cosmology.md, п.2.
-        const float softness = 1.0f - rockiness[i];
+        const int softness = kFull - rockiness[i];
 
         // Потолок выемки. Без него клетка под постоянным источником
         // размывается каждый тик без остановки — высота уезжает в минус, и
@@ -384,11 +446,14 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         // которым клетка делится водой. Считаем от снимка (terrainHeight),
         // а не от накопителя, чтобы результат не зависел от порядка обхода
         // клеток — как и всё остальное в этом шаге.
-        const float erosionFloor = lowestNeighborBed[i] - maxErosionDepth;
-        const float allowedErosion = std::max(0.0f, terrainHeight[i] - erosionFloor);
-        const float erosion = std::min(-delta * soilErosionRate * softness, allowedErosion);
+        const int erosionFloor = lowestNeighborBed[i] - maxErosionDepth;
+        const long long allowedErosion = std::max(0, terrainHeight[i] - erosionFloor);
+        // Скорость размыва и мягкость — обе в тысячных долях, поэтому
+        // делить приходится дважды.
+        const long long erosion =
+            std::min(-delta * soilErosionRate * softness / (static_cast<long long>(kFull) * kFull), allowedErosion);
 
-        nextTerrainHeight[i] -= erosion;
+        nextTerrainHeight[i] -= static_cast<int>(erosion);
         totalEroded += erosion;
     }
 
@@ -397,23 +462,24 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // ступеньку вровень", и ни крупицей выше. Нанос не может создать новый
     // бугор, а значит и новую рябь.
     for (std::size_t j = 0; j < cellCount; ++j) {
-        if (entities[j] == entt::null || depthDelta[j] <= 0.0f || std::isinf(lowestNeighborBed[j])) {
+        if (entities[j] == entt::null || depthDelta[j] <= 0 || lowestNeighborBed[j] == kNoNeighborBed) {
             continue;
         }
-        const float capacity = std::max(0.0f, lowestNeighborBed[j] - terrainHeight[j]);
+        const int capacity = std::max(0, lowestNeighborBed[j] - terrainHeight[j]);
         depositCapacity[j] = capacity;
         totalCapacity += capacity;
     }
 
-    if (totalEroded > 0.0f && totalCapacity > 0.0f) {
+    if (totalEroded > 0 && totalCapacity > 0) {
         // Наноса больше, чем углублений, — излишку просто некуда осесть, и
         // он уходит с карты, как вода за край: Область — открытый кусок
         // мира, а не замкнутый сосуд, и требовать от неё точного баланса
         // почвы не за чем (02_CorePrinciples.md, п.12b).
-        const float scale = std::min(1.0f, totalEroded / totalCapacity);
+        const long long eroded = std::min(totalEroded, totalCapacity);
         for (std::size_t j = 0; j < cellCount; ++j) {
-            if (depositCapacity[j] > 0.0f) {
-                nextTerrainHeight[j] += depositCapacity[j] * scale;
+            if (depositCapacity[j] > 0) {
+                nextTerrainHeight[j] +=
+                    static_cast<int>(static_cast<long long>(depositCapacity[j]) * eroded / totalCapacity);
             }
         }
     }
@@ -425,9 +491,14 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     //
     // Вместе они образуют баланс воды: сколько приносят источники и дожди,
     // столько же в равновесии уносят испарение и провал за край (5c ниже). ---
-    for (std::size_t i = 0; i < cellCount; ++i) {
-        if (waterDepth[i] > 0.0f) {
-            nextWaterDepth[i] -= waterEvaporationRate;
+    // Испарение — самая мелкая величина в мире: даже на целой шкале это
+    // одна тысячная глубины за несколько тиков. Поэтому оно задано СРОКОМ:
+    // раз в waterEvaporationPeriod тиков вся вода мира теряет по единице.
+    if (tick % static_cast<std::uint64_t>(waterEvaporationPeriod) == 0) {
+        for (std::size_t i = 0; i < cellCount; ++i) {
+            if (waterDepth[i] > 0) {
+                --nextWaterDepth[i];
+            }
         }
     }
 
@@ -447,8 +518,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // Упавшая капля дальше живёт по общему закону: то, что выше
     // kWaterRetention, стекает по уклону в низины и русла, остальное лежит
     // лужей и испаряется.
-    if (rainIntervalTicks > 0 && rainAmount > 0.0f) {
-        const std::uint64_t tick = registry.get<const TimeComponent>(world.worldEntity()).tick;
+    if (rainIntervalTicks > 0 && rainAmount > 0) {
         const auto period = static_cast<std::uint64_t>(rainIntervalTicks);
         // Если дождь просят чаще, чем он длится, — идёт без перерыва.
         const auto duration = std::min<std::uint64_t>(static_cast<std::uint64_t>(kRainDurationTicks), period);
@@ -456,11 +526,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             const auto worldSeed = static_cast<std::uint64_t>(worldProperties.plantRandomSeed);
             std::uint64_t rainState = mixSeed(worldSeed, mixSeed(tick, kRainSalt));
             for (int drop = 0; drop < kRainDropsPerTick; ++drop) {
-                const float roll = randomUnit(rainState);
-                std::size_t idx = static_cast<std::size_t>(roll * static_cast<float>(cellCount));
-                if (idx >= cellCount) {
-                    idx = cellCount - 1;
-                }
+                const auto idx = static_cast<std::size_t>(randomBelow(rainState, cellCount));
                 if (entities[idx] != entt::null) {
                     nextWaterDepth[idx] += rainAmount;
                 }
@@ -512,7 +578,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
                 continue;
             }
             const std::size_t j = index(nx, ny);
-            const bool neighborAttractsMinerals = waterDepth[j] > 0.0f || moisture[j] > kMineralMoistureThreshold;
+            const bool neighborAttractsMinerals = waterDepth[j] > 0 || moisture[j] > kMineralMoistureThreshold;
             if (!neighborAttractsMinerals || minerals[j] >= bestMinerals) {
                 continue;
             }
@@ -538,27 +604,30 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
 
         auto& soil = registry.get<SoilComponent>(entity);
-        soil.moisture = std::clamp(nextMoisture[i], 0.0f, 1.0f);
+        soil.moisture = std::clamp(nextMoisture[i], 0, kFull);
         soil.minerals = std::max(0, nextMinerals[i]);
         registry.get<HeightComponent>(entity).height = nextTerrainHeight[i];
 
-        const float depth = std::max(0.0f, nextWaterDepth[i]);
-        const bool hadWater = waterDepth[i] > 0.0f;
+        const int depth = std::max(0, nextWaterDepth[i]);
+        const int remainder = nextFlowRemainder[i];
+        const bool hadWater = waterDepth[i] > 0;
 
-        // Один порог на оба направления: вода есть ровно тогда, когда её
-        // глубина выше kWaterMinDepth. Любая натёкшая глубина выше порога
-        // записывается — неважно, была ли на тайле вода раньше (см.
-        // комментарий у самой константы: пара порогов теряла массу на
-        // кромке).
-        if (depth > kWaterMinDepth) {
+        // Вода есть ровно тогда, когда её глубина больше нуля: на целой
+        // шкале порогу "ниже этого воды нет" взяться неоткуда, потому что
+        // меньше единицы глубины не бывает вовсе. Прежняя пара порогов
+        // теряла массу на кромке водоёма, единственный порог 0.001 терял
+        // меньше — а ноль не теряет ничего.
+        if (depth > 0) {
             if (hadWater) {
-                registry.get<WaterComponent>(entity).depth = depth;
+                auto& water = registry.get<WaterComponent>(entity);
+                water.depth = depth;
+                water.flowRemainder = remainder;
             } else {
-                commands.enqueue([entity, depth](World& w) {
+                commands.enqueue([entity, depth, remainder](World& w) {
                     if (!w.registry().valid(entity) || w.registry().all_of<WaterComponent>(entity)) {
                         return;
                     }
-                    w.registry().emplace<WaterComponent>(entity, WaterComponent{depth});
+                    w.registry().emplace<WaterComponent>(entity, WaterComponent{depth, remainder});
                 });
             }
         } else if (hadWater) {
@@ -575,12 +644,11 @@ void HydrologySystem(World& world, CommandQueue& commands) {
 // Константы этой системы — наружу только для чтения (core/Diagnostics.hpp).
 void appendHydrologyConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* g = "Hydrology";
-    out.push_back({g, "kMoistureAdaptRate", kMoistureAdaptRate});
-    out.push_back({g, "kWaterMinDepth", kWaterMinDepth});
-    out.push_back({g, "kWaterRetention", kWaterRetention});
+    out.push_back({g, "kMoistureAdaptDivisor", static_cast<float>(kMoistureAdaptDivisor)});
+    out.push_back({g, "kWaterRetention", static_cast<float>(kWaterRetention)});
     out.push_back({g, "kPoolCells", static_cast<float>(kPoolCells)});
-    out.push_back({g, "kVoidHeight", kVoidHeight});
-    out.push_back({g, "kMineralMoistureThreshold", kMineralMoistureThreshold});
+    out.push_back({g, "kVoidHeight", static_cast<float>(kVoidHeight)});
+    out.push_back({g, "kMineralMoistureThreshold", static_cast<float>(kMineralMoistureThreshold)});
     out.push_back({g, "kMineralSlopeThreshold", static_cast<float>(kMineralSlopeThreshold)});
     out.push_back({g, "kRainDurationTicks", static_cast<float>(kRainDurationTicks)});
     out.push_back({g, "kRainDropsPerTick", static_cast<float>(kRainDropsPerTick)});

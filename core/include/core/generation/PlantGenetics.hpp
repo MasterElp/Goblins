@@ -33,13 +33,15 @@ using PlantTrait = genetics::Trait<PlantGenomeComponent>;
 
 // Трава: первый (и пока единственный) вид растения. Числа подобраны под
 // уже существующий мир, а не сами по себе:
-// - влажность почвы SoilComponent.moisture нормализована в [0, 1] и вдали
-//   от воды стремится к нулю (HydrologySystem), поэтому moistureUptake —
-//   доля от неё, а не абсолютная величина;
+// - влажность почвы SoilComponent.moisture живёт в 0..kFull и вдали от
+//   воды стремится к фоновой (kBackgroundMoisture), поэтому moistureNeed
+//   сравнивается с ней напрямую;
 // - минералы SoilComponent.minerals — счётные крупицы, в среднем около
 //   mineralsAverage (10) на тайл, поэтому mineralNeed измеряется
 //   единицами, а не сотнями: одному растению нужна заметная часть запаса
 //   своей клетки, и вернётся он туда же перегноем;
+// - доли (развитость, влажность, глубина воды) — в тысячных, см.
+//   core/Scale.hpp: 850 в таблице ниже читается как прежние 0.85;
 // - времена (maturityAge/maxAge) — в тиках: при tick_interval_ms=200 это
 //   от одной до нескольких минут жизни, то есть полный цикл
 //   рост -> размножение -> смерть -> перегной виден на глаз.
@@ -60,9 +62,10 @@ inline constexpr PlantTrait kGrassTraits[] = {
     // диапазоне возраста (сотни тиков) созревание всегда наступало позже
     // роста, и growth_rate переставал на что-либо влиять — вид мог купить
     // самый медленный рост без всяких последствий.
-    {"maturity_age", &PlantGenomeComponent::maturityAge, 250.0f, 40.0f, 1.25f},
-    {"max_age", &PlantGenomeComponent::maxAge, 300.0f, 2500.0f, 1.5f},
-    {"growth_rate", &PlantGenomeComponent::growthRate, 0.002f, 0.025f, 1.0f},
+    {"maturity_age", &PlantGenomeComponent::maturityAge, 250, 40, 1.25f},
+    {"max_age", &PlantGenomeComponent::maxAge, 300, 2500, 1.5f},
+    // Тысячных развитости за тик (kFull = взрослое растение).
+    {"growth_rate", &PlantGenomeComponent::growthRate, 2, 25, 1.0f},
     // Влажность, при которой вид растёт в полную силу. Диапазон обрезан по
     // тому, что мир реально предлагает: фон вдали от воды — 0.5
     // (kBackgroundMoisture), вплотную к воде — около единицы, камень
@@ -70,20 +73,20 @@ inline constexpr PlantTrait kGrassTraits[] = {
     // которому хватает 0.3, растёт где угодно, но платит за это бюджетом.
     // Выше 0.85 требовать нельзя — такой вид оказался бы бездомным не по
     // своей вине.
-    {"moisture_need", &PlantGenomeComponent::moistureNeed, 0.85f, 0.3f, 1.25f},
-    {"mineral_need", &PlantGenomeComponent::mineralNeed, 6.0f, 1.0f, 1.0f},
+    {"moisture_need", &PlantGenomeComponent::moistureNeed, 850, 300, 1.25f},
+    {"mineral_need", &PlantGenomeComponent::mineralNeed, 6, 1, 1.0f},
     // Какую глубину воды растение переносит. Верх диапазона — заметно
     // меньше глубины русла: это трава, а не камыш, вид может пережить
     // лужу после дождя, разлив по пойме и подтопленный берег, но не жизнь
     // в реке. Настоящее преимущество (вид переживает то, от чего соседи
     // гибнут), поэтому цена обычная.
-    {"water_tolerance", &PlantGenomeComponent::waterTolerance, 0.02f, 0.4f, 1.0f},
+    {"water_tolerance", &PlantGenomeComponent::waterTolerance, 20, 400, 1.0f},
     // Верх диапазона выбран так, чтобы ожидание удачного броска (десятки
     // тиков) было сравнимо с временем, за которое растение отращивает
     // потраченную на прошлое семя биомассу. Иначе ожидание перекрывает
     // всё остальное, и единственной по-настоящему ценной чертой
     // оказывается сам seed_chance.
-    {"seed_chance", &PlantGenomeComponent::seedChance, 0.004f, 0.05f, 3.0f},
+    {"seed_chance", &PlantGenomeComponent::seedChance, 4, 50, 3.0f},
     // Срок покоя семени, оставленного в своей же клетке, когда ронять
     // потомка некуда. Короткий покой выгоден однозначно: семя раньше
     // начинает следить за клеткой и успевает занять её, как только та
@@ -93,7 +96,7 @@ inline constexpr PlantTrait kGrassTraits[] = {
     // собственной, — тогда как частое семя расселяет вид по всей карте.
     // Диапазон соразмерен окну ожидания (kSeedWaitTicks в PlantSystem):
     // при худшем покое семя почти всё отведённое ему время просто спит.
-    {"seed_dormancy", &PlantGenomeComponent::seedDormancy, 500.0f, 40.0f, 1.0f},
+    {"seed_dormancy", &PlantGenomeComponent::seedDormancy, 500, 40, 1.0f},
 };
 
 // Бесплатных черт (weight = 0) в таблице больше нет: единственной такой

@@ -45,7 +45,7 @@ namespace {
 // core::TerrainParams перед вызовом generateTerrain.
 goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     goblins::TerrainParams params;
-    params.noiseFrequency = config.noise_frequency;
+    params.featureSize = config.feature_size;
     params.noiseOctaves = config.noise_octaves;
     params.mountainHeight = config.mountain_height;
     params.mountainHardness = config.mountain_hardness;
@@ -57,7 +57,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.mineralsAverage = config.minerals_average;
     params.waterSourceCount = config.water_source_count;
     params.waterSourceDepth = config.water_source_depth;
-    params.waterEvaporationRate = config.water_evaporation_rate;
+    params.waterEvaporationPeriod = config.water_evaporation_period;
     params.rainIntervalTicks = config.rain_interval_ticks;
     params.rainAmount = config.rain_amount;
     params.soilErosionRate = config.soil_erosion_rate;

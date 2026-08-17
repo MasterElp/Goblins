@@ -20,6 +20,7 @@
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/Diagnostics.hpp"
+#include "core/Scale.hpp"
 
 namespace goblins {
 
@@ -35,9 +36,9 @@ constexpr float kNoiseLacunarity = 2.0f;
 constexpr float kNoiseGain = 0.5f;
 
 // Частоты остальных слоёв — кратные от единственной настраиваемой
-// (TerrainParams::noiseFrequency). Слоям нужна не независимая настройка, а
+// (TerrainParams::featureSize). Слоям нужна не независимая настройка, а
 // лишь разный масштаб узора, чтобы каменистость не повторяла рельеф один
-// в один. Значения подобраны так, чтобы при noiseFrequency = 0.02
+// в один. Значения подобраны так, чтобы при featureSize = 50
 // получались те же 0.05 и 0.06, что были раздельными параметрами. Третьего
 // слоя (утрамбованность, 0.04) больше нет — вместе с самой утрамбованностью.
 constexpr float kRockFrequencyRatio = 2.5f;
@@ -132,7 +133,7 @@ constexpr float kMergeMarginFraction = 0.15f; // не сливаемся у са
 // Эта константа — только нижняя страховка на вырожденный случай (исток
 // оказался почти на уровне устья): без неё профиль перестал бы строго
 // убывать, и вода встала бы в локальных ямах вместо того, чтобы течь.
-constexpr float kRiverBedSlope = 0.002f;
+constexpr float kRiverBedSlope = 2.0f;
 
 
 // Берег: насколько кромка воды в русле идёт НИЖЕ окрестной земли. Русло
@@ -157,13 +158,13 @@ constexpr float kRiverBedSlope = 0.002f;
 // между соседними клетками потока, иначе запаса не хватает: при единице
 // река местами всё равно переливалась через край там, где рельеф рядом
 // случайно проседал.
-constexpr float kRiverFreeboard = 2.0f;
+constexpr float kRiverFreeboard = 2000.0f;
 
 // Минимальная глубина впадины, чтобы считаться прудом. Порог "это вообще
 // впадина, а не численный шум Priority-Flood", а не настройка вида карты
 // — размер пруда определяет рельеф, а не фильтр по числу тайлов (раньше
 // таких фильтров было два, min/max, и оба стояли на "пропускать всё").
-constexpr float kMinPondDepth = 0.01f;
+constexpr float kMinPondDepth = 10.0f;
 
 // Подстраховки диагностики (GenerationStats), а не поведения "по умолчанию":
 // при нормальных параметрах ни одна не должна срабатывать. Если сработала —
@@ -435,9 +436,13 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
 
     // --- 1. Heightmap + почвенные параметры (fBm, разные seed/частоты) ---
     const auto heightmapStart = Clock::now();
-    auto heightNoise = makeFbmNoise(static_cast<int>(seed), params.noiseFrequency, params);
-    auto rockNoise = makeFbmNoise(static_cast<int>(seed) + 1, params.noiseFrequency * kRockFrequencyRatio, params);
-    auto mineralsNoise = makeFbmNoise(static_cast<int>(seed) + 4, params.noiseFrequency * kMineralsFrequencyRatio, params);
+    // Размер узора — в тайлах, шуму нужна обратная величина. Перевод один
+    // раз здесь, на входе в генерацию: дальше внутри неё всё дробное, как
+    // и положено способу посчитать (core/Scale.hpp).
+    const float noiseFrequency = 1.0f / static_cast<float>(std::max(1, params.featureSize));
+    auto heightNoise = makeFbmNoise(static_cast<int>(seed), noiseFrequency, params);
+    auto rockNoise = makeFbmNoise(static_cast<int>(seed) + 1, noiseFrequency * kRockFrequencyRatio, params);
+    auto mineralsNoise = makeFbmNoise(static_cast<int>(seed) + 4, noiseFrequency * kMineralsFrequencyRatio, params);
 
     std::vector<float> elevation(cellCount);
     std::vector<float> rockiness(cellCount);
@@ -463,7 +468,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             // краю мира становится настоящим спуском.
             const float heightNoise01 = normalize01(heightNoise.GetNoise(fx, fy));
             const float relief = std::pow(heightNoise01, kMountainSharpness);
-            elevation[i] = relief * params.mountainHeight;
+            elevation[i] = relief * static_cast<float>(params.mountainHeight);
 
             // Горы и их подножия сложены камнем: чем выше рельеф, тем
             // сильнее собственный шум каменистости подтягивается к самой
@@ -472,7 +477,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             // именно relief (доля от вершины, 0..1), а не сама высота:
             // каменистость нормализована, и абсолютная высота просто
             // упёрла бы её в единицу по всей карте.
-            const float lift = std::clamp(params.mountainHardness, 0.0f, 1.0f);
+            const float lift = static_cast<float>(std::clamp(params.mountainHardness, 0, kFull)) / kFull;
             rockiness[i] = rockiness[i] * (1.0f - lift) + relief * lift;
         }
     }
@@ -531,7 +536,8 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // кроме явных точек слияния.
     const auto riverStageStart = Clock::now();
     std::mt19937 riverRng(seed + 10);
-    const float riverBaseHalfWidth = std::max(0.5f, params.riverWidth * 0.5f);
+    // Ширина приходит в десятых долях тайла (см. TerrainParams::riverWidth).
+    const float riverBaseHalfWidth = std::max(0.5f, static_cast<float>(params.riverWidth) * 0.05f);
     std::vector<River> acceptedRivers;
     std::vector<int> riverOwner(cellCount, -1);
     stats.riversRequested = std::max(0, params.riverCount);
@@ -571,7 +577,8 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const int depthSeed = static_cast<int>(riverRng());
 
             const auto waypoints =
-                buildMeanderPath(p0, p1, params.riverSinuosity, wander, pathSeed, elevation, width, height);
+                buildMeanderPath(p0, p1, static_cast<float>(params.riverSinuosity) / kFull, wander, pathSeed,
+                                  elevation, width, height);
             bool pathCapped = false;
             auto samples =
                 buildPathSamples(waypoints, width, height, riverBaseHalfWidth, widthSeed, depthSeed, pathCapped);
@@ -699,14 +706,14 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
                 std::min(elevation[centerIdx] - kRiverFreeboard, riverSurface[centerIdx]);
             const float descended = s == 0 ? ceiling : std::min(ceiling, surfaceProfile[s - 1] - perSample);
             // Ниже края мира река не опускается: там уже пустота.
-            surfaceProfile[s] = std::max(descended, kVoidHeight);
+            surfaceProfile[s] = std::max(descended, static_cast<float>(kVoidHeight));
         }
         for (const auto& [idx, cell] : river.footprint) {
             const std::size_t i = static_cast<std::size_t>(idx);
             const float surface = surfaceProfile[static_cast<std::size_t>(cell.sampleIndex)];
             // Глубина у берега стремится к нулю, в середине — к
             // params.riverDepth: это форма ДНА под ровной поверхностью.
-            const float depth = params.riverDepth * cell.falloff * cell.depthMul;
+            const float depth = static_cast<float>(params.riverDepth) * cell.falloff * cell.depthMul;
             elevation[i] = std::min(elevation[i], surface - depth);
             riverSurface[i] = std::min(riverSurface[i], surface);
         }
@@ -888,7 +895,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     }
     for (std::size_t i = 0; i < cellCount; ++i) {
         if (isWaterSource[i]) {
-            waterDepth[i] = std::max(waterDepth[i], params.waterSourceDepth);
+            waterDepth[i] = std::max(waterDepth[i], static_cast<float>(params.waterSourceDepth));
             ++stats.waterSourcesPlaced;
         }
     }
@@ -957,7 +964,8 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
         for (int x = 0; x < width; ++x) {
             const std::size_t i = index(x, y);
 
-            const float moisture = moistureTarget(distanceToWater[i], rockiness[i]);
+            const int soilRockiness = std::clamp(static_cast<int>(std::lround(rockiness[i] * kFull)), 0, kFull);
+            const int moisture = moistureTarget(distanceToWater[i], soilRockiness);
 
             // Минералы: шум, в среднем дающий params.mineralsAverage
             // (noise01 в среднем ~0.5, поэтому *2*mineralsAverage сходится
@@ -968,12 +976,17 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             const float mineralsNoise01 = normalize01(mineralsNoise.GetNoise(static_cast<float>(x), static_cast<float>(y)));
             const int minerals =
                 std::max(0, static_cast<int>(std::lround(mineralsNoise01 * params.mineralsAverage * 2.0f)));
-
+            // Дробные слои генерации становятся целым состоянием мира
+            // ровно здесь, на записи в компонент: внутри самой генерации
+            // считать дробями и удобно, и правильно — это способ получить
+            // мир, а не сам мир (core/Scale.hpp).
             const auto entity = world.registry().create();
-            world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, rockiness[i], minerals});
-            world.registry().emplace<HeightComponent>(entity, HeightComponent{elevation[i]});
-            if (waterDepth[i] > 0.0f) {
-                world.registry().emplace<WaterComponent>(entity, WaterComponent{waterDepth[i]});
+            world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, soilRockiness, minerals});
+            world.registry().emplace<HeightComponent>(
+                entity, HeightComponent{static_cast<int>(std::lround(elevation[i]))});
+            const int depth = static_cast<int>(std::lround(waterDepth[i]));
+            if (depth > 0) {
+                world.registry().emplace<WaterComponent>(entity, WaterComponent{depth, 0});
             }
             if (isWaterSource[i]) {
                 world.registry().emplace<WaterSourceComponent>(entity);
@@ -990,7 +1003,7 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
     // просто перезаписываются выбором этой генерации.
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.waterSourceDepth = params.waterSourceDepth;
-    worldProperties.waterEvaporationRate = params.waterEvaporationRate;
+    worldProperties.waterEvaporationPeriod = params.waterEvaporationPeriod;
     worldProperties.rainIntervalTicks = params.rainIntervalTicks;
     worldProperties.rainAmount = params.rainAmount;
     worldProperties.soilErosionRate = params.soilErosionRate;

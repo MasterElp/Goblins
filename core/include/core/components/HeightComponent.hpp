@@ -9,7 +9,9 @@ namespace goblins {
 // блуждание (02_CorePrinciples.md, п.15: система вычисляет следующее
 // состояние, а не имитирует желаемый результат).
 struct HeightComponent {
-    float height = 0.0f;
+    // В тысячных прежней единицы (kDepthUnit, core/Scale.hpp): гора
+    // высотой 16 — это 16000.
+    int height = 0;
 };
 
 // Высота края мира. Область висит островом в пустоте
@@ -22,6 +24,6 @@ struct HeightComponent {
 // Значение общее для генерации (TerrainGenerator.cpp) и симуляции
 // (HydrologySystem.cpp), поэтому живёт рядом с самим понятием высоты, а не
 // продублировано в обеих.
-inline constexpr float kVoidHeight = 0.0f;
+inline constexpr int kVoidHeight = 0;
 
 } // namespace goblins

@@ -79,7 +79,8 @@ inline Desire desireFromName(const std::string& name) {
 // Остаётся то, что хранить обязано: mating (в теле его не прочитать) и
 // current (у желания есть инерция).
 struct DesireComponent {
-    float mating = 0.0f;
+    // Желание пары, 0..kFull (core/Scale.hpp).
+    int mating = 0;
     Desire current = Desire::Idle;
 };
 

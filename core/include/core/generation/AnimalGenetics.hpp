@@ -48,8 +48,8 @@ inline constexpr AnimalTrait kHerbivoreTraits[] = {
     // Возраст взросления: он же срок, за который детёныш дорастает до
     // взрослого размера. Раньше повзрослел — раньше начал приносить
     // потомство и перестал быть беззащитно мелким.
-    {"maturity_age", &AnimalGenomeComponent::maturityAge, 3000.0f, 900.0f, 1.25f},
-    {"max_age", &AnimalGenomeComponent::maxAge, 3000.0f, 20000.0f, 1.5f},
+    {"maturity_age", &AnimalGenomeComponent::maturityAge, 3000, 900, 1.25f},
+    {"max_age", &AnimalGenomeComponent::maxAge, 3000, 20000, 1.5f},
     // Клеток за тик. Быстрый первым доходит до корма, до воды и до пары и
     // быстрее убегает от зубов — но и энергии на шаги тратит больше
     // (kStepEnergy в AnimalSystem), поэтому скорость платится дважды:
@@ -62,7 +62,7 @@ inline constexpr AnimalTrait kHerbivoreTraits[] = {
     // медленнее любого хищника. Теперь быстрое травоядное убегает от
     // медленного хищника, и кто кого — вопрос того, во что каждый из них
     // вложил свой бюджет.
-    {"speed", &AnimalGenomeComponent::speed, 0.2f, 1.15f, 1.0f},
+    {"speed", &AnimalGenomeComponent::speed, 200, 1150, 1.0f},
     // Дальность восприятия в клетках: ею животное и корм ищет, и хищника
     // замечает. Диапазон намеренно выше хищничьего: бдительность добычи —
     // главная её защита. Кто заметил первым, тот и получает фору, а фора
@@ -70,16 +70,15 @@ inline constexpr AnimalTrait kHerbivoreTraits[] = {
     // охота не срывалась бы, и добыча кончилась бы в мире совсем. Верх —
     // всё равно заметно меньше Области: даже самое зоркое травоядное видит
     // свой угол карты, а не весь мир.
-    {"perception", &AnimalGenomeComponent::perception, 4.0f, 20.0f, 1.0f},
-    {"energy_capacity", &AnimalGenomeComponent::energyCapacity, 20.0f, 140.0f, 0.75f},
-    {"energy_upkeep", &AnimalGenomeComponent::energyUpkeep, 0.30f, 0.03f, 1.25f},
-    {"bite_size", &AnimalGenomeComponent::biteSize, 0.05f, 0.45f, 0.75f},
-    {"digestion", &AnimalGenomeComponent::digestion, 0.30f, 1.0f, 1.0f},
-    {"water_capacity", &AnimalGenomeComponent::waterCapacity, 8.0f, 70.0f, 0.75f},
-    {"water_upkeep", &AnimalGenomeComponent::waterUpkeep, 0.25f, 0.02f, 1.0f},
+    {"perception", &AnimalGenomeComponent::perception, 4, 20, 1.0f},
+    {"energy_capacity", &AnimalGenomeComponent::energyCapacity, 20000, 140000, 0.75f},
+    {"energy_upkeep", &AnimalGenomeComponent::energyUpkeep, 300, 30, 1.25f},
+    {"bite_size", &AnimalGenomeComponent::biteSize, 50, 450, 0.75f},
+    {"water_capacity", &AnimalGenomeComponent::waterCapacity, 8000, 70000, 0.75f},
+    {"water_upkeep", &AnimalGenomeComponent::waterUpkeep, 250, 20, 1.0f},
     // Сколько крупиц нужно на полный рост: чем меньше, тем дешевле
     // обходится собственное тело и тем быстрее детёныш становится взрослым.
-    {"protein_need", &AnimalGenomeComponent::proteinNeed, 9.0f, 2.0f, 1.0f},
+    {"protein_need", &AnimalGenomeComponent::proteinNeed, 9, 2, 1.0f},
     // Насколько быстро копится желание пары у сытого взрослого. Как и
     // seed_chance у травы — самая дорогая черта в таблице.
     //
@@ -91,7 +90,7 @@ inline constexpr AnimalTrait kHerbivoreTraits[] = {
     // миров без хищников всё равно обрушивается им, см. 09_Animals.md,
     // п.16) — он стал реже и позже. Дальше числами тут ничего не купишь:
     // не хватает явлений, а не коэффициентов.
-    {"breeding_urge", &AnimalGenomeComponent::breedingUrge, 0.001f, 0.01f, 3.0f},
+    {"breeding_urge", &AnimalGenomeComponent::breedingUrge, 1, 10, 3.0f},
 };
 
 // --- Хищники ---
@@ -107,6 +106,12 @@ inline constexpr AnimalTrait kHerbivoreTraits[] = {
 //   меньше, чем добычи, и это следует не из отдельного ограничения, а из
 //   того, что их размножение дороже и медленнее.
 //
+// Пищеварения (digestion) нет ни в одной из таблиц: какая доля откушенного
+// становится энергией, теперь одна на всех (kEnergyPerBiomass в
+// AnimalSystem). Это был невидимый множитель — узнать его в мире было
+// нельзя ничем, кроме скорости насыщения, — а бюджет он забирал наравне со
+// скоростью и зоркостью.
+//
 // attack — единственная черта, которой нет у травоядных. Она дорогая:
 // зубы, которыми валят добычу с одного-двух ударов, — самое сильное
 // преимущество хищника, и купить их вместе со скоростью и зоркостью
@@ -119,8 +124,8 @@ inline constexpr AnimalTrait kPredatorTraits[] = {
     // стороны плодились одинаково быстро, хищники за несколько тысяч тиков
     // разрастались вшестеро, выедали стадо под ноль и вымирали сами — и
     // так в каждом прогоне.
-    {"maturity_age", &AnimalGenomeComponent::maturityAge, 4500.0f, 1200.0f, 1.25f},
-    {"max_age", &AnimalGenomeComponent::maxAge, 4000.0f, 25000.0f, 1.5f},
+    {"maturity_age", &AnimalGenomeComponent::maturityAge, 4500, 1200, 1.25f},
+    {"max_age", &AnimalGenomeComponent::maxAge, 4000, 25000, 1.5f},
     // Нижний конец диапазона скорости — выше, чем у травоядных ВЕРХНЯЯ
     // середина, и это не поблажка хищнику, а условие того, чтобы охота
     // вообще существовала. Черта покупается бюджетом, то есть у какого-то
@@ -131,11 +136,11 @@ inline constexpr AnimalTrait kPredatorTraits[] = {
     // 0.5 вымирали за первую тысячу тиков, ни разу никого не догнав.
     // Разница внутри диапазона решает, кто быстрее гоняется, а не кто
     // вообще способен.
-    {"speed", &AnimalGenomeComponent::speed, 0.9f, 1.8f, 1.25f},
+    {"speed", &AnimalGenomeComponent::speed, 900, 1800, 1.25f},
     // Зоркость хищника — ниже, чем у добычи (см. там же). Низ диапазона
     // всё же не совсем мал: хищнику мало видеть добычу, ему надо ещё и
     // находить оставленную падаль, а её на карте считанные штуки.
-    {"perception", &AnimalGenomeComponent::perception, 4.0f, 14.0f, 1.0f},
+    {"perception", &AnimalGenomeComponent::perception, 4, 14, 1.0f},
     // Запас энергии у хищника не просто "больше, чем у травоядного" — он
     // должен вмещать добычу целиком (kMeatPerSize в AnimalSystem). Иначе
     // получается ловушка: хищник наедается с трети туши, бросает остальное,
@@ -143,22 +148,21 @@ inline constexpr AnimalTrait kPredatorTraits[] = {
     // и вымирали первые поколения хищников — не от бескормицы, а от
     // маленького желудка. Наесться впрок и потом долго голодать — не
     // роскошь, а способ жить на редкой добыче.
-    {"energy_capacity", &AnimalGenomeComponent::energyCapacity, 130.0f, 450.0f, 0.75f},
-    {"energy_upkeep", &AnimalGenomeComponent::energyUpkeep, 0.35f, 0.03f, 1.25f},
+    {"energy_capacity", &AnimalGenomeComponent::energyCapacity, 130000, 450000, 0.75f},
+    {"energy_upkeep", &AnimalGenomeComponent::energyUpkeep, 350, 30, 1.25f},
     // Сколько мяса хищник съедает за тик. Дешёвая черта: она решает лишь,
     // как долго он сидит у туши, а не сколько всего съест.
-    {"bite_size", &AnimalGenomeComponent::biteSize, 0.1f, 0.8f, 0.5f},
-    {"digestion", &AnimalGenomeComponent::digestion, 0.4f, 1.0f, 0.75f},
-    {"water_capacity", &AnimalGenomeComponent::waterCapacity, 10.0f, 80.0f, 0.5f},
-    {"water_upkeep", &AnimalGenomeComponent::waterUpkeep, 0.25f, 0.02f, 0.75f},
-    {"protein_need", &AnimalGenomeComponent::proteinNeed, 12.0f, 3.0f, 1.0f},
+    {"bite_size", &AnimalGenomeComponent::biteSize, 100, 800, 0.5f},
+    {"water_capacity", &AnimalGenomeComponent::waterCapacity, 10000, 80000, 0.5f},
+    {"water_upkeep", &AnimalGenomeComponent::waterUpkeep, 250, 20, 0.75f},
+    {"protein_need", &AnimalGenomeComponent::proteinNeed, 12, 3, 1.0f},
     // Позыв к размножению — втрое ниже, чем у добычи (см. maturity_age
     // выше о том, почему медленный отклик хищника обязателен). Слишком
     // низким его тоже нельзя: двум зверям на всю Область надо ещё и
     // встретиться, и при совсем редкой готовности они не успевали
     // оставить потомство между двумя охотами.
-    {"breeding_urge", &AnimalGenomeComponent::breedingUrge, 0.0015f, 0.008f, 3.0f},
-    {"attack", &AnimalGenomeComponent::attack, 0.15f, 0.7f, 1.25f},
+    {"breeding_urge", &AnimalGenomeComponent::breedingUrge, 2, 8, 3.0f},
+    {"attack", &AnimalGenomeComponent::attack, 150, 700, 1.25f},
 };
 
 inline constexpr std::size_t kHerbivoreTraitCount = sizeof(kHerbivoreTraits) / sizeof(kHerbivoreTraits[0]);

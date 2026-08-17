@@ -271,9 +271,6 @@ private:
     // изменения относительно уже накопленного состояния, а не заменяет
     // его целиком.
     WorldState working_;
-    // Множитель для целочисленных слоёв протокола ("scale" из
-    // world_init): сервер шлёт доли тысячными долями целых.
-    float milliScale_ = 0.001f;
 
     mutable std::mutex mutex_;
     std::shared_ptr<const WorldState> published_ = std::make_shared<const WorldState>();

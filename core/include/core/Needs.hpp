@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "core/Scale.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 
@@ -26,19 +27,20 @@ namespace goblins {
 // может только тот, у кого перед глазами весь снимок тика. Он и остаётся
 // внутри AnimalSystem.
 
-// Голод, 0..1. Берётся худшее из двух: пустой желудок и нехватка белка на
-// собственный рост — это один и тот же позыв есть, и удовлетворяются они
+// Голод, 0..kFull. Берётся худшее из двух: пустой желудок и нехватка белка
+// на собственный рост — это один и тот же позыв есть, и удовлетворяются они
 // одной и той же травой.
-inline float hungerOf(const AnimalComponent& state, const AnimalGenomeComponent& genome) {
-    const float energyDeficit = genome.energyCapacity > 0.0f ? 1.0f - state.energy / genome.energyCapacity : 1.0f;
-    const float proteinDeficit =
-        genome.proteinNeed > 0.0f ? 1.0f - static_cast<float>(state.protein) / genome.proteinNeed : 0.0f;
-    return std::clamp(std::max(energyDeficit, proteinDeficit), 0.0f, 1.0f);
+inline int hungerOf(const AnimalComponent& state, const AnimalGenomeComponent& genome) {
+    const int energyDeficit =
+        genome.energyCapacity > 0 ? kFull - state.energy * kFull / genome.energyCapacity : kFull;
+    const int proteinDeficit = genome.proteinNeed > 0 ? kFull - state.protein * kFull / genome.proteinNeed : 0;
+    return std::clamp(std::max(energyDeficit, proteinDeficit), 0, kFull);
 }
 
-// Жажда, 0..1.
-inline float thirstOf(const AnimalComponent& state, const AnimalGenomeComponent& genome) {
-    return std::clamp(genome.waterCapacity > 0.0f ? 1.0f - state.water / genome.waterCapacity : 1.0f, 0.0f, 1.0f);
+// Жажда, 0..kFull.
+inline int thirstOf(const AnimalComponent& state, const AnimalGenomeComponent& genome) {
+    return std::clamp(genome.waterCapacity > 0 ? kFull - state.water * kFull / genome.waterCapacity : kFull, 0,
+                      kFull);
 }
 
 } // namespace goblins

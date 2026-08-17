@@ -23,6 +23,7 @@
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Needs.hpp"
+#include "core/Scale.hpp"
 
 namespace goblins {
 
@@ -36,7 +37,7 @@ constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 // kMinSizeShare у новорождённого до 1 у взрослого) — тот же приём, что у
 // растений. Без него детёныш объедал бы луг наравне со взрослым и почти
 // никогда не выживал бы на бедной земле.
-constexpr float kMinSizeShare = 0.3f;
+constexpr int kMinSizeShare = 300;
 
 // Сколько энергии даёт единица биомассы съеденного. Число связывает две
 // шкалы, которые иначе не сопоставимы: развитость растения живёт в [0, 1],
@@ -49,7 +50,8 @@ constexpr float kMinSizeShare = 0.3f;
 // урезало пищеварение генома (digestion, 0.3..1.0). Самой этой черты
 // больше нет: невидимый множитель, за который вид платил бюджетом и о
 // котором в мире нельзя было узнать иначе как по скорости насыщения.
-constexpr float kEnergyPerBiomass = 26.0f;
+// Энергии за одну тысячную биомассы (kFull биомассы = взрослый куст).
+constexpr int kEnergyPerBiomass = 26;
 
 // Сколько воды животное получает из самой еды: трава сочная, в туше есть
 // кровь, и наевшийся долго может не искать реку. Одно число на обе диеты, а
@@ -60,7 +62,7 @@ constexpr float kEnergyPerBiomass = 26.0f;
 // воды, и если бы поить его могла только река, он гиб бы от жажды посреди
 // охоты — на первых прогонах именно так и выходило, хищники умирали с
 // полным брюхом и пустой флягой.
-constexpr float kWaterPerFood = 6.0f;
+constexpr int kWaterPerFood = 6;
 
 // Цена одного шага в энергии (взрослому). Вместе со скоростью из генома это
 // и есть плата за быстроту: быстрое животное делает больше шагов за тик,
@@ -73,26 +75,26 @@ constexpr float kWaterPerFood = 6.0f;
 // своих ёмкости за тысячу тиков и умирал раньше, чем находил добычу. При
 // вдвое меньшем — наоборот, ходьба переставала что-либо стоить, и стадо,
 // которому корм давался даром, за тысячу тиков объедало весь мир.
-constexpr float kStepEnergy = 0.25f;
+constexpr int kStepEnergy = 250;
 
 // Водопой: сколько единиц воды животное выпивает за тик. Сколько глубины
 // это снимало с клетки, было вторым числом, и подобрано оно было так, чтобы
 // след получался неразличимым, — то есть чтобы не значить ничего.
-constexpr float kDrinkRate = 4.0f;
+constexpr int kDrinkRate = 4000;
 
 // Ниже этой развитости куст объедать нечего, ниже этого мяса — нечего
 // глодать: животное просто не считает такое едой. Иначе стадо паслось бы на
 // голых проростках, не давая лугу отрасти, а хищник сидел бы у обглоданных
 // костей вместо охоты.
-constexpr float kMinBiteGrowth = 0.05f;
-constexpr float kMinBiteMeat = 0.05f;
+constexpr int kMinBiteGrowth = 50;
+constexpr int kMinBiteMeat = 50;
 
 // Сколько стресса получает растение за единицу съеденной развитости. Именно
 // так объедание убивает траву — не напрямую, а через её собственный закон
 // смерти от условий (PlantSystem): куст, который скусывают снова и снова,
 // не успевает отрасти и в конце концов погибает, а редко потревоженный
 // отходит.
-constexpr float kGrazeStress = 0.4f;
+constexpr int kGrazeStress = 400;
 
 // Пищеварение: раз во сколько тиков одна крупица белка трогается с места и
 // уходит в навоз. Отсюда и необходимость есть постоянно: белок не лежит в
@@ -112,17 +114,17 @@ constexpr int kDungDrop = 2;
 // Прежде это были две величины: stress копил истощение, health держал раны,
 // и обе убивали при своём краю. Один закон, записанный дважды, — а причина
 // смерти видна и так, в тот тик, когда животное умирает.
-constexpr float kStarvationHarm = 0.02f;
-constexpr float kDehydrationHarm = 0.03f;
-constexpr float kRecoveryRate = 0.002f;
+constexpr int kStarvationHarm = 20;
+constexpr int kDehydrationHarm = 30;
+constexpr int kRecoveryRate = 2;
 
 // Желания. Ниже kDesireFloor желание никуда не гонит — животное считается
 // довольным и просто бродит. kDesireSwitch — насколько сильнее должно быть
 // другое желание, чтобы перебить уже выбранное: без этого запаса животное с
 // почти равными голодом и жаждой каждый тик разворачивалось бы и не дошло
 // бы ни до травы, ни до воды.
-constexpr float kDesireFloor = 0.35f;
-constexpr float kDesireSwitch = 0.15f;
+constexpr int kDesireFloor = 350;
+constexpr int kDesireSwitch = 150;
 
 // Размножение. Желание пары копится только у взрослого, доросшего и не
 // бедствующего животного (kCalmNeed — предел голода и жажды, при котором
@@ -136,9 +138,9 @@ constexpr float kDesireSwitch = 0.15f;
 // при одиннадцати смертях, и хищники вымирали в мире, полном добычи. Порог
 // отделяет бедствие от обычной жизни, а не сытость от несытости; само
 // бедствие проверяется отдельно и прямо — по накопленному стрессу.
-constexpr float kBreedingGrowth = 0.9f;
-constexpr float kCalmNeed = 0.75f;
-constexpr float kMateDesire = 0.6f;
+constexpr int kBreedingGrowth = 900;
+constexpr int kCalmNeed = 750;
+constexpr int kMateDesire = 600;
 
 // Цена потомства. Мать отдаёт детёнышу долю своих запасов и крупицу белка —
 // ровно как растение отдаёт семени крупицу минералов. Именно эта цена, а не
@@ -148,14 +150,14 @@ constexpr float kMateDesire = 0.6f;
 // Отец не платит ничего: доля энергии "на ухаживание" (kCourtshipEnergyShare)
 // сгорала в никуда и ни на что не влияла — ни на выбор партнёра, ни на
 // численность, которую держит цена, уплаченная матерью.
-constexpr float kBirthEnergyShare = 0.45f;
-constexpr float kBirthWaterShare = 0.3f;
-constexpr float kNewbornGrowth = 0.08f;
+constexpr int kBirthEnergyShare = 450;
+constexpr int kBirthWaterShare = 300;
+constexpr int kNewbornGrowth = 80;
 
 // С какой вероятностью ничего не желающее животное всё-таки делает шаг.
 // Постоянно бродящее стадо выглядит нервным и зря жжёт энергию; полностью
 // неподвижное — мёртвым.
-constexpr float kWanderChance = 0.25f;
+constexpr int kWanderChance = 250;
 
 // Сколько тиков животное держит одно направление поиска, когда желаемого не
 // видно. Это не украшение походки, а единственный способ найти что-то за
@@ -190,7 +192,7 @@ constexpr int kRoamReach = 8;
 // хищники вымирали за первую тысячу тиков — они успевали загнать жертву, но
 // не успевали окупить погоню, и весь их род держался на том, чтобы ни разу
 // не промахнуться.
-constexpr float kMeatPerSize = 8.0f;
+constexpr int kMeatPerSize = 8000;
 
 // Как быстро падаль пропадает сама. Несъеденная туша не лежит вечно: она
 // гниёт, и накопленный зверем белок доходит до почвы перегноем, просто
@@ -202,7 +204,7 @@ constexpr float kMeatPerSize = 8.0f;
 // вшестеро против того, что могла прокормить живая добыча. Расплодившись на
 // падали, хищники доедали уцелевшее стадо, и мир пустел совсем. Мясо должно
 // портиться — иначе однажды случившийся мор кормит вечно.
-constexpr float kCarcassRot = 0.02f;
+constexpr int kCarcassRot = 20;
 
 // С какого голода хищник выходит на охоту. Порог выше общего kDesireFloor
 // намеренно: слегка проголодавшийся зверь подберёт падаль, если она рядом,
@@ -210,7 +212,7 @@ constexpr float kCarcassRot = 0.02f;
 // мимо, — не поблажка стаду, а единственное, что вообще удерживает его
 // численность: пока хищники убивали при любом голоде, они выбивали стадо
 // подчистую и вымирали следом, сколько ни крути прочие числа.
-constexpr float kHuntHunger = 0.35f;
+constexpr int kHuntHunger = 350;
 
 // Дотянуться зубами можно до своей клетки и до соседней. Не только до
 // своей: жертва убегает каждый тик, и хищнику, который обязан встать ровно
@@ -230,7 +232,7 @@ struct ShareIntent {
     std::size_t cell = 0;      // клетка с кустом, тушей или водой
     int animal = 0;            // индекс в снимке животных
     std::uint64_t id = 0;      // постоянный идентификатор — им сортируем
-    float want = 0.0f;
+    int want = 0;
 };
 
 struct StepIntent {
@@ -253,7 +255,7 @@ struct MateIntent {
 // сумму не влияет.
 struct AttackIntent {
     int prey = 0;
-    float damage = 0.0f;
+    int damage = 0;
 };
 
 // Живое животное в снимке этого тика. Указатели на компоненты держать
@@ -276,9 +278,9 @@ struct Animal {
     // хранились они лишь затем, чтобы их было видно снаружи. Смотреть на
     // них по-прежнему можно (сервер кладёт их в "watched"), но берёт он их
     // теперь оттуда же, откуда и сама система, — из этого снимка.
-    float hunger = 0.0f;
-    float thirst = 0.0f;
-    float fear = 0.0f;
+    int hunger = 0;
+    int thirst = 0;
+    int fear = 0;
 };
 
 bool sortByCellThenId(const ShareIntent& a, const ShareIntent& b) {
@@ -295,10 +297,10 @@ bool sortByCellThenId(const ShareIntent& a, const ShareIntent& b) {
 // с опасностью.
 Desire chooseDesire(const Animal& animal, bool readyToMate) {
     const DesireComponent& desire = *animal.desire;
-    const float mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0.0f;
+    const int mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0;
 
     Desire best = Desire::Idle;
-    float bestUrgency = kDesireFloor;
+    int bestUrgency = kDesireFloor;
     if (animal.hunger >= bestUrgency) {
         best = Desire::Food;
         bestUrgency = animal.hunger;
@@ -318,7 +320,7 @@ Desire chooseDesire(const Animal& animal, bool readyToMate) {
         bestUrgency = animal.fear;
     }
 
-    float currentUrgency = 0.0f;
+    int currentUrgency = 0;
     switch (desire.current) {
         case Desire::Food: currentUrgency = animal.hunger; break;
         case Desire::Water: currentUrgency = animal.thirst; break;
@@ -340,7 +342,7 @@ Desire chooseDesire(const Animal& animal, bool readyToMate) {
 //
 // Вызывать только из команды очереди (05_Entity.md, п.5): добавление
 // компонента — структурное изменение.
-void depositCarcass(World& world, int x, int y, float meat, int protein) {
+void depositCarcass(World& world, int x, int y, int meat, int protein) {
     if ((meat <= 0.0f && protein <= 0) || !world.area().inBounds(x, y)) {
         return;
     }
@@ -362,16 +364,15 @@ void depositCarcass(World& world, int x, int y, float meat, int protein) {
 // съеденного или сгнившего — освобождает их пропорционально. Куда они
 // пойдут дальше (в едока или в перегной), решает вызывающая сторона: для
 // самой туши это одно и то же убывание.
-int releaseCarcassProtein(CarcassComponent& carcass, float meatBefore, float removed) {
-    if (meatBefore <= 0.0f || removed <= 0.0f || carcass.protein <= 0) {
+int releaseCarcassProtein(CarcassComponent& carcass, int meatBefore, int removed) {
+    if (meatBefore <= 0 || removed <= 0 || carcass.protein <= 0) {
         return 0;
     }
     // Целочисленно и без накопителя: сколько крупиц приходится на
     // унесённую долю мяса, столько и освобождается. Округление вниз ничего
     // не теряет — неосвобождённое остаётся в туше и уйдёт со следующим
     // куском или с гниением.
-    const float share = std::min(1.0f, removed / meatBefore);
-    const int released = std::min(carcass.protein, static_cast<int>(static_cast<float>(carcass.protein) * share));
+    const int released = std::min(carcass.protein, carcass.protein * std::min(removed, meatBefore) / meatBefore);
     carcass.protein -= released;
     return released;
 }
@@ -387,10 +388,10 @@ void enqueueDeath(CommandQueue& commands, entt::entity entity, int x, int y) {
         // Читаем состояние заново, а не полагаемся на снятое при постановке
         // команды: пока она ждала очереди, тик мог доработать
         // (05_Entity.md, п.5).
-        float meat = 0.0f;
+        int meat = 0;
         int protein = 0;
         if (const auto* body = w.registry().try_get<const AnimalComponent>(entity)) {
-            const float size = kMinSizeShare + (1.0f - kMinSizeShare) * body->growth;
+            const int size = kMinSizeShare + (kFull - kMinSizeShare) * body->growth / kFull;
             meat = kMeatPerSize * size;
             // И накопленный белок, и не вышедший навоз: из тела в мир
             // уходит всё, что в нём было.
@@ -415,7 +416,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
     auto& registry = world.registry();
     const auto& worldProperties = registry.get<const WorldPropertiesComponent>(world.worldEntity());
-    const float mutationRate = worldProperties.animalMutationRate;
+    // Мутация в тысячных долях вложения (core/Scale.hpp) — а сам расклад
+    // бюджета дробный, это генерация, а не состояние мира.
+    const float mutationRate = static_cast<float>(worldProperties.animalMutationRate) / kFull;
     const auto animalSeed = static_cast<std::uint64_t>(worldProperties.animalRandomSeed);
     const std::uint64_t tick = registry.get<const TimeComponent>(world.worldEntity()).tick;
     const auto& species = registry.get<const AnimalSpeciesComponent>(world.worldEntity());
@@ -457,10 +460,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // тому же состоянию мира, и порядок обхода на них не влияет.
     const entt::entity kNullEntity = entt::null;
     std::vector<entt::entity> terrain(cellCount, kNullEntity);
-    std::vector<float> waterAt(cellCount, 0.0f);
+    std::vector<int> waterAt(cellCount, 0);
     std::vector<entt::entity> plantAt(cellCount, kNullEntity);
-    std::vector<float> plantGrowth(cellCount, 0.0f);
-    std::vector<float> carcassMeat(cellCount, 0.0f);
+    std::vector<int> plantGrowth(cellCount, 0);
+    std::vector<int> carcassMeat(cellCount, 0);
 
     auto terrainView = registry.view<PositionComponent, SoilComponent>();
     for (const auto entity : terrainView) {
@@ -519,13 +522,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const auto& genome = *animal.genome;
         auto& desire = *animal.desire;
 
-        const float size = kMinSizeShare + (1.0f - kMinSizeShare) * state.growth;
+        const int size = kMinSizeShare + (kFull - kMinSizeShare) * state.growth / kFull;
 
         // Цена существования. Тратится всегда — стоящее на месте животное
         // тоже живёт.
-        state.energy -= genome.energyUpkeep * size;
-        state.water -= genome.waterUpkeep * size;
-        state.age += 1.0f;
+        state.energy -= genome.energyUpkeep * size / kFull;
+        state.water -= genome.waterUpkeep * size / kFull;
+        const int ageBefore = state.age;
+        state.age += 1;
 
         // Пищеварение: белок не лежит в теле вечно, часть уходит навозом.
         // Отсюда и постоянная нужда есть, а не только "когда кончилась
@@ -542,12 +546,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // maturityAge, но не выше того, что позволяет накопленный белок —
         // ровно как размер растения ограничен его минералами. Голодное
         // животное не растёт вовсе.
-        if (state.growth < 1.0f && state.energy > 0.0f) {
-            const float proteinCeiling =
-                genome.proteinNeed > 0.0f ? static_cast<float>(state.protein) / genome.proteinNeed : 1.0f;
-            const float ceiling = std::min(1.0f, std::max(state.growth, proteinCeiling));
-            const float rate = genome.maturityAge > 1.0f ? 1.0f / genome.maturityAge : 1.0f;
-            state.growth = std::clamp(state.growth + rate, 0.0f, ceiling);
+        // Прирост за тик — разность двух целых делений: сколько развитости
+        // положено в этом возрасте минус сколько было положено в прошлом.
+        // Так дробная скорость (kFull / maturityAge) выражается целыми
+        // числами, и телу нечего помнить между тиками — возраст оно и так
+        // хранит.
+        if (state.growth < kFull && state.energy > 0) {
+            const int proteinCeiling = genome.proteinNeed > 0 ? state.protein * kFull / genome.proteinNeed : kFull;
+            const int ceiling = std::min(kFull, std::max(state.growth, proteinCeiling));
+            const int maturity = std::max(1, genome.maturityAge);
+            const int gain = state.age * kFull / maturity - ageBefore * kFull / maturity;
+            state.growth = std::clamp(state.growth + gain, 0, ceiling);
         }
 
         // Здоровье — одно на все беды. Голод, жажда и чужие зубы отнимают
@@ -557,23 +566,23 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // записанный дважды. Отчего именно животное умерло, по-прежнему
         // видно в тот момент, когда оно умирает: пустой желудок, пустая
         // фляга или рана.
-        if (state.energy <= 0.0f) {
-            state.energy = 0.0f;
+        if (state.energy <= 0) {
+            state.energy = 0;
             state.health -= kStarvationHarm;
         }
-        if (state.water <= 0.0f) {
-            state.water = 0.0f;
+        if (state.water <= 0) {
+            state.water = 0;
             state.health -= kDehydrationHarm;
         }
-        if (state.energy > 0.0f && state.water > 0.0f) {
-            state.health = std::min(1.0f, state.health + kRecoveryRate);
+        if (state.energy > 0 && state.water > 0) {
+            state.health = std::min(kFull, state.health + kRecoveryRate);
         }
 
         // Смерть от старости, от условий или от чужих зубов. Entity
         // исчезает не сейчас, а при разрешении очереди команд
         // (05_Entity.md, п.5), и тело ложится падалью — одинаково, от чего
         // бы животное ни умерло.
-        if (state.age >= genome.maxAge || state.health <= 0.0f) {
+        if (state.age >= genome.maxAge || state.health <= 0) {
             enqueueDeath(commands, animal.entity, animal.x, animal.y);
             alive[a] = false;
             continue;
@@ -596,9 +605,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         // Страх: насколько близко видна опасность. Хищник ни от кого не
         // бегает — на него в этом мире не охотятся (09_Animals.md, п.2).
-        animal.fear = 0.0f;
+        animal.fear = 0;
         if (!animal.predator) {
-            const float sight = std::max(1.0f, genome.perception);
+            const float sight = static_cast<float>(std::max(1, genome.perception));
             for (std::size_t b = 0; b < animals.size(); ++b) {
                 if (!animals[b].predator) {
                     continue;
@@ -620,7 +629,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // одинаково — стадо выбивалось под ноль за несколько тысяч
                 // тиков, а следом вымирали и сами хищники. Фора, которую
                 // даёт зоркость, и есть главная защита добычи.
-                const float scare = kDesireFloor + (1.0f - kDesireFloor) * (1.0f - distance / sight);
+                // Дробное расстояние тут же становится целым страхом:
+                // считать корень из суммы квадратов целыми числами незачем,
+                // а хранится всё равно целое (core/Scale.hpp).
+                const int scare =
+                    kDesireFloor + static_cast<int>((kFull - kDesireFloor) * (1.0f - distance / sight));
                 if (scare > animal.fear) {
                     animal.fear = scare;
                     threatX[a] = animals[b].x;
@@ -633,11 +646,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // Не бедствует: ни голод, ни жажда не дошли до предела, и нет
         // накопленного стресса — то есть в последние десятки тиков запасы
         // не кончались совсем.
-        const bool content = state.health >= 1.0f && animal.hunger < kCalmNeed && animal.thirst < kCalmNeed;
+        const bool content = state.health >= kFull && animal.hunger < kCalmNeed && animal.thirst < kCalmNeed;
         if (adult && content) {
             // Желание пары — единственное, которого в теле не прочитать: оно
             // копится со временем у того, кому больше нечего хотеть.
-            desire.mating = std::min(1.0f, desire.mating + genome.breedingUrge);
+            desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
         }
         desire.current = chooseDesire(animal, adult && content);
     }
@@ -652,7 +665,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const auto& genome = *animal.genome;
         auto& desire = *animal.desire;
         const std::size_t here = index(animal.x, animal.y);
-        const float size = kMinSizeShare + (1.0f - kMinSizeShare) * state.growth;
+        const int size = kMinSizeShare + (kFull - kMinSizeShare) * state.growth / kFull;
 
         // Случайность собирается из seed мира, номера тика и постоянного
         // идентификатора животного (core/Random.hpp). Не из координат, как
@@ -666,7 +679,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // либо оно видит, куда идти, и делает шаг. Дальше видимости
         // (perception) для животного ничего не существует: оно не может
         // хотеть того, о чём не знает (02_CorePrinciples.md, п.6).
-        const int reach = std::max(1, static_cast<int>(std::lround(genome.perception)));
+        const int reach = std::max(1, genome.perception);
         bool busy = false;
         bool hasTarget = false;
         int targetX = animal.x;
@@ -691,7 +704,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // пойдёт. Разойдись эти две проверки, и стадо оказалось бы
         // расставленным там, откуда оно не может сойти.
         auto standable = [&](std::size_t cell, int nx, int ny) {
-            return !world.area().isBlocked(nx, ny) && terrain[cell] != entt::null && waterAt[cell] <= 0.0f;
+            return !world.area().isBlocked(nx, ny) && terrain[cell] != entt::null && waterAt[cell] <= 0;
         };
 
         // Ближайшая клетка в пределах видимости, удовлетворяющая условию.
@@ -704,7 +717,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // сторон одинаково близко, дружно уходило бы вверх и влево — не
         // потому, что там лучше, а потому, что цикл начинается оттуда.
         auto findNearest = [&](auto predicate, int& outX, int& outY) {
-            float bestDistance = 0.0f;
+            int bestDistance = 0;
             int ties = 0;
             for (int dy = -reach; dy <= reach; ++dy) {
                 for (int dx = -reach; dx <= reach; ++dx) {
@@ -713,8 +726,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     if (!world.area().inBounds(nx, ny)) {
                         continue;
                     }
-                    const float distance = static_cast<float>(dx * dx + dy * dy);
-                    if (distance > static_cast<float>(reach * reach)) {
+                    const int distance = dx * dx + dy * dy;
+                    if (distance > reach * reach) {
                         continue; // видимость круглая, а не квадратная
                     }
                     if (ties > 0 && distance > bestDistance) {
@@ -727,7 +740,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                         // Равноудалённая находка: занимает место прежней с
                         // вероятностью 1/N, поэтому все они равноправны.
                         ++ties;
-                        if (randomUnit(random) >= 1.0f / static_cast<float>(ties)) {
+                        if (randomBelow(random, static_cast<std::uint64_t>(ties)) != 0) {
                             continue;
                         }
                     } else {
@@ -738,7 +751,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     outY = ny;
                 }
             }
-            return ties > 0 ? bestDistance : -1.0f;
+            return ties > 0 ? bestDistance : -1;
         };
 
         switch (desire.current) {
@@ -757,7 +770,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // стоит эта, бессмысленно. Но только если хищник и
                     // вправду голоден (kHuntHunger): наевшийся не охотится.
                     int preyIndex = -1;
-                    float preyDistance = 0.0f;
+                    int preyDistance = 0;
                     for (std::size_t b = 0; animal.hunger >= kHuntHunger && b < animals.size(); ++b) {
                         if (b == a || !alive[b] || animals[b].predator) {
                             continue;
@@ -780,8 +793,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                         }
                         const int dx = animals[b].x - animal.x;
                         const int dy = animals[b].y - animal.y;
-                        const float distance = static_cast<float>(dx * dx + dy * dy);
-                        if (distance > static_cast<float>(reach * reach)) {
+                        const int distance = dx * dx + dy * dy;
+                        if (distance > reach * reach) {
                             continue;
                         }
                         if (preyIndex >= 0 && distance >= preyDistance) {
@@ -794,7 +807,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     if (preyIndex >= 0 &&
                         std::abs(animals[static_cast<std::size_t>(preyIndex)].x - animal.x) <= kAttackReach &&
                         std::abs(animals[static_cast<std::size_t>(preyIndex)].y - animal.y) <= kAttackReach) {
-                        attacks.push_back(AttackIntent{preyIndex, genome.attack * size});
+                        attacks.push_back(AttackIntent{preyIndex, genome.attack * size / kFull});
                         busy = true;
                         break;
                     }
@@ -813,12 +826,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // а не в правило.
                     int carcassX = animal.x;
                     int carcassY = animal.y;
-                    const float carcassDistance = findNearest(
+                    const int carcassDistance = findNearest(
                         [&](std::size_t cell, int nx, int ny) {
                             return carcassMeat[cell] > kMinBiteMeat && standable(cell, nx, ny);
                         },
                         carcassX, carcassY);
-                    if (carcassDistance >= 0.0f) {
+                    if (carcassDistance >= 0) {
                         targetX = carcassX;
                         targetY = carcassY;
                         hasTarget = true;
@@ -880,7 +893,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // Партнёров ищем перебором по всем животным, а не по клеткам
                 // карты: их десятки, и квадрат от десятков дешевле, чем
                 // просмотр круга клеток на каждого.
-                float bestDistance = 0.0f;
+                int bestDistance = 0;
                 for (std::size_t b = 0; b < animals.size(); ++b) {
                     if (b == a || !alive[b]) {
                         continue;
@@ -895,8 +908,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     }
                     const int dx = other.x - animal.x;
                     const int dy = other.y - animal.y;
-                    const float distance = static_cast<float>(dx * dx + dy * dy);
-                    if (distance > static_cast<float>(reach * reach)) {
+                    const int distance = dx * dx + dy * dy;
+                    if (distance > reach * reach) {
                         continue;
                     }
                     if (hasTarget && distance >= bestDistance) {
@@ -978,7 +991,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             roaming = true;
         }
 
-        if (!fleeing && !hasTarget && randomUnit(random) >= kWanderChance) {
+        if (!fleeing && !hasTarget && static_cast<int>(randomBelow(random, kFull)) >= kWanderChance) {
             continue; // ничего не гонит — стоит и щиплет что придётся
         }
 
@@ -990,7 +1003,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         int stepX = animal.x;
         int stepY = animal.y;
         bool stepFound = false;
-        const int firstDir = static_cast<int>(randomUnit(random) * 8.0f) % 8;
+        const int firstDir = static_cast<int>(randomBelow(random, 8));
 
         // Один и тот же перебор соседей для любой цели: идущий выбирает
         // ближайшего к ней, бегущий — самого дальнего от опасности,
@@ -998,13 +1011,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // найденный шаг к цели: этим отличается дорога от тупика.
         auto stepToward = [&](int aimX, int aimY, bool aimless) {
             auto scoreOf = [&](int x, int y) {
-                const float dx = static_cast<float>(aimX - x);
-                const float dy = static_cast<float>(aimY - y);
+                const int dx = aimX - x;
+                const int dy = aimY - y;
                 return dx * dx + dy * dy;
             };
 
             stepFound = false;
-            float bestScore = 0.0f;
+            int bestScore = 0;
             for (int n = 0; n < 8; ++n) {
                 const int dir = (firstDir + n) % 8;
                 const int nx = animal.x + kDx8[dir];
@@ -1018,7 +1031,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     stepFound = true;
                     break; // случайное блуждание: первый же годный сосед по кругу
                 }
-                const float distance = scoreOf(nx, ny);
+                const int distance = scoreOf(nx, ny);
                 const bool better = fleeing ? distance > bestScore : distance < bestScore;
                 if (!stepFound || better) {
                     bestScore = distance;
@@ -1056,7 +1069,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue;
         }
 
-        state.energy = std::max(0.0f, state.energy - kStepEnergy * size);
+        state.energy = std::max(0, state.energy - kStepEnergy * size / kFull);
         steps.push_back(StepIntent{static_cast<int>(a), stepX, stepY});
     }
 
@@ -1068,7 +1081,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::sort(bites.begin(), bites.end(), sortByCellThenId);
     for (std::size_t n = 0; n < bites.size();) {
         std::size_t m = n;
-        float demand = 0.0f;
+        int demand = 0;
         while (m < bites.size() && bites[m].cell == bites[n].cell) {
             demand += bites[m].want;
             ++m;
@@ -1076,25 +1089,28 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         const entt::entity plantEntity = plantAt[bites[n].cell];
         auto* plant = registry.valid(plantEntity) ? registry.try_get<PlantComponent>(plantEntity) : nullptr;
-        if (plant == nullptr || demand <= 0.0f) {
+        if (plant == nullptr || demand <= 0) {
             n = m;
             continue;
         }
 
-        const float growthBefore = plant->growth;
+        const int growthBefore = plant->growth;
         const int mineralsBefore = plant->minerals;
-        const float share = std::min(1.0f, growthBefore / demand);
 
         // Крупицы белка делятся между едоками целочисленно и без остатка:
         // каждому достаётся столько, сколько причитается на всё съеденное
         // им И теми, кто был до него, минус уже розданное. Накопителя доли
         // (proteinPending) при этом не нужно ни одному из них — куст
         // отдаёт свои крупицы здесь и сейчас, ровно по разу каждую.
-        float eatenTotal = 0.0f;
+        int eatenTotal = 0;
         int releasedTotal = 0;
         for (std::size_t k = n; k < m; ++k) {
-            const float eaten = bites[k].want * share;
-            if (eaten <= 0.0f) {
+            // Доля просящего от того, что есть: целочисленно, поэтому
+            // делится ровно столько, сколько на кусте выросло, и ни
+            // тысячной больше.
+            const int eaten = std::min(bites[k].want, static_cast<int>(static_cast<long long>(bites[k].want) *
+                                                                       growthBefore / demand));
+            if (eaten <= 0) {
                 continue;
             }
             auto& state = *animals[static_cast<std::size_t>(bites[k].animal)].state;
@@ -1102,7 +1118,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
             state.energy = std::min(genome.energyCapacity, state.energy + eaten * kEnergyPerBiomass);
 
-            // Трава сочная: часть жажды утоляется самой кормёжкой. Вода
+            // Трава сочная (2): часть жажды утоляется самой кормёжкой. Вода
             // считается прямо от съеденной биомассы — тем же числом, что и
             // у мяса (kWaterPerFood): отдельный множитель на каждую еду был
             // невидимой величиной, которая ни разу ни на что не повлияла.
@@ -1110,9 +1126,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
             eatenTotal += eaten;
 
-            const int proteinCap = std::max(1, static_cast<int>(std::ceil(genome.proteinNeed)));
-            const float fraction = growthBefore > 0.0f ? eatenTotal / growthBefore : 0.0f;
-            const int owed = std::min(mineralsBefore, static_cast<int>(static_cast<float>(mineralsBefore) * fraction));
+            const int proteinCap = std::max(1, genome.proteinNeed);
+            const int owed =
+                growthBefore > 0 ? std::min(mineralsBefore, mineralsBefore * eatenTotal / growthBefore) : 0;
             for (int grain = releasedTotal; grain < owed && plant->minerals > 0; ++grain) {
                 --plant->minerals;
                 if (state.protein < proteinCap) {
@@ -1126,11 +1142,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             releasedTotal = std::max(releasedTotal, owed);
         }
 
-        plant->growth = std::max(0.0f, plant->growth - eatenTotal);
+        plant->growth = std::max(0, plant->growth - eatenTotal);
         // Само по себе объедание растение не убивает: оно теряет биомассу и
         // получает стресс, а погибнуть или отрасти — решит PlantSystem по
         // своим законам на следующем тике.
-        plant->stress = std::min(1.0f, plant->stress + eatenTotal * kGrazeStress);
+        plant->stress = std::min(kFull, plant->stress + eatenTotal * kGrazeStress / kFull);
         n = m;
     }
 
@@ -1140,7 +1156,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::sort(meals.begin(), meals.end(), sortByCellThenId);
     for (std::size_t n = 0; n < meals.size();) {
         std::size_t m = n;
-        float demand = 0.0f;
+        int demand = 0;
         while (m < meals.size() && meals[m].cell == meals[n].cell) {
             demand += meals[m].want;
             ++m;
@@ -1149,17 +1165,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const entt::entity tile = terrain[meals[n].cell];
         auto* carcass =
             tile != entt::null && registry.valid(tile) ? registry.try_get<CarcassComponent>(tile) : nullptr;
-        if (carcass == nullptr || demand <= 0.0f) {
+        if (carcass == nullptr || demand <= 0) {
             n = m;
             continue;
         }
 
-        const float meatBefore = carcass->meat;
-        const float share = std::min(1.0f, meatBefore / demand);
+        const int meatBefore = carcass->meat;
 
         for (std::size_t k = n; k < m; ++k) {
-            const float eaten = meals[k].want * share;
-            if (eaten <= 0.0f) {
+            const int eaten = std::min(meals[k].want, static_cast<int>(static_cast<long long>(meals[k].want) *
+                                                                       meatBefore / demand));
+            if (eaten <= 0) {
                 continue;
             }
             auto& state = *animals[static_cast<std::size_t>(meals[k].animal)].state;
@@ -1170,11 +1186,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             // искать воду.
             state.water = std::min(genome.waterCapacity, state.water + eaten * kWaterPerFood);
 
-            const float meatNow = carcass->meat;
-            carcass->meat = std::max(0.0f, carcass->meat - eaten);
+            const int meatNow = carcass->meat;
+            carcass->meat = std::max(0, carcass->meat - eaten);
             const int grains = releaseCarcassProtein(*carcass, meatNow, meatNow - carcass->meat);
 
-            const int proteinCap = std::max(1, static_cast<int>(std::ceil(genome.proteinNeed)));
+            const int proteinCap = std::max(1, genome.proteinNeed);
             for (int g = 0; g < grains; ++g) {
                 if (state.protein < proteinCap) {
                     ++state.protein;
@@ -1190,7 +1206,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::sort(drinks.begin(), drinks.end(), sortByCellThenId);
     for (std::size_t n = 0; n < drinks.size();) {
         std::size_t m = n;
-        float demand = 0.0f;
+        int demand = 0;
         while (m < drinks.size() && drinks[m].cell == drinks[n].cell) {
             demand += drinks[m].want;
             ++m;
@@ -1199,7 +1215,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const std::size_t cell = drinks[n].cell;
         const entt::entity tile = terrain[cell];
         auto* water = tile != entt::null && registry.valid(tile) ? registry.try_get<WaterComponent>(tile) : nullptr;
-        if (water == nullptr || demand <= 0.0f) {
+        if (water == nullptr || demand <= 0) {
             n = m;
             continue;
         }
@@ -1231,7 +1247,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         animals[prey].state->health -= attack.damage;
     }
     for (std::size_t a = 0; a < animals.size(); ++a) {
-        if (!alive[a] || animals[a].state->health > 0.0f) {
+        if (!alive[a] || animals[a].state->health > 0) {
             continue;
         }
         enqueueDeath(commands, animals[a].entity, animals[a].x, animals[a].y);
@@ -1310,15 +1326,15 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         AnimalComponent calf;
         calf.growth = kNewbornGrowth;
-        calf.sex = randomUnit(random) < 0.5f ? Sex::Female : Sex::Male;
+        calf.sex = randomBelow(random, 2) == 0 ? Sex::Female : Sex::Male;
 
         // Детёныш появляется не из ниоткуда: и запасы, и крупица белка —
         // материнские. Ровно тот же обмен, что у растения с семенем.
-        const float givenEnergy = mother.state->energy * kBirthEnergyShare;
+        const int givenEnergy = mother.state->energy * kBirthEnergyShare / kFull;
         mother.state->energy -= givenEnergy;
         calf.energy = std::min(givenEnergy, childGenome.energyCapacity);
 
-        const float givenWater = mother.state->water * kBirthWaterShare;
+        const int givenWater = mother.state->water * kBirthWaterShare / kFull;
         mother.state->water -= givenWater;
         calf.water = std::min(givenWater, childGenome.waterCapacity);
 
@@ -1332,17 +1348,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const int givenProtein = std::max(0, mother.state->protein / 3);
         mother.state->protein -= givenProtein;
         calf.protein = givenProtein;
-        calf.growth = childGenome.proteinNeed > 0.0f
-                           ? std::min(calf.growth, static_cast<float>(calf.protein) / childGenome.proteinNeed)
+        calf.growth = childGenome.proteinNeed > 0
+                           ? std::min(calf.growth, calf.protein * kFull / childGenome.proteinNeed)
                            : calf.growth;
 
-        // Ухаживание тоже стоит энергии, но она никуда не переходит — это
-        // потраченные силы, а не переданное вещество.
-        father.state->energy =
-            father.state->energy;
-
-        mother.desire->mating = 0.0f;
-        father.desire->mating = 0.0f;
+        mother.desire->mating = 0;
+        father.desire->mating = 0;
         mother.desire->current = Desire::Idle;
         father.desire->current = Desire::Idle;
 
@@ -1381,11 +1392,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         auto& carcass = carcassView.get<CarcassComponent>(entity);
         const auto& position = carcassView.get<PositionComponent>(entity);
 
-        const float meatBefore = carcass.meat;
-        carcass.meat = std::max(0.0f, carcass.meat - kCarcassRot);
+        const int meatBefore = carcass.meat;
+        carcass.meat = std::max(0, carcass.meat - kCarcassRot);
         int toHumus = releaseCarcassProtein(carcass, meatBefore, meatBefore - carcass.meat);
 
-        if (carcass.meat <= 0.0f) {
+        if (carcass.meat <= 0) {
             // Мяса не осталось — весь недоеденный белок уходит в землю
             // разом: держать его в пустой туше не за что.
             toHumus += carcass.protein;

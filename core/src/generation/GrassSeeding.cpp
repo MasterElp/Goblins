@@ -10,6 +10,7 @@
 #include "core/components/SoilComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
+#include "core/Scale.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "core/Diagnostics.hpp"
 
@@ -20,7 +21,7 @@ namespace {
 // Суше этого семя не сажаем даже при генерации: клетка виду не подходит,
 // растение всё равно погибло бы от стресса за сотню тиков (PlantSystem).
 // Тот же порог использует и расселение — см. kSeedMinSupply там.
-constexpr float kSeedingMinSupply = 0.5f;
+constexpr int kSeedingMinSupply = 500;
 
 // Ограничение попыток, как в BoulderScatter: на карте, где почти всё —
 // вода/камень/чужая для всех видов почва, случайный поиск свободной
@@ -64,6 +65,9 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
     // seed'а мира, номера тика и координат клетки.
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.plantMutationRate = params.mutationRate;
+    // Расклад бюджета черт дробный — это генерация, а не состояние мира
+    // (core/Scale.hpp), поэтому целая настройка переводится в долю здесь.
+    const float mutationRate = static_cast<float>(params.mutationRate) / kFull;
     worldProperties.humusDecayPeriod = params.humusDecayPeriod;
     worldProperties.plantRandomSeed = seed;
 
@@ -76,7 +80,7 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
     }
 
     // --- Первые семена ---
-    const int target = static_cast<int>(std::lround(params.grassCoverage * static_cast<double>(cellCount)));
+    const int target = static_cast<int>(static_cast<long long>(params.grassCoverage) * cellCount / kFull);
     if (target <= 0) {
         return;
     }
@@ -117,7 +121,7 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         // вариативность внутри вида существует с первого тика, а не
         // появляется через поколения.
         const PlantGenomeComponent genome =
-            mutateGenome(archetype, archetype, params.mutationRate, mixSeed(state, static_cast<std::uint64_t>(planted)));
+            mutateGenome(archetype, archetype, mutationRate, mixSeed(state, static_cast<std::uint64_t>(planted)));
 
         if (waterDepth > genome.waterTolerance) {
             continue; // этот вид тут утонет
@@ -129,9 +133,8 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         // пригодности почвы по каменистости и утоптанности больше нет:
         // камень и так суше, и виду, которому нужна вода, на нём нечего
         // делать по той же причине, что и в сухой степи.
-        const float supply = genome.moistureNeed > 0.0f
-                                 ? std::clamp(soil.moisture / genome.moistureNeed, 0.0f, 1.0f)
-                                 : 1.0f;
+        const int supply =
+            genome.moistureNeed > 0 ? std::min(kFull, soil.moisture * kFull / genome.moistureNeed) : kFull;
         if (supply < kSeedingMinSupply) {
             continue; // вид сюда не годится — пусть его семена лягут там, где ему подходит
         }
@@ -141,17 +144,17 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         // растение успело бы дорасти к этому возрасту. Иначе весь луг
         // созревал бы и умирал синхронными волнами.
         PlantComponent plant;
-        plant.age = randomUnit(state) * genome.maturityAge;
+        plant.age = static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maturityAge))));
 
-        const float grownTo = std::clamp(plant.age * genome.growthRate, 0.0f, 1.0f);
-        const int wanted = static_cast<int>(std::ceil(grownTo * genome.mineralNeed));
+        const int grownTo = std::min(kFull, plant.age * genome.growthRate);
+        const int wanted = (grownTo * genome.mineralNeed + kFull - 1) / kFull;
         // Минералы стартовых растений — не из воздуха: ровно столько,
         // сколько есть в клетке, и ровно столько же вернётся в неё
         // перегноем после смерти.
         plant.minerals = std::min(soil.minerals, std::max(0, wanted));
         soil.minerals -= plant.minerals;
-        plant.growth = genome.mineralNeed > 0.0f
-                            ? std::min(grownTo, static_cast<float>(plant.minerals) / genome.mineralNeed)
+        plant.growth = genome.mineralNeed > 0
+                            ? std::min(grownTo, plant.minerals * kFull / genome.mineralNeed)
                             : grownTo;
 
         const auto entity = world.registry().create();
@@ -167,7 +170,7 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
 // Константы этой стадии — наружу только для чтения (core/Diagnostics.hpp).
 void appendGrassSeedingConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* g = "Grass seeding";
-    out.push_back({g, "kSeedingMinSupply", kSeedingMinSupply});
+    out.push_back({g, "kSeedingMinSupply", static_cast<float>(kSeedingMinSupply)});
     out.push_back({g, "kAttemptMultiplier", static_cast<float>(kAttemptMultiplier)});
 }
 
