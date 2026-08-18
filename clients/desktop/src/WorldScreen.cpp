@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <raygui.h>
@@ -97,6 +99,13 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // осознанное поведение, не забытый сброс).
     static float viewX = 0.0f;
     static float viewY = 0.0f;
+    // Перетаскивание левой кнопкой мыши — вторая прокрутка, рядом с WASD.
+    // "Перетаскивание" отличается от обычного клика по клетке порогом
+    // сдвига от точки нажатия (см. ниже, у обработки мыши): пока порог не
+    // пройден, это ещё может оказаться кликом, и решение откладывается до
+    // отпускания кнопки.
+    static bool leftDragging = false;
+    static Vector2 leftPressPos{};
     // Масштаб, слои и открытость панели — заводятся один раз из config
     // (значения с диска или умолчания ClientConfig), дальше живут как
     // обычные static-переменные экрана; при изменении пишутся обратно в
@@ -157,6 +166,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // поэтому нажатие запоминается здесь и отрабатывается ниже, после
     // получения снапшота.
     bool fitRequested = false;
+    // Центрировать камеру на выбранном по клавише T — тем же способом, по
+    // той же причине: положение существа известно только из снапшота
+    // (оно ходит), поэтому нажатие запоминается здесь и отрабатывается
+    // ниже.
+    bool recenterRequested = false;
 
     const int screenW = GetScreenWidth();
     const int screenH = GetScreenHeight();
@@ -191,7 +205,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // на любом масштабе карта проезжает мимо одинаково. Не настройка —
     // темп прокрутки подбирается один раз на ощупь и от мира к миру не
     // меняется.
-    constexpr float kScrollTilesPerSecond = 5.0f;
+    constexpr float kScrollTilesPerSecond = 15.0f;
     const float scrollSpeedPx = kScrollTilesPerSecond * tileSizeF;
 
     const Vector2 mouse = GetMousePosition();
@@ -207,6 +221,45 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // Оверлей констант — по той же причине: он перекрывает экран целиком,
     // и слои под ним переключались бы вслепую.
     const bool inputBlocked = confirmingExit || ConstantsOverlay::visible();
+
+    // Перетаскивание левой кнопкой мыши. Порог сдвига от точки нажатия
+    // решает, был ли это клик (выбор клетки, дальше в этом файле) или
+    // перетаскивание (прокрутка): меньше порога — ещё возможный клик, и
+    // выбор срабатывает по отпусканию кнопки, а не по нажатию — раньше
+    // нельзя было отличить одно от другого, не дождавшись самого
+    // отпускания. Больше порога хотя бы раз — дальше это перетаскивание
+    // до самого отпускания, даже если мышь на миг вернётся к точке
+    // нажатия.
+    constexpr float kDragThresholdPx = 4.0f;
+    bool leftClickSelects = false;
+    if (!inputBlocked) {
+        if (mouseOverMap && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            leftDragging = false;
+            leftPressPos = mouse;
+        }
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            if (!leftDragging) {
+                const float dx = mouse.x - leftPressPos.x;
+                const float dy = mouse.y - leftPressPos.y;
+                leftDragging = (dx * dx + dy * dy) > kDragThresholdPx * kDragThresholdPx;
+            }
+            if (leftDragging) {
+                // Дельта за кадр, а не разница с точкой нажатия: второе
+                // легло бы поверх уже накопленной прокрутки и требовало
+                // бы своего собственного учёта границ карты вместо того,
+                // чтобы довериться общей проверке ниже (та же, что и у
+                // WASD).
+                const Vector2 delta = GetMouseDelta();
+                viewX -= delta.x;
+                viewY -= delta.y;
+            }
+        }
+        if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+            leftClickSelects = !leftDragging;
+            leftDragging = false;
+        }
+    }
+
     if (!inputBlocked) {
         if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
         if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
@@ -242,6 +295,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // проматывать карту после каждой регенерации.
         if (IsKeyPressed(KEY_F)) {
             fitRequested = true;
+        }
+
+        // Вернуть камеру к выбранному — на случай, если он ушёл (или его
+        // проскроллили) за край видимого. Клик заново центрирует камеру
+        // сам (см. ниже), эта клавиша — для той же цели без нового клика,
+        // который по невидимому существу и не поставить.
+        if (IsKeyPressed(KEY_T)) {
+            recenterRequested = true;
         }
 
         // Правая панель: одна клавиша листает её вкладки и сворачивает
@@ -369,6 +430,47 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         viewY = std::max(0.0f, viewY);
     }
 
+    // Текущая клетка цели: для существа — по идентификатору (оно ходит, и
+    // клетка, с которой его выбрали, уже не его клетка), для травы и
+    // почвы — сама клетка запроса. Пусто, если существа, за которым
+    // следили, больше нет в списке (умерло, съедено) — центрировать тогда
+    // не на чем, и marker на карте по той же причине не рисуется.
+    const auto markOf = [&snapshot](const InfoPanel::Target& target) -> std::optional<std::pair<int, int>> {
+        if (target.kind == InfoPanel::Target::Kind::None) {
+            return std::nullopt;
+        }
+        if (target.kind != InfoPanel::Target::Kind::Animal) {
+            return std::make_pair(target.x, target.y);
+        }
+        for (const auto& animal : snapshot.animals) {
+            if (animal.id == target.animalId) {
+                return std::make_pair(animal.x, animal.y);
+            }
+        }
+        return std::nullopt;
+    };
+
+    // Поставить камеру так, чтобы клетка (x, y) оказалась в центре
+    // видимой части карты, и тут же вписать результат в границы мира —
+    // тем же способом, что и обычная прокрутка чуть выше, просто разом
+    // вместо покадрового приближения.
+    const auto centerOn = [&](int x, int y) {
+        viewX = (static_cast<float>(x) + 0.5f) * tileSizeF - static_cast<float>(viewportW) * 0.5f;
+        viewY = (static_cast<float>(y) + 0.5f) * tileSizeF - static_cast<float>(viewportH) * 0.5f;
+        const float maxX = std::max(0.0f, static_cast<float>(snapshot.areaWidth) * tileSizeF - viewportW);
+        const float maxY = std::max(0.0f, static_cast<float>(snapshot.areaHeight) * tileSizeF - viewportH);
+        viewX = std::clamp(viewX, 0.0f, maxX);
+        viewY = std::clamp(viewY, 0.0f, maxY);
+    };
+
+    // Клавиша T (запомнена выше, до снапшота: положение существа известно
+    // только теперь).
+    if (recenterRequested) {
+        if (const auto mark = markOf(selection)) {
+            centerOn(mark->first, mark->second);
+        }
+    }
+
     const int tileSize = std::max(1, static_cast<int>(std::round(tileSizeF)));
 
     bool hasHoverTile = false;
@@ -401,7 +503,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         return targets;
     };
 
-    if (!inputBlocked && hasHoverTile && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    if (leftClickSelects && hasHoverTile) {
         const auto targets = targetsAt(hoverX, hoverY);
         // Клик по той же клетке сдвигает выбор на следующего в списке,
         // клик по новой — начинает список сначала.
@@ -413,6 +515,12 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             }
         }
         selection = targets[next];
+        // Камера — на выбранное: клик по клетке у самого края экрана
+        // (обычный способ заметить кого-то на подходе) иначе оставлял бы
+        // выбранного на самом краю, а не там, где удобно разглядывать.
+        if (const auto mark = markOf(selection)) {
+            centerOn(mark->first, mark->second);
+        }
     }
     // Правая кнопка снимает выбор: иначе от закреплённого существа нельзя
     // было бы отвязаться, не выбрав вместо него что-то другое.
@@ -619,34 +727,19 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // по клетке, в которой по нему щёлкнули, — в этом и весь смысл
         // слежения. Пропало из списка (умерло, съедено) — метки нет, и
         // карточка скажет, что именно случилось.
-        if (selection.kind != InfoPanel::Target::Kind::None) {
-            int markX = selection.x;
-            int markY = selection.y;
-            bool hasMark = selection.kind != InfoPanel::Target::Kind::Animal;
+        if (const auto mark = markOf(selection)) {
+            const float screenX = static_cast<float>(mark->first) * tileSizeF - viewX;
+            const float screenY = static_cast<float>(mark->second) * tileSizeF - viewY + kHudHeight;
+            const Color selectionColor{255, 255, 255, 235};
             if (selection.kind == InfoPanel::Target::Kind::Animal) {
-                for (const auto& animal : snapshot.animals) {
-                    if (animal.id == selection.animalId) {
-                        markX = animal.x;
-                        markY = animal.y;
-                        hasMark = true;
-                        break;
-                    }
-                }
-            }
-            if (hasMark) {
-                const float screenX = static_cast<float>(markX) * tileSizeF - viewX;
-                const float screenY = static_cast<float>(markY) * tileSizeF - viewY + kHudHeight;
-                const Color selectionColor{255, 255, 255, 235};
-                if (selection.kind == InfoPanel::Target::Kind::Animal) {
-                    // Кольцо, а не рамка: на клетке может стоять ещё
-                    // десяток зверей, и рамка вокруг всей клетки не
-                    // показала бы, за кем именно следят.
-                    DrawCircleLines(static_cast<int>(screenX + tileSizeF * 0.5f),
-                                     static_cast<int>(screenY + tileSizeF * 0.5f), std::max(4.0f, tileSizeF * 0.55f),
-                                     selectionColor);
-                } else {
-                    DrawRectangleLinesEx(Rectangle{screenX, screenY, tileSizeF, tileSizeF}, 2.0f, selectionColor);
-                }
+                // Кольцо, а не рамка: на клетке может стоять ещё десяток
+                // зверей, и рамка вокруг всей клетки не показала бы, за
+                // кем именно следят.
+                DrawCircleLines(static_cast<int>(screenX + tileSizeF * 0.5f),
+                                 static_cast<int>(screenY + tileSizeF * 0.5f), std::max(4.0f, tileSizeF * 0.55f),
+                                 selectionColor);
+            } else {
+                DrawRectangleLinesEx(Rectangle{screenX, screenY, tileSizeF, tileSizeF}, 2.0f, selectionColor);
             }
         }
 

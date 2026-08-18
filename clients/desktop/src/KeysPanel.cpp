@@ -52,12 +52,15 @@ void draw(Rectangle bounds, const MapTexture::Layers& layers, bool watching) {
 
     group("Map");
     row("W A S D / arrows", "scroll");
+    row("Left drag", "scroll (hold and move)");
     row("Mouse wheel", "zoom to cursor");
     row("F", "fit the whole map in the window");
 
     group("Selection");
     row("Left click", "inspect tile; click again to cycle");
     row("", "creatures -> grass -> soil");
+    row("", "camera centers on it too");
+    row("T", "recenter camera on the selection");
     row("Right click", "stop following");
 
     group("Layers -- what the tile colour is made of");

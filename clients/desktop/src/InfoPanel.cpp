@@ -260,32 +260,34 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
     const int columns = content.width >= kMinColumnWidth * 2.0f ? 2 : 1;
     ColumnWriter writer(content, content.width / static_cast<float>(columns));
 
-    drawTileGroup(state, writer, tileX, tileY);
-
-    if (target.kind == Target::Kind::Soil) {
-        return;
-    }
-    if (target.kind == Target::Kind::Animal && animal == nullptr) {
-        writer.group("Creature");
-        writer.note("no longer in the world", Color{230, 130, 120, 255});
-        return;
-    }
-
-    if (state.watched.kind == "gone" || !watchedMatches(state, target)) {
-        writer.group(target.kind == Target::Kind::Animal ? "Creature" : "Plant");
-        // "gone" — сервер уже ответил, что выбранного нет; иначе карточка
-        // просто ещё едет (одна рассылка, до snapshot_interval_ms).
-        writer.note(state.watched.kind == "gone" ? "no longer in the world" : "asking the server...",
-                    state.watched.kind == "gone" ? Color{230, 130, 120, 255} : kMutedColor);
-        return;
-    }
-
-    for (const auto& group : state.watched.groups) {
-        writer.group(group.title);
-        for (const auto& [name, value] : group.values) {
-            writer.line(name, formatValue(value));
+    // Клетка — последней группой, а не первой: у неё то и дело появляются
+    // и пропадают строки (вода, перегной, семя, падаль — все условные), и
+    // будь она первой, каждое такое появление сдвигало бы вниз всё тело,
+    // желания и геном под ним. Существу или траве, за которыми следят,
+    // это мешает больше всего — их и разглядывают дольше всего. Клетка
+    // после них может прыгать сама с собой сколько угодно: ниже нет
+    // ничего, чему бы это помешало.
+    if (target.kind != Target::Kind::Soil) {
+        if (target.kind == Target::Kind::Animal && animal == nullptr) {
+            writer.group("Creature");
+            writer.note("no longer in the world", Color{230, 130, 120, 255});
+        } else if (state.watched.kind == "gone" || !watchedMatches(state, target)) {
+            writer.group(target.kind == Target::Kind::Animal ? "Creature" : "Plant");
+            // "gone" — сервер уже ответил, что выбранного нет; иначе карточка
+            // просто ещё едет (одна рассылка, до snapshot_interval_ms).
+            writer.note(state.watched.kind == "gone" ? "no longer in the world" : "asking the server...",
+                        state.watched.kind == "gone" ? Color{230, 130, 120, 255} : kMutedColor);
+        } else {
+            for (const auto& group : state.watched.groups) {
+                writer.group(group.title);
+                for (const auto& [name, value] : group.values) {
+                    writer.line(name, formatValue(value));
+                }
+            }
         }
     }
+
+    drawTileGroup(state, writer, tileX, tileY);
 }
 
 } // namespace InfoPanel
