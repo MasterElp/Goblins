@@ -19,6 +19,7 @@ add_executable(client
     src/MapTexture.cpp
     src/ConstantsOverlay.cpp
     src/PopulationGraph.cpp
+    src/GenomeGraph.cpp
     src/InfoPanel.cpp
     src/KeysPanel.cpp
     src/SettingsPanel.cpp

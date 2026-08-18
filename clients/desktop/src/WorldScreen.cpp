@@ -10,6 +10,7 @@
 #include <raylib.h>
 
 #include "ConstantsOverlay.hpp"
+#include "GenomeGraph.hpp"
 #include "InfoPanel.hpp"
 #include "KeysPanel.hpp"
 #include "MapTexture.hpp"
@@ -38,13 +39,14 @@ constexpr float kStatusHeight = 26.0f;
 // Правая панель одна на три содержимого: карточка того, на что смотришь,
 // параметры генерации и графики численности. Одно место, а не три угла
 // экрана: смотрят в них по очереди, а места они просят одинаково много.
-enum class Tab { Hidden, Info, Params, Graphs, Keys };
+enum class Tab { Hidden, Info, Params, Graphs, Genome, Keys };
 
 const char* tabName(Tab tab) {
     switch (tab) {
         case Tab::Info: return "info";
         case Tab::Params: return "params";
         case Tab::Graphs: return "graphs";
+        case Tab::Genome: return "genome";
         case Tab::Keys: return "keys";
         case Tab::Hidden: break;
     }
@@ -55,6 +57,7 @@ Tab tabFromName(const std::string& name) {
     if (name == "info") return Tab::Info;
     if (name == "params") return Tab::Params;
     if (name == "graphs") return Tab::Graphs;
+    if (name == "genome") return Tab::Genome;
     if (name == "keys") return Tab::Keys;
     return Tab::Hidden;
 }
@@ -73,7 +76,8 @@ Tab nextTab(Tab tab) {
     switch (tab) {
         case Tab::Info: return Tab::Params;
         case Tab::Params: return Tab::Graphs;
-        case Tab::Graphs: return Tab::Keys;
+        case Tab::Graphs: return Tab::Genome;
+        case Tab::Genome: return Tab::Keys;
         case Tab::Keys: return Tab::Hidden;
         case Tab::Hidden: break;
     }
@@ -687,9 +691,9 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
 
         // Полоса вкладок — своей отрисовкой, а не кнопками raygui: у
         // кнопки нет состояния "выбрана", а именно это и нужно показать.
-        const Tab tabs[] = {Tab::Info, Tab::Params, Tab::Graphs, Tab::Keys};
-        const char* labels[] = {"Info", "Params", "Graphs", "Keys"};
-        constexpr int kTabCount = 4;
+        const Tab tabs[] = {Tab::Info, Tab::Params, Tab::Graphs, Tab::Genome, Tab::Keys};
+        const char* labels[] = {"Info", "Params", "Graphs", "Genome", "Keys"};
+        constexpr int kTabCount = 5;
         const float tabWidth = tabsBounds.width / static_cast<float>(kTabCount);
         for (int i = 0; i < kTabCount; ++i) {
             const Rectangle rect{tabsBounds.x + tabWidth * i, tabsBounds.y, tabWidth, tabsBounds.height};
@@ -734,6 +738,9 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             }
             case Tab::Graphs:
                 PopulationGraph::draw(snapshot, panelContent, !modalOpen);
+                break;
+            case Tab::Genome:
+                GenomeGraph::draw(snapshot, panelContent, !modalOpen);
                 break;
             case Tab::Keys:
                 KeysPanel::draw(panelContent, layers, network.updatesEnabled());

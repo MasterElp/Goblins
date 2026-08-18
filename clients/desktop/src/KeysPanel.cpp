@@ -78,7 +78,7 @@ void draw(Rectangle bounds, const MapTexture::Layers& layers, bool watching) {
 
     group("Panel");
     row("P", "next tab, then hide the panel");
-    row("", "Info -> Params -> Graphs -> Keys");
+    row("", "Info -> Params -> Graphs -> Genome -> Keys");
 
     group("Leaving");
     row("Esc", "back to the menu (asks to save)");

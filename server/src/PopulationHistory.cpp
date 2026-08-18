@@ -10,6 +10,8 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/TimeComponent.hpp"
+#include "core/generation/AnimalGenetics.hpp"
+#include "core/generation/PlantGenetics.hpp"
 
 namespace goblins {
 
@@ -56,19 +58,86 @@ std::vector<int> countAnimals(const World& world, bool wantPredators) {
     return counts;
 }
 
+// Средний геном живых: по одному числу на черту таблицы. Среднее
+// считается по всем особям диеты сразу — вопрос, ради которого оно
+// записывается, звучит "куда сносит мир целиком".
+//
+// Копится в int64: гены целые, а их сумма по тысячам растений (у max_age
+// это тысячи на особь) вышла бы за int уже на среднем лугу. Делится
+// нацело — округление до единицы гена не важно там, где интересна форма
+// кривой за тысячи тиков, а дробное среднее пришлось бы куда-то ронять,
+// и в летописи появилась бы дробь (core/Scale.hpp: их в состоянии мира
+// нет).
+//
+// Живых ноль — вектор пустой, а не нулевой: "средний геном вымерших" не
+// значит ничего, и рисовать по нему ноль было бы враньём. Клиент такую
+// точку просто не начинает (тем же способом, каким переживает точки из
+// мира без хищников).
+template <typename Traits, typename Each>
+std::vector<int> averageGenome(const Traits& traits, std::size_t traitCount, Each each) {
+    std::vector<std::int64_t> sums(traitCount, 0);
+    std::int64_t count = 0;
+    each([&](const auto& genome) {
+        ++count;
+        std::size_t i = 0;
+        for (const auto& trait : traits) {
+            sums[i++] += genome.*trait.gene;
+        }
+    });
+    if (count == 0) {
+        return {};
+    }
+    std::vector<int> average(traitCount, 0);
+    for (std::size_t i = 0; i < traitCount; ++i) {
+        average[i] = static_cast<int>(sums[i] / count);
+    }
+    return average;
+}
+
+std::vector<int> averagePlantGenome(const World& world) {
+    const auto& registry = world.registry();
+    // Только живые растения — по той же причине, по которой их считает
+    // countPlants: у лежащего семени геном есть, но на лугу его нет.
+    return averageGenome(kGrassTraits, kGrassTraitCount, [&](auto&& visit) {
+        registry.view<const PlantComponent, const PlantGenomeComponent>().each(
+            [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) { visit(genome); });
+    });
+}
+
+std::vector<int> averageAnimalGenome(const World& world, bool wantPredators) {
+    const auto& registry = world.registry();
+    const auto traits = wantPredators ? predatorTraits() : herbivoreTraits();
+    return averageGenome(traits, traits.size(), [&](auto&& visit) {
+        registry.view<const AnimalComponent, const AnimalGenomeComponent>().each(
+            [&](const entt::entity entity, const AnimalComponent& /*animal*/, const AnimalGenomeComponent& genome) {
+                if (registry.all_of<PredatorComponent>(entity) == wantPredators) {
+                    visit(genome);
+                }
+            });
+    });
+}
+
 // Точка — массивом: тик, численность травы по видам, травоядных по видам,
 // хищников по видам. Одно место на файл сохранения и на протокол:
 // разъехавшись, они читались бы одним и тем же клиентом по-разному.
 //
 // Хищники — четвёртым элементом, дописанным к трём прежним, а не новым
-// полем в объекте: летописи миров, прожитых до их появления, короче на
-// элемент, и читающая сторона обязана это пережить (см. fromJson).
+// полем в объекте; средние геномы — тремя следующими, тем же способом.
+// Летописи миров, прожитых до их появления, короче на эти элементы, и
+// читающая сторона обязана это пережить (см. fromJson).
+//
+// Элемент, дописанный в конец, — единственный способ растить эту запись
+// без смены формата: имена полей у тысячи точек весили бы больше самих
+// чисел, а порядковый номер ничего не весит вовсе.
 nlohmann::json encodePoint(const PopulationHistory::Point& point) {
     auto entry = nlohmann::json::array();
     entry.push_back(point.tick);
     entry.push_back(point.plants);
     entry.push_back(point.herbivores);
     entry.push_back(point.predators);
+    entry.push_back(point.plantGenome);
+    entry.push_back(point.herbivoreGenome);
+    entry.push_back(point.predatorGenome);
     return entry;
 }
 
@@ -109,6 +178,9 @@ void PopulationHistory::record(const World& world) {
     point.plants = countPlants(world);
     point.herbivores = countAnimals(world, /*wantPredators=*/false);
     point.predators = countAnimals(world, /*wantPredators=*/true);
+    point.plantGenome = averagePlantGenome(world);
+    point.herbivoreGenome = averageAnimalGenome(world, /*wantPredators=*/false);
+    point.predatorGenome = averageAnimalGenome(world, /*wantPredators=*/true);
     points_.push_back(std::move(point));
 
     if (points_.size() > kMaxPoints) {
@@ -184,6 +256,15 @@ void PopulationHistory::fromJson(const nlohmann::json& json) {
         // не было вовсе, и пустой вектор говорит именно это.
         if (entry.size() > 3) {
             point.predators = readInts(entry[3]);
+        }
+        // Средние геномы дописаны позже хищников: у точек постарше их нет,
+        // и это не битый файл, а другое прошлое. Пустой вектор говорит
+        // "тогда этого не записывали" — на графике такая часть кривой
+        // просто не начата.
+        if (entry.size() > 6) {
+            point.plantGenome = readInts(entry[4]);
+            point.herbivoreGenome = readInts(entry[5]);
+            point.predatorGenome = readInts(entry[6]);
         }
         points_.push_back(std::move(point));
     }

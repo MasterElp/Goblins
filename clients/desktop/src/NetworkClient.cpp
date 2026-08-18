@@ -331,6 +331,7 @@ void NetworkClient::applyPopulationHistory(const nlohmann::json& message, bool r
         working_.populationHistory.clear();
     }
     working_.populationInterval = history.value("interval", working_.populationInterval);
+    applyPopulationTraits(history);
 
     if (!history.contains("points") || !history["points"].is_array()) {
         return;
@@ -354,8 +355,46 @@ void NetworkClient::applyPopulationHistory(const nlohmann::json& message, bool r
         if (entry.size() > 3) {
             point.predators = decodeIntArray(entry[3]);
         }
+        // Средние геномы дописаны ещё позже, тем же способом — с пятого по
+        // седьмой. У точек постарше их нет, и график генома такую часть
+        // кривой просто не начинает.
+        if (entry.size() > 6) {
+            point.plantGenome = decodeIntArray(entry[4]);
+            point.herbivoreGenome = decodeIntArray(entry[5]);
+            point.predatorGenome = decodeIntArray(entry[6]);
+        }
         working_.populationHistory.push_back(std::move(point));
     }
+}
+
+// Черты, по которым записан средний геном: имя и границы вложения.
+// Приходят только в world_init (таблица черт вкомпилирована в ядро и за
+// жизнь мира не меняется), поэтому и читаются здесь же, где летопись.
+void NetworkClient::applyPopulationTraits(const nlohmann::json& history) {
+    if (!history.contains("traits") || !history["traits"].is_object()) {
+        return;
+    }
+    const auto read = [](const nlohmann::json& json) {
+        std::vector<WorldState::PopulationTrait> traits;
+        if (!json.is_array()) {
+            return traits;
+        }
+        for (const auto& entry : json) {
+            if (!entry.is_object()) {
+                continue;
+            }
+            WorldState::PopulationTrait trait;
+            trait.name = entry.value("name", std::string{});
+            trait.lo = entry.value("lo", 0);
+            trait.hi = entry.value("hi", 0);
+            traits.push_back(std::move(trait));
+        }
+        return traits;
+    };
+    const auto& traits = history["traits"];
+    working_.plantTraits = read(traits.contains("plants") ? traits["plants"] : nlohmann::json{});
+    working_.herbivoreTraits = read(traits.contains("herbivores") ? traits["herbivores"] : nlohmann::json{});
+    working_.predatorTraits = read(traits.contains("predators") ? traits["predators"] : nlohmann::json{});
 }
 
 // Карточка выбранного существа. Приходит только когда изменилась, поэтому

@@ -832,6 +832,32 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     // загрузка), и сшивать две летописи было бы враньём.
     auto history = history_.toJson();
     history["full"] = true;
+    // Черты, по которым записан средний геном в точках летописи: имя и
+    // границы вложения (atZero — худшее для существа значение черты,
+    // atOne — лучшее, см. core/generation/Genetics.hpp). Порядок тот же,
+    // в каком гены лежат в самой точке.
+    //
+    // Границы уходят вместе с именем не для полноты: по ним клиент кладёт
+    // все черты на одну шкалу "вложения" 0..1, и разные по величине гены
+    // (возраст в тысячах тиков и скорость в тысячных клетки) становятся
+    // сравнимы между собой. Считать эту нормировку на сервере значило бы
+    // потерять сами значения, а клиенту нужны и они — в подписи.
+    //
+    // Один раз, в world_init: таблица черт не меняется за жизнь мира
+    // вовсе, она вкомпилирована в ядро.
+    // Таблица берётся по ссылке (auto&&): kGrassTraits — сырой массив, и
+    // приём по значению превратил бы его в указатель, по которому уже не
+    // пройтись.
+    const auto traitsToJson = [](auto&& traits) {
+        auto array = nlohmann::json::array();
+        for (const auto& trait : traits) {
+            array.push_back({{"name", trait.name}, {"lo", trait.atZero}, {"hi", trait.atOne}});
+        }
+        return array;
+    };
+    history["traits"] = {{"plants", traitsToJson(kGrassTraits)},
+                          {"herbivores", traitsToJson(herbivoreTraits())},
+                          {"predators", traitsToJson(predatorTraits())}};
     message["history"] = std::move(history);
 
     message["layers"]["rockiness"] = layers.rockiness;
