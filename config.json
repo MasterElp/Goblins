@@ -3,8 +3,8 @@
         "herbivore_count": 400,
         "herbivore_species": 3,
         "mutation_rate": 60,
-        "predator_count": 25,
-        "predator_species": 3
+        "predator_count": 60,
+        "predator_species": 4
     },
     "area": {
         "height": 200,

@@ -158,6 +158,15 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // Диалог сохранения открыт из-за крестика, а не из-за Esc/Back: тогда
     // подтверждение закрывает приложение, а не возвращает в меню.
     static bool exitingApp = false;
+    // Регенерация уничтожает текущий мир безвозвратно — как и выход,
+    // спрашивает про сохранение первым делом, тем же диалогом по форме.
+    // Спрашивать нечего только пока мира ещё нет вовсе (кнопка "Create
+    // world" на пустом месте, см. ниже, у обработки панели) — тогда
+    // терять нечего, и регенерация уходит сразу. Параметры с панели
+    // запоминаются на время вопроса: сама панель к моменту ответа могла
+    // уже перерисоваться с другими значениями.
+    static bool confirmingRegenerate = false;
+    static goblins::RegenerationRequest pendingRegenerateParams{};
     // Карта в текстуре — тоже состояние экрана: пересобирается только
     // когда пришло новое состояние мира или переключён слой.
     static MapTexture::Cache mapCache;
@@ -220,7 +229,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // слоя позади, а буквенные клавиши при вводе имени — с WASD/P/1-6.
     // Оверлей констант — по той же причине: он перекрывает экран целиком,
     // и слои под ним переключались бы вслепую.
-    const bool inputBlocked = confirmingExit || ConstantsOverlay::visible();
+    const bool inputBlocked = confirmingExit || confirmingRegenerate || ConstantsOverlay::visible();
 
     // Перетаскивание левой кнопкой мыши. Порог сдвига от точки нажатия
     // решает, был ли это клик (выбор клетки, дальше в этом файле) или
@@ -785,7 +794,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     //
     // Пока открыт любой из модальных диалогов, панель под ним не должна
     // ловить клики.
-    const bool modalOpen = confirmingExit;
+    const bool modalOpen = confirmingExit || confirmingRegenerate;
     if (modalOpen) GuiLock();
 
     // Правая панель. Рисуется после карты и полосы, но до модальных
@@ -833,7 +842,24 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 const Rectangle paramsBounds{panelX, static_cast<float>(kHudHeight), kPanelWidth,
                                              static_cast<float>(screenH) - kHudHeight};
                 if (panel.draw(paramsBounds, panelParams, saveParamsRequested, snapshot.generated)) {
-                    network.sendRegenerate(panelParams);
+                    if (snapshot.generated) {
+                        // Мир уже есть и мог не быть сохранён — регенерация
+                        // сотрёт его безвозвратно, поэтому сперва спрашиваем,
+                        // как и при выходе с экрана. Сами параметры
+                        // запоминаем: диалог откроется на следующих кадрах,
+                        // а панель к тому времени успеет перерисоваться.
+                        pendingRegenerateParams = panelParams;
+                        confirmingRegenerate = true;
+                    } else {
+                        // Мира ещё нет — спрашивать не о чем, терять нечего.
+                        // Симуляция при этом стартует сразу: игрок только что
+                        // подобрал параметры именно затем, чтобы начать игру,
+                        // а не затем, чтобы дальше жать паузу самому.
+                        network.sendRegenerate(panelParams);
+                        if (snapshot.paused) {
+                            network.sendTogglePause();
+                        }
+                    }
                 }
                 if (saveParamsRequested) {
                     network.sendSaveGenerationConfig(panelParams);
@@ -899,14 +925,25 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // терялся бы молча, а мир — это часы прожитого времени.
     if (closeRequested) {
         closeRequested = false;
+        // Крестик отменяет любой другой открытый вопрос: закрыться в этот
+        // момент важнее, чем спросить про уже начатую регенерацию, а
+        // задавать оба вопроса сразу (два наложенных диалога) было бы
+        // просто нечитаемо.
+        confirmingRegenerate = false;
         confirmingExit = true;
         exitingApp = true;
     }
 
     // Кнопка Back ушла вместе с остальными кнопками полосы — выйти можно
     // только клавишей Esc, и диалог подтверждения открывает именно она.
+    // Диалог о регенерации, если он открыт, отменяется той же клавишей
+    // первым — у него приоритет перед выходом, а не наоборот.
     const bool escapePressed = IsKeyPressed(KEY_ESCAPE);
-    if (!confirmingExit) {
+    if (confirmingRegenerate) {
+        if (escapePressed) {
+            confirmingRegenerate = false;
+        }
+    } else if (!confirmingExit) {
         if (escapePressed) {
             confirmingExit = true;
             exitingApp = false;
@@ -914,6 +951,38 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     } else if (escapePressed) {
         confirmingExit = false;
         exitingApp = false;
+    }
+
+    if (confirmingRegenerate) {
+        DrawRectangle(0, 0, screenW, screenH, Color{0, 0, 0, 150});
+
+        const int boxW = 380;
+        const int boxH = 130;
+        const int boxX = screenW / 2 - boxW / 2;
+        const int boxY = screenH / 2 - boxH / 2;
+        DrawRectangle(boxX, boxY, boxW, boxH, hudColor);
+        DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
+        DrawText("Save world before regenerating?", boxX + 20, boxY + 16, 18, textColor);
+
+        const bool saveRegen = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 56, 160, 30}, "Save & Regenerate");
+        const bool discardRegen = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 200, static_cast<float>(boxY) + 56, 160, 30}, "Discard & Regenerate");
+        const bool cancelRegen = GuiButton(
+            Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 94, 340, 26}, "Cancel (Esc)");
+
+        // Как и при выходе: сервер сохраняет между тиками, ответа клиент
+        // не ждёт — попросить сохранить, следом перегенерировать.
+        if (saveRegen || discardRegen) {
+            if (saveRegen) {
+                network.sendSaveWorld();
+            }
+            network.sendRegenerate(pendingRegenerateParams);
+            confirmingRegenerate = false;
+        }
+        if (cancelRegen) {
+            confirmingRegenerate = false;
+        }
     }
 
     if (confirmingExit) {
