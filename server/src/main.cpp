@@ -349,14 +349,11 @@ int main(int argc, char** argv) {
     goblins::NetworkServer network(world, populationHistory, config.host, config.port, loop.paused, config, configPath,
                                     savesDirectory);
 
-    goblins::RegenerationRequest generationConfig;
-    generationConfig.area_width = config.area.width;
-    generationConfig.area_height = config.area.height;
-    generationConfig.seed = config.seed;
-    generationConfig.terrain = config.terrain;
-    generationConfig.boulder_count = config.boulder_count;
-    generationConfig.plants = config.plants;
-    network.setCurrentGenerationConfig(generationConfig);
+    // Перекладывание полей — одной функцией рядом со структурами
+    // (shared/config/Config.hpp), а не списком присваиваний здесь: пока
+    // список был здесь, в нём не хватало животных, и настройки поголовья
+    // из config.json не доезжали до мира вовсе.
+    network.setCurrentGenerationConfig(goblins::toRegenerationRequest(config));
 
     if (!network.start()) {
         return 1;

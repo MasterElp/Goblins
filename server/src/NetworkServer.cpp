@@ -938,17 +938,17 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
             toWrite = currentGenerationConfig_;
         }
 
-        ServerConfig toSave = baseConfig_;
         // Размер Области попадает в config.json вместе с остальным: он
         // теперь такой же параметр генерации, как seed, и "Save values"
         // должна делать умолчанием при следующем запуске именно то, что
         // набрано на панели.
-        toSave.area.width = std::clamp(toWrite.area_width, kMinAreaSide, kMaxAreaSide);
-        toSave.area.height = std::clamp(toWrite.area_height, kMinAreaSide, kMaxAreaSide);
-        toSave.seed = toWrite.seed;
-        toSave.terrain = toWrite.terrain;
-        toSave.boulder_count = toWrite.boulder_count;
-        toSave.plants = toWrite.plants;
+        //
+        // Раскладывает поля applyGeneration рядом со структурами
+        // (shared/config/Config.hpp), а не список присваиваний здесь: пока
+        // список был здесь, в нём не хватало животных, и правки поголовья
+        // "Save values" молча выбрасывала.
+        ServerConfig toSave = baseConfig_;
+        applyGeneration(toSave, toWrite);
         saveServerConfig(configPath_, toSave);
         std::cout << "Generation config saved to '" << configPath_ << "'.\n";
         broadcastNotice("info", "Generation values saved to config.");

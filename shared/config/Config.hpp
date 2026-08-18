@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -260,6 +261,56 @@ struct RegenerationRequest {
 // сгенерирован" в панели будет неточной для таких файлов.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, area_width, area_height, seed, terrain,
                                     boulder_count, plants, animals)
+
+// --- Перекладывание полей между ServerConfig и RegenerationRequest ---
+//
+// Два места, и оба здесь, вплотную к самим структурам. Раньше их было три,
+// и все три — руками, в разных файлах: сервер собирал запрос из
+// конфигурации при старте (server/main.cpp), а обработчик "Save values"
+// раскладывал запрос обратно (server/NetworkServer.cpp). Кто добавлял
+// новую секцию, правил ту из трёх, которую вспомнил.
+//
+// Так и вышло с животными: секция появилась в конфигурации, в панели и в
+// протоколе, но ни в сборку запроса, ни в сохранение её не дописали.
+// Настройки поголовья не доезжали ни туда, ни обратно — панель показывала
+// умолчания, мир рождался с умолчаниями, а "Save values" молча выбрасывал
+// правки. Ровно тем же кончилась и предыдущая попытка ("Не сохранялись
+// параметры" в CHANGELOG): три списка полей нельзя удержать в согласии,
+// их нужно свести в один.
+//
+// Теперь список один и лежит там, где новое поле и добавляют, — рядом со
+// структурами. Пропустить его, дописывая параметр, всё ещё можно, зато
+// теперь для этого надо не заметить соседнюю функцию, а не вспомнить про
+// три файла.
+inline RegenerationRequest toRegenerationRequest(const ServerConfig& config) {
+    RegenerationRequest request;
+    request.area_width = config.area.width;
+    request.area_height = config.area.height;
+    request.seed = config.seed;
+    request.terrain = config.terrain;
+    request.boulder_count = config.boulder_count;
+    request.plants = config.plants;
+    request.animals = config.animals;
+    return request;
+}
+
+// Обратно — в уже существующий ServerConfig: настройки, не относящиеся к
+// генерации (host, port, saves_dir, интервалы тика и снапшота), у него
+// свои и правятся не с панели, поэтому конфигурация не собирается заново,
+// а дополняется.
+//
+// Размер Области подрезается к границам здесь же: он приходит от клиента,
+// то есть снаружи, и класть в файл значение, с которым мир не
+// сгенерируется, нельзя.
+inline void applyGeneration(ServerConfig& config, const RegenerationRequest& request) {
+    config.area.width = std::clamp(request.area_width, kMinAreaSide, kMaxAreaSide);
+    config.area.height = std::clamp(request.area_height, kMinAreaSide, kMaxAreaSide);
+    config.seed = request.seed;
+    config.terrain = request.terrain;
+    config.boulder_count = request.boulder_count;
+    config.plants = request.plants;
+    config.animals = request.animals;
+}
 
 struct ClientConfig {
     std::string host = "127.0.0.1";
