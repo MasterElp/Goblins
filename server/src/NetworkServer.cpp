@@ -34,6 +34,7 @@
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "core/Diagnostics.hpp"
+#include "protocol/WirePrecision.hpp"
 #include "server/WorldSave.hpp"
 
 namespace goblins {
@@ -49,9 +50,9 @@ namespace {
 constexpr std::size_t kSnapshotBacklogBytes = 1024 * 1024;
 
 // Перевода в тысячные доли (прежний encodeMilli) здесь больше нет и быть
-// не может: мир и так целый (core/Scale.hpp), и слои уходят по сети ровно
-// теми числами, какими лежат в компонентах. Заодно исчезло поле "scale" из
-// протокола — делить клиенту не на что.
+// не может: мир и так целый (core/Scale.hpp), и поле "scale" из протокола
+// исчезло вместе с ним. Округление до сотых (toWire) — не шкала, а
+// точность показа, и живёт отдельно: см. shared/protocol/WirePrecision.hpp.
 
 // Дельта одного слоя — плоский массив пар "индекс тайла, новое
 // значение". Пустой, если слой не изменился вовсе; вызывающая сторона
@@ -237,8 +238,10 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     registry.view<const PositionComponent, const SoilComponent>().each(
         [&](const PositionComponent& pos, const SoilComponent& soil) {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
-            out.moisture[i] = soil.moisture;
-            out.rockiness[i] = soil.rockiness;
+            // Доли — с точностью показа (toWire), минералы — как есть:
+            // они счётные, а не доля (shared/protocol/WirePrecision.hpp).
+            out.moisture[i] = toWire(soil.moisture);
+            out.rockiness[i] = toWire(soil.rockiness);
             out.minerals[i] = soil.minerals;
         });
 
@@ -248,7 +251,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     // несёт, клиент нормализует по min/max текущей карты.
     registry.view<const PositionComponent, const HeightComponent>().each(
         [&](const PositionComponent& pos, const HeightComponent& h) {
-            out.terrainHeight[static_cast<std::size_t>(pos.y) * width + pos.x] = h.height;
+            out.terrainHeight[static_cast<std::size_t>(pos.y) * width + pos.x] = toWire(h.height);
         });
 
     // Вода и перегной на сервере разреженны (нет компонента = нет
@@ -257,7 +260,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     // выражает и появление воды, и её уход.
     registry.view<const PositionComponent, const WaterComponent>().each(
         [&](const PositionComponent& pos, const WaterComponent& w) {
-            out.water[static_cast<std::size_t>(pos.y) * width + pos.x] = w.depth;
+            out.water[static_cast<std::size_t>(pos.y) * width + pos.x] = toWire(w.depth);
         });
 
     registry.view<const PositionComponent, const HumusComponent>().each(
@@ -269,14 +272,14 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     // плотным слоем: ноль значит "туши здесь нет".
     registry.view<const PositionComponent, const CarcassComponent>().each(
         [&](const PositionComponent& pos, const CarcassComponent& tileCarcass) {
-            out.carcass[static_cast<std::size_t>(pos.y) * width + pos.x] = tileCarcass.meat;
+            out.carcass[static_cast<std::size_t>(pos.y) * width + pos.x] = toWire(tileCarcass.meat);
         });
 
     registry.view<const PositionComponent, const PlantComponent, const PlantGenomeComponent>().each(
         [&](const PositionComponent& pos, const PlantComponent& plant, const PlantGenomeComponent& genome) {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
             out.species[i] = genome.species;
-            out.growth[i] = plant.growth;
+            out.growth[i] = toWire(plant.growth);
         });
 
     // Семена (SeedComponent) — вид того, что из семени вырастет, или -1.
@@ -298,7 +301,8 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
                    const AnimalGenomeComponent& genome, const DesireComponent& desire) {
             const auto* identity = registry.try_get<const IdentityComponent>(entity);
             out.animals.push_back(LayerSnapshot::AnimalView{identity != nullptr ? identity->id : 0, pos.x, pos.y,
-                                                            genome.species, animal.growth, animal.health,
+                                                            genome.species, toWire(animal.growth),
+                                                            toWire(animal.health),
                                                             registry.all_of<PredatorComponent>(entity), animal.sex,
                                                             desire.current});
         });
