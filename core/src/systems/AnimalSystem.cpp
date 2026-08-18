@@ -10,9 +10,11 @@
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
+#include "core/components/DangerComponent.hpp"
 #include "core/components/DesireComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
+#include "core/components/InjuryComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
@@ -123,6 +125,28 @@ constexpr int kStarvationHarm = 20;
 constexpr int kDehydrationHarm = 30;
 constexpr int kRecoveryRate = 2;
 
+// Болезнь — третья беда того же здоровья, и она единственная приходит не от
+// нехватки, а от избытка: чем теснее стоит стадо, тем быстрее по нему идёт
+// зараза.
+//
+// Ради этого она и заведена. Стадо, которому хватает травы, растёт, пока
+// не съест луг под корень, и тогда вымирает целиком — половина миров без
+// единого хищника кончается именно так. Голод останавливает его слишком
+// поздно: он приходит, когда луга уже нет. Болезнь останавливает раньше и
+// по другой причине — не "еды не хватило", а "нас стало слишком много на
+// одном месте", то есть ровно тем, чем в живом мире и держится численность.
+//
+// Считается по СВОЕМУ виду, а не по всем травоядным разом: заражается
+// подобное подобным. Отсюда даром получается и то, чего в модели не было, —
+// повод видам разойтись: сплошной луг одного вида косит сам себя, а
+// вперемешку стоящие виды мешают друг другу меньше.
+//
+// Радиус — не зоркость (genome.perception), а короткое, одинаковое для всех
+// расстояние: заражаются от соприкосновения, а не от того, что увидели друг
+// друга через полкарты.
+constexpr int kDiseaseRadius = 2;
+constexpr int kDiseaseHarm = 1;
+
 // Желания. Ниже kDesireFloor желание никуда не гонит — животное считается
 // довольным и просто бродит. kDesireSwitch — насколько сильнее должно быть
 // другое желание, чтобы перебить уже выбранное: без этого запаса животное с
@@ -215,6 +239,33 @@ constexpr int kCarcassRot = 20;
 // core/Hunting.hpp вместе с самим выбором добычи: этот закон спрашивает не
 // только система, но и наблюдатель — он рисует найденную дорогу на карте.
 
+// --- Встревоженная земля ---
+// Сколько тревоги оставляет на клетке один удар и как быстро она тает (см.
+// DangerComponent). Осыпается медленнее, чем гниёт падаль: место, где
+// охотились, должно оставаться страшным дольше, чем лежит туша, — иначе
+// добыча вернётся туда раньше, чем хищник успеет уйти, и никакого
+// расползания не выйдет.
+constexpr int kDangerPerAttack = 400;
+constexpr int kDangerRot = 4;
+// Во сколько тревога под ногами превращается в страх. Меньше единицы
+// намеренно: место, где вчера убили, тревожит, но не гонит так, как гонят
+// зубы, которые видно прямо сейчас.
+constexpr int kDangerFearWeight = 700;
+
+// --- Рога и хромота ---
+// Много ли толку от рогов: удаётся ли жертве достать хищника в ответ.
+// Розыгрыш, а не правило — иначе всякий укус рогатого был бы для хищника
+// одинаково наказуем, и охота выродилась бы в арифметику. Восемь раз из
+// десяти.
+constexpr int kGoreChance = 800;
+// Насколько долго хромает хищник, получивший рогами в полную силу
+// (defense == kFull, взрослая жертва), и во сколько раз он при этом
+// медленнее. Половина скорости — это заведомо меньше, чем у любого
+// травоядного в мире: хромой не догонит никого, пока не заживёт, и в этом
+// вся защита рогов.
+constexpr int kLameMaxTicks = 300;
+constexpr int kLameShare = 500;
+
 // --- Намерения ---
 // Собираются при обходе животных и исполняются после него. Отдельный шаг
 // нужен там же, где и в PlantSystem: на один куст, одну тушу и один
@@ -251,6 +302,10 @@ struct MateIntent {
 struct AttackIntent {
     int prey = 0;
     int damage = 0;
+    // Кто ударил. Нужен затем, что удар бывает обоюдным: рогатая жертва
+    // достаёт укусившего в ответ (п.8), и без имени бьющего некому было бы
+    // хромать.
+    int attacker = 0;
 };
 
 // Живое животное в снимке этого тика. Указатели на компоненты держать
@@ -267,6 +322,7 @@ struct Animal {
     const AnimalGenomeComponent* genome = nullptr;
     DesireComponent* desire = nullptr;
     MovementComponent* memory = nullptr;
+    InjuryComponent* injury = nullptr;
 
     // Голод, жажда и страх живут здесь, в снимке тика, а не в компоненте.
     // Все три и раньше пересчитывались из тела и из чужого присутствия
@@ -356,6 +412,30 @@ void depositCarcass(World& world, int x, int y, int meat, int protein) {
     }
 }
 
+// Тревога ложится на тот же терраформирующий Entity тайла, что и падаль
+// (см. DangerComponent): здесь охотились. Тем же приёмом, что перегной и
+// туша, — если тревога на клетке уже есть, новая к ней прибавляется, но
+// выше полной клетка не встревожится: страшнее, чем страшно, не бывает.
+//
+// Вызывать только из команды очереди (05_Entity.md, п.5): добавление
+// компонента — структурное изменение.
+void depositDanger(World& world, int x, int y, int level) {
+    if (level <= 0 || !world.area().inBounds(x, y)) {
+        return;
+    }
+    for (const auto tile : world.area().cellAt(x, y).entities) {
+        if (!world.registry().all_of<SoilComponent>(tile)) {
+            continue;
+        }
+        if (auto* danger = world.registry().try_get<DangerComponent>(tile)) {
+            danger->level = std::min(kFull, danger->level + level);
+        } else {
+            world.registry().emplace<DangerComponent>(tile, DangerComponent{std::min(kFull, level)});
+        }
+        return;
+    }
+}
+
 // Крупицы белка распределены по туше равномерно, поэтому убыль мяса —
 // съеденного или сгнившего — освобождает их пропорционально. Куда они
 // пойдут дальше (в едока или в перегной), решает вызывающая сторона: для
@@ -427,7 +507,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<Animal> animals;
     auto animalView =
         registry.view<AnimalComponent, AnimalGenomeComponent, DesireComponent, IdentityComponent,
-                       MovementComponent, PositionComponent>();
+                       InjuryComponent, MovementComponent, PositionComponent>();
     for (const auto entity : animalView) {
         const auto& position = animalView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
@@ -438,7 +518,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                                   &animalView.get<AnimalComponent>(entity),
                                   &animalView.get<AnimalGenomeComponent>(entity),
                                   &animalView.get<DesireComponent>(entity),
-                                  &animalView.get<MovementComponent>(entity)});
+                                  &animalView.get<MovementComponent>(entity),
+                                  &animalView.get<InjuryComponent>(entity)});
     }
 
     // Падаль живёт своей жизнью и без животных (гниёт), поэтому выйти
@@ -461,6 +542,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<entt::entity> plantAt(cellCount, kNullEntity);
     std::vector<int> plantGrowth(cellCount, 0);
     std::vector<int> carcassMeat(cellCount, 0);
+    std::vector<int> dangerAt(cellCount, 0);
 
     auto terrainView = registry.view<PositionComponent, SoilComponent>();
     for (const auto entity : terrainView) {
@@ -475,6 +557,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         }
         if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
             carcassMeat[i] = carcass->meat;
+        }
+        if (const auto* danger = registry.try_get<const DangerComponent>(entity)) {
+            dangerAt[i] = danger->level;
         }
     }
 
@@ -502,6 +587,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // хищника, которого больше не видит.
     std::vector<int> threatX(animals.size(), 0);
     std::vector<int> threatY(animals.size(), 0);
+    // Есть ли у страха видимый источник. Страх бывает и беспредметным —
+    // от встревоженной земли под ногами (DangerComponent), — и тогда
+    // бежать НЕ ОТ ЧЕГО: конкретных координат у такого страха нет, а
+    // читать их всё равно значило бы бежать в сторону клетки (0, 0).
+    std::vector<bool> hasThreat(animals.size(), false);
 
     // Где стоят хищники — отдельным коротким списком, собранным один раз
     // за тик. Страх ищется перебором, и перебирать весь мир ради горстки
@@ -593,6 +683,32 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             state.health = std::min(kFull, state.health + kRecoveryRate);
         }
 
+        // Болезнь: чем теснее вокруг стоят свои, тем быстрее по стаду идёт
+        // зараза (см. kDiseaseHarm). Не решение животного и не желание, а
+        // то же здоровье, что отнимают голод и жажда, — поэтому и считается
+        // здесь, в теле, а не среди желаний.
+        //
+        // Своих — значит своего вида и своей диеты. Перебор по всем
+        // животным того же тика: их десятки, и обходится он дешевле, чем
+        // просмотр клеток вокруг (тот же приём, что у страха ниже).
+        //
+        // Хищников это не касается: их в мире единицы, тесноты у них не
+        // бывает, а численность им держит не зараза, а голод.
+        if (!animal.predator) {
+            int crowd = 0;
+            for (std::size_t b = 0; b < animals.size(); ++b) {
+                if (b == a || animals[b].predator || animals[b].genome->species != genome.species) {
+                    continue;
+                }
+                const int dx = animals[b].x - animal.x;
+                const int dy = animals[b].y - animal.y;
+                if (dx * dx + dy * dy <= kDiseaseRadius * kDiseaseRadius) {
+                    ++crowd;
+                }
+            }
+            state.health -= kDiseaseHarm * crowd;
+        }
+
         // Смерть от старости, от условий или от чужих зубов. Entity
         // исчезает не сейчас, а при разрешении очереди команд
         // (05_Entity.md, п.5), и тело ложится падалью — одинаково, от чего
@@ -607,6 +723,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // простоявший сотню тиков у куста, не должен помнить преграду,
         // которой давно нет.
         fadeWalkMemory(*animal.memory);
+
+        // Хромота заживает сама, по тику за тик (см. InjuryComponent). Срок,
+        // а не скорость: дробям в состоянии мира места нет.
+        if (animal.injury->lameTicks > 0) {
+            --animal.injury->lameTicks;
+        }
 
         // Навоз выпадает порциями на ту клетку, где животное сейчас стоит.
         if (state.dung >= kDungDrop) {
@@ -655,7 +777,20 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     animal.fear = scare;
                     threatX[a] = predatorX[b];
                     threatY[a] = predatorY[b];
+                    hasThreat[a] = true;
                 }
+            }
+
+            // Встревоженная земля под ногами (DangerComponent): здесь
+            // недавно охотились, и это тоже страшно — пусть слабее, чем
+            // видимые зубы. У такого страха нет источника, от которого
+            // убегать: животное не знает, где хищник, оно знает только,
+            // что тут плохое место. Поэтому threatX/threatY не трогаем —
+            // бегущий без цели просто уходит куда глаза глядят (см. "Шаг"),
+            // и уже этим освобождает участок.
+            const int dread = dangerAt[index(animal.x, animal.y)] * kDangerFearWeight / kFull;
+            if (dread > animal.fear) {
+                animal.fear = dread;
             }
         }
 
@@ -733,6 +868,19 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         bool hasTarget = false;
         int targetX = animal.x;
         int targetY = animal.y;
+
+        // Хромой ходит медленнее — и это ЕДИНСТВЕННОЕ, что делает с ним
+        // увечье (см. InjuryComponent). Больше ничего и не нужно: скорость
+        // решает и погоню, и бегство, а половины хода не хватает, чтобы
+        // догнать хоть кого-нибудь.
+        //
+        // Одна величина на оба места, где скорость вообще участвует: и на
+        // сам шаг, и на выбор добычи. Выбор — не косметика: хищник
+        // пропускает тех, кто не медленнее его (core/Hunting.hpp), и если
+        // хромота не войдёт в это сравнение, он побежит за той добычей,
+        // догнать которую уже не может, и будет жечь силы впустую.
+        const int effectiveSpeed =
+            animal.injury->lameTicks > 0 ? genome.speed * kLameShare / kFull : genome.speed;
 
         // Куда животное вообще может встать (core/Hunting.hpp, standableAt):
         // не за границей Области, не на занятый непроходимым объектом тайл и
@@ -820,14 +968,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // дорогу на карте, и разъехаться им негде.
                     reachOf.build(world.area(), animal.x, animal.y, reach, standable);
                     const HuntChoice choice = chooseHuntTarget(
-                        reachOf, Hunter{animal.x, animal.y, reach, genome.speed, animal.hunger}, preys,
+                        reachOf, Hunter{animal.x, animal.y, reach, effectiveSpeed, animal.hunger}, preys,
                         [&](int nx, int ny) { return carcassMeat[index(nx, ny)]; }, random);
 
                     // Добыча в пределах досягаемости зубов — бьём, и никуда
                     // при этом не идём.
                     if (choice.kind == HuntChoice::Kind::Prey && choice.atTeeth) {
-                        attacks.push_back(
-                            AttackIntent{preyOwner[static_cast<std::size_t>(choice.prey)], genome.attack * size / kFull});
+                        attacks.push_back(AttackIntent{preyOwner[static_cast<std::size_t>(choice.prey)],
+                                                       genome.attack * size / kFull, static_cast<int>(a)});
                         busy = true;
                         break;
                     }
@@ -980,7 +1128,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // Дробным оно уезжало туда же, просто этого не было видно; целое
         // состояние мира обязано жить в тех пределах, которые о нём
         // объявлены (см. AnimalComponent::stepProgress).
-        state.stepProgress = std::min(state.stepProgress + genome.speed, 2 * kFull - 1);
+        state.stepProgress = std::min(state.stepProgress + effectiveSpeed, 2 * kFull - 1);
         if (state.stepProgress < kFull) {
             continue;
         }
@@ -1014,10 +1162,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         if (fleeing) {
             // От опасности не идут к цели — от неё уходят: направление
             // берётся от неё к себе и ведёт прочь.
-            aim = walkDirectionTo(threatX[a], threatY[a], animal.x, animal.y);
+            //
+            // Но опасность бывает и беспредметной: встревоженная земля
+            // пугает, не показывая, откуда ждать зубов (см. п.3). Убегать
+            // от неё некуда — от неё уходят, всё равно куда, и уходят тем
+            // же отрезком поиска, каким ищут невидимое. Не будь этого,
+            // животное бежало бы от клетки (0, 0), то есть всегда в один и
+            // тот же угол мира.
+            aim = hasThreat[a] ? walkDirectionTo(threatX[a], threatY[a], animal.x, animal.y) : -1;
             if (aim < 0) {
-                // Хищник стоит ровно на той же клетке: бежать можно куда
-                // угодно, лишь бы не стоять.
+                // Либо страх беспредметен, либо хищник стоит ровно на той
+                // же клетке: и там, и там — куда угодно, лишь бы не стоять.
                 aim = roamDirection();
             }
         } else if (hasTarget) {
@@ -1217,6 +1372,39 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue;
         }
         animals[prey].state->health -= attack.damage;
+
+        // Место, где сомкнулись зубы, надолго перестаёт быть спокойным
+        // (см. DangerComponent). Кладётся на клетку жертвы, а не хищника:
+        // страшно там, где рвали, — и рвали, пока оба стояли на ней.
+        commands.enqueue([x = animals[prey].x, y = animals[prey].y](World& w) {
+            depositDanger(w, x, y, kDangerPerAttack);
+        });
+
+        // Рога. Жертва, у которой есть чем бодаться, достаёт укусившего в
+        // ответ — не всегда, а как повезёт (kGoreChance): удар по рогам не
+        // отнимает у хищника здоровья, но оставляет его хромым, и на это
+        // время он перестаёт кого-либо догонять (см. InjuryComponent).
+        //
+        // Розыгрыш собирается из seed мира, тика и имён обоих зверей
+        // (core/Random.hpp): системе не нужно ничего помнить, а разные пары
+        // в один тик получают разный исход.
+        const auto attacker = static_cast<std::size_t>(attack.attacker);
+        const int defense = animals[prey].genome->defense;
+        if (defense > 0 && alive[attacker]) {
+            std::uint64_t gore =
+                mixSeed(animalSeed, mixSeed(tick, mixSeed(animals[prey].id, animals[attacker].id)));
+            if (static_cast<int>(randomBelow(gore, kFull)) < kGoreChance) {
+                // Мелкий бодает слабее взрослого — тем же размером, каким
+                // считается и всё остальное в теле.
+                const int preySize =
+                    kMinSizeShare + (kFull - kMinSizeShare) * animals[prey].state->growth / kFull;
+                const int lame = kLameMaxTicks * defense / kFull * preySize / kFull;
+                // Не складывается: два укуса подряд не удваивают срок, а
+                // продлевают его до большего. Хромота — состояние, а не
+                // счётчик полученных ударов.
+                animals[attacker].injury->lameTicks = std::max(animals[attacker].injury->lameTicks, lame);
+            }
+        }
     }
     for (std::size_t a = 0; a < animals.size(); ++a) {
         if (!alive[a] || animals[a].state->health > 0) {
@@ -1341,6 +1529,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             // пока ничего не помнит: ни шага, ни преграды.
             w.registry().emplace<DesireComponent>(entity, DesireComponent{});
             w.registry().emplace<MovementComponent>(entity);
+            w.registry().emplace<InjuryComponent>(entity);
             // Диета наследуется без вариантов: у травоядных родителей не
             // родится хищник.
             if (predatorChild) {
@@ -1393,6 +1582,29 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             });
         }
     }
+
+    // --- 12. Тревога остывает ---
+    // Место, где охотились, со временем снова становится обычным (см.
+    // DangerComponent) — тем же порядком, каким гниёт падаль. Пока тревога
+    // держится, добыча обходит этот участок стороной, и хищнику приходится
+    // уходить за ней: так из голода и страха получается территория, которой
+    // никто никому не назначал.
+    auto dangerView = registry.view<DangerComponent>();
+    for (const auto entity : dangerView) {
+        auto& danger = dangerView.get<DangerComponent>(entity);
+        danger.level = std::max(0, danger.level - kDangerRot);
+        if (danger.level <= 0) {
+            commands.enqueue([entity](World& w) {
+                // Проверяем заново: пока команда ждала очереди, на этой
+                // клетке могли снова подраться (02_CorePrinciples.md, п.3 —
+                // нет тревоги, нет и компонента).
+                auto* left = w.registry().try_get<DangerComponent>(entity);
+                if (left != nullptr && left->level <= 0) {
+                    w.registry().remove<DangerComponent>(entity);
+                }
+            });
+        }
+    }
 }
 
 
@@ -1426,6 +1638,14 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kHuntHunger", kHuntHunger});
     out.push_back({g, "kCarcassRot", kCarcassRot});
     out.push_back({g, "kAttackReach", static_cast<float>(kAttackReach)});
+    out.push_back({g, "kDiseaseRadius", static_cast<float>(kDiseaseRadius)});
+    out.push_back({g, "kDiseaseHarm", kDiseaseHarm});
+    out.push_back({g, "kDangerPerAttack", kDangerPerAttack});
+    out.push_back({g, "kDangerRot", kDangerRot});
+    out.push_back({g, "kDangerFearWeight", kDangerFearWeight});
+    out.push_back({g, "kGoreChance", kGoreChance});
+    out.push_back({g, "kLameMaxTicks", static_cast<float>(kLameMaxTicks)});
+    out.push_back({g, "kLameShare", kLameShare});
 
     // Веса шага (core/Walk.hpp) — своей группой: они не про жизнь животного,
     // а про его походку, и подбираются вместе, друг против друга.

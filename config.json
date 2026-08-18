@@ -3,12 +3,12 @@
         "herbivore_count": 400,
         "herbivore_species": 3,
         "mutation_rate": 60,
-        "predator_count": 40,
+        "predator_count": 25,
         "predator_species": 3
     },
     "area": {
-        "height": 102,
-        "width": 150
+        "height": 200,
+        "width": 200
     },
     "boulder_count": 40,
     "host": "127.0.0.1",

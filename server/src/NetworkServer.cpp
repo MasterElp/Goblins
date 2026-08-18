@@ -16,11 +16,13 @@
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
+#include "core/components/DangerComponent.hpp"
 #include "core/components/DesireComponent.hpp"
 #include "core/components/HeightComponent.hpp"
 #include "core/components/HumusComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
+#include "core/components/InjuryComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
@@ -83,6 +85,7 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     water.assign(count, 0);
     humus.assign(count, 0);
     carcass.assign(count, 0);
+    danger.assign(count, 0);
     growth.assign(count, 0);
     rockiness.assign(count, 0);
     // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
@@ -284,6 +287,13 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     registry.view<const PositionComponent, const CarcassComponent>().each(
         [&](const PositionComponent& pos, const CarcassComponent& tileCarcass) {
             out.carcass[static_cast<std::size_t>(pos.y) * width + pos.x] = toWire(tileCarcass.meat);
+        });
+
+    // Встревоженность земли — тем же плотным слоем: ноль значит "здесь
+    // спокойно" (на сервере у тайла просто нет DangerComponent).
+    registry.view<const PositionComponent, const DangerComponent>().each(
+        [&](const PositionComponent& pos, const DangerComponent& tileDanger) {
+            out.danger[static_cast<std::size_t>(pos.y) * width + pos.x] = toWire(tileDanger.level);
         });
 
     registry.view<const PositionComponent, const PlantComponent, const PlantGenomeComponent>().each(
@@ -654,9 +664,15 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             watched["desire"] = desireName(desire.current);
 
             auto groups = nlohmann::json::array();
+            // Хромота (InjuryComponent) — рядом со здоровьем: это тоже
+            // состояние тела, просто временное. Через try_get, а не
+            // напрямую: наблюдатель не должен падать на звере, которому
+            // компонент почему-либо не завели.
+            const auto* injury = registry.try_get<const InjuryComponent>(entity);
             groups.push_back(makeGroup("Body", {{"age", animal.age},
                                                  {"growth", animal.growth},
                                                  {"health", animal.health},
+                                                 {"lame_ticks", injury != nullptr ? injury->lameTicks : 0},
                                                  {"energy", animal.energy},
                                                  {"water", animal.water},
                                                  {"protein", animal.protein},
@@ -867,6 +883,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["layers"]["water"] = layers.water;
     message["layers"]["humus"] = layers.humus;
     message["layers"]["carcass"] = layers.carcass;
+    message["layers"]["danger"] = layers.danger;
     message["layers"]["species"] = layers.species;
     message["layers"]["growth"] = layers.growth;
     message["layers"]["seeds"] = layers.seeds;
@@ -896,6 +913,7 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
         {"water", {&previous.water, &current.water}},
         {"humus", {&previous.humus, &current.humus}},
         {"carcass", {&previous.carcass, &current.carcass}},
+        {"danger", {&previous.danger, &current.danger}},
         {"species", {&previous.species, &current.species}},
         {"growth", {&previous.growth, &current.growth}},
         {"seeds", {&previous.seeds, &current.seeds}},

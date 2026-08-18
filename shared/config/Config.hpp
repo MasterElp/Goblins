@@ -338,6 +338,11 @@ struct ClientConfig {
     bool show_height = true;
     bool show_plants = true;
     bool show_animals = true;
+    // Встревоженность земли — след недавней охоты (DangerComponent).
+    // Отдельный выключатель, а не часть слоя животных: это состояние
+    // почвы, и смотреть на него обычно нужно как раз тогда, когда
+    // разбираешься, почему стадо ушло с этого края карты.
+    bool show_danger = true;
     float zoom = 1.0f;
 
     // Какая вкладка открыта в правой панели экрана мира: "info"
@@ -357,7 +362,7 @@ struct ClientConfig {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
                                     fullscreen, show_rockiness, show_moisture, show_minerals,
-                                    show_height, show_plants, show_animals, zoom, panel_tab)
+                                    show_height, show_plants, show_animals, show_danger, zoom, panel_tab)
 
 namespace detail {
 

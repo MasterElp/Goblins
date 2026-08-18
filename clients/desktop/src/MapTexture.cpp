@@ -36,6 +36,11 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
         if (layers.plants && state.humus[i] > 0) {
             color = TileColors::humus(color, state.humus[i]);
         }
+        // Встревоженность — под падалью и под травой: это самый нижний из
+        // следов, память земли о том, что здесь рвали.
+        if (layers.danger && !state.danger.empty() && state.danger[i] > 0.0f) {
+            color = TileColors::danger(color, state.danger[i]);
+        }
         // Падаль — поверх перегноя и под травой: туша лежит на земле, а
         // трава вокруг неё продолжает расти.
         if (layers.animals && !state.carcass.empty() && state.carcass[i] > 0.0f) {

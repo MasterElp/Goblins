@@ -20,6 +20,7 @@
 #include "core/components/HerbivoreComponent.hpp"
 #include "core/components/HumusComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
+#include "core/components/InjuryComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PlantComponent.hpp"
@@ -830,6 +831,10 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             // единственное, что от этого меняется, — первые несколько его
             // шагов после открытия мира.
             world.registry().emplace<MovementComponent>(entity);
+            // Хромота (InjuryComponent) в файле не лежит по той же
+            // причине: срок увечья — не мир, а состояние тела на несколько
+            // сотен тиков. Загруженный зверь просто здоров.
+            world.registry().emplace<InjuryComponent>(entity);
             // Диета: без тега животное не знало бы, что для него еда.
             // Хищник помечен явно, всё остальное живое — травоядное (в том
             // числе животные из файлов, сохранённых до появления хищников).

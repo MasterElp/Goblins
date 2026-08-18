@@ -519,6 +519,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // клетке нет".
         working_.seedSpeciesAt = decodeInts(layers, "seeds", cellCount, -1);
         working_.carcass = decodeScaled(layers, "carcass", cellCount, kFromHundredths);
+        working_.danger = decodeScaled(layers, "danger", cellCount, kFromHundredths);
 
         if (json.contains("plant_species")) {
             working_.plantSpecies.clear();
@@ -616,6 +617,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "minerals", working_.minerals, [](int raw) { return raw; });
         applyChangedCells(json, "humus", working_.humus, [](int raw) { return raw; });
         applyChangedCells(json, "carcass", working_.carcass, toFraction);
+        applyChangedCells(json, "danger", working_.danger, toFraction);
         applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
         applyChangedCells(json, "seeds", working_.seedSpeciesAt, [](int raw) { return raw; });
         // Поголовье — изменениями, как и слои, только правится не клетка,

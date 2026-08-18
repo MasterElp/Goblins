@@ -9,6 +9,6 @@ namespace goblins {
 // заметных изменениях — не сборочный номер и не git-хэш: тут важно на
 // глаз отличить "это старый .exe" от "это новый .exe", а не отследить
 // коммит.
-inline constexpr const char* kAppVersion = "0.30.0";
+inline constexpr const char* kAppVersion = "0.31.0";
 
 } // namespace goblins
