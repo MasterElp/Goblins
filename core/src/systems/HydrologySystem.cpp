@@ -103,6 +103,18 @@ constexpr int kMineralMoistureThreshold = 500;
 // прежде чем испарится первая единица.
 constexpr int kEvaporationBase = 100;
 
+// Потолок эрозии от напора: клетку разрешено размыть не больше, чем на
+// (высота падения воды) * kErosionHeightFactor за тик, где высота падения —
+// разница между поверхностью воды в клетке (terrainHeight + waterDepth,
+// снимок ДО течения) и дном самого низкого соседа, в который она стекает.
+// Смысл — как у водопада: маленький перепад несёт мало силы и почти не
+// размывает, большой перепад бьёт в дно и вымывает заметно больше, даже
+// если объём воды тот же самый. Считается заново для каждой клетки в
+// момент вымывания, а не хранится отдельным свойством мира — это форма
+// самого закона размыва, а не то, что имеет смысл настраивать по мирам.
+// kFull-масштаб: 200 — это те же 0.2, что и у остальных долей в проекте.
+constexpr int kErosionHeightFactor = 200;
+
 // Минералы: выравнивание с единственным соседом за тик, а не раздача
 // всем сразу. Клетка A ищет среди соседей, которые "притягивают" минералы
 // (есть вода или влажность выше порога — они "вымываются" туда), самого
@@ -151,7 +163,6 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const int rainIntervalTicks = worldProperties.rainIntervalTicks;
     const int rainAmount = worldProperties.rainAmount;
     const int soilErosionRate = worldProperties.soilErosionRate;
-    const int maxErosionDepth = worldProperties.maxErosionDepth;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -437,22 +448,19 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         // docs/01_Cosmology.md, п.2.
         const int softness = kFull - rockiness[i];
 
-        // Потолок выемки. Без него клетка под постоянным источником
-        // размывается каждый тик без остановки — высота уезжает в минус, и
-        // появляется бездонная яма, никак не связанная с рельефом вокруг.
-        // Ограничиваем глубину относительно самого низкого соседа, с
-        // которым клетка делится водой. Считаем от снимка (terrainHeight),
-        // а не от накопителя, чтобы результат не зависел от порядка обхода
-        // клеток — как и всё остальное в этом шаге.
-        const int erosionFloor = lowestNeighborBed[i] - maxErosionDepth;
-        const long long allowedErosion = std::max(0, terrainHeight[i] - erosionFloor);
-        // Скорость размыва и мягкость — обе в тысячных долях, поэтому
+        // Потолка выемки относительно соседа больше нет — вместо него
+        // ограничение от напора (kErosionHeightFactor выше): чем выше
+        // стояла вода над дном, куда она стекает, тем сильнее ей разрешено
+        // бить. Скорость размыва и мягкость — обе в тысячных долях, поэтому
         // делить приходится дважды.
-        const long long erosion =
-            std::min(-delta * soilErosionRate * softness / (static_cast<long long>(kFull) * kFull), allowedErosion);
+        const long long erosion = -delta * soilErosionRate * softness / (static_cast<long long>(kFull) * kFull);
 
-        nextTerrainHeight[i] -= static_cast<int>(erosion);
-        totalEroded += erosion;
+        const int headDrop = std::max(0, terrainHeight[i] + waterDepth[i] - lowestNeighborBed[i]);
+        const long long allowedErosion = static_cast<long long>(headDrop) * kErosionHeightFactor / kFull;
+
+        const long long appliedErosion = std::min(erosion, allowedErosion);
+        nextTerrainHeight[i] -= static_cast<int>(appliedErosion);
+        totalEroded += appliedErosion;
     }
 
     // Ёмкость углублений: клетку, принявшую воду, разрешено поднять
@@ -658,6 +666,7 @@ void appendHydrologyConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kWaterRetention", static_cast<float>(kWaterRetention)});
     out.push_back({g, "kPoolCells", static_cast<float>(kPoolCells)});
     out.push_back({g, "kVoidHeight", static_cast<float>(kVoidHeight)});
+    out.push_back({g, "kErosionHeightFactor", static_cast<float>(kErosionHeightFactor)});
     out.push_back({g, "kMineralMoistureThreshold", static_cast<float>(kMineralMoistureThreshold)});
     out.push_back({g, "kMineralSlopeThreshold", static_cast<float>(kMineralSlopeThreshold)});
     out.push_back({g, "kRainDurationTicks", static_cast<float>(kRainDurationTicks)});

@@ -109,17 +109,15 @@ struct TerrainConfig {
     int rain_interval_ticks = 400;
     int rain_amount = 50;
 
-    // Эрозия: скорость вымывания породы потоком (в тысячных долях) и
-    // потолок выемки относительно соседа — тоже свойства мира, см.
-    // core::TerrainParams::soilErosionRate/maxErosionDepth.
+    // Эрозия: скорость вымывания породы потоком (в тысячных долях) — тоже
+    // свойство мира, см. core::TerrainParams::soilErosionRate.
     int soil_erosion_rate = 50;
-    int max_erosion_depth = 500;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, feature_size, noise_octaves, mountain_height,
                                     mountain_hardness, river_count, river_width, river_sinuosity, river_depth, pond_depth,
                                     minerals_average, water_source_count, water_source_depth,
                                     water_evaporation_rate, rain_interval_ticks, rain_amount,
-                                    soil_erosion_rate, max_erosion_depth)
+                                    soil_erosion_rate)
 
 // Зеркало core::PlantParams (core/generation/PlantParams.hpp) — по той же
 // причине, что и TerrainConfig выше: core не знает о JSON, поэтому

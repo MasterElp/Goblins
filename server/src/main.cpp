@@ -61,7 +61,6 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.rainIntervalTicks = config.rain_interval_ticks;
     params.rainAmount = config.rain_amount;
     params.soilErosionRate = config.soil_erosion_rate;
-    params.maxErosionDepth = config.max_erosion_depth;
     return params;
 }
 

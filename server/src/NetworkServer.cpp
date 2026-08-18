@@ -21,6 +21,7 @@
 #include "core/components/HumusComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
+#include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
@@ -435,8 +436,14 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
     // ход" и "сколько шагов до цели". Ноль шагов при полной округе — это и
     // есть "не нашлось никого, до кого можно дойти", и увидеть это в
     // карточке проще, чем вглядываться в карту.
-    auto pathGroup = [&groups, reachCount](int roadSteps) {
-        groups.push_back(makeGroup("Path", {{"reach_cells", reachCount}, {"road_steps", roadSteps}}));
+    // "stuck" — то, что животное помнит ногами (core/Walk.hpp): насколько
+    // давно у него нет продвижения. Число рядом с дорогой, потому что
+    // отвечает оно на тот же вопрос: почему зверь стоит или ходит кругами.
+    const auto* memory = registry.try_get<const MovementComponent>(entity);
+    auto pathGroup = [&groups, reachCount, memory](int roadSteps) {
+        groups.push_back(makeGroup("Path", {{"reach_cells", reachCount},
+                                             {"road_steps", roadSteps},
+                                             {"stuck", memory != nullptr ? memory->stuck : 0}}));
     };
 
     // Куда идёт зверь: цель и её род. Считают их два разных закона, но
