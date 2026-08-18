@@ -70,6 +70,7 @@ void draw(Rectangle bounds, const MapTexture::Layers& layers, bool watching) {
 
     group("World");
     row("Space", "pause / resume (the world stops)");
+    row("Ctrl+S", "quick save (no dialog, current name)");
     row("C", "world law constants (read-only)");
     layerRow("H", "watch the world (the world keeps living)", watching);
     row("", "off also while the window is minimised");

@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
-#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -145,11 +143,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // Диалог сохранения открыт из-за крестика, а не из-за Esc/Back: тогда
     // подтверждение закрывает приложение, а не возвращает в меню.
     static bool exitingApp = false;
-    // Диалог ввода имени при сохранении — открывается кнопкой "Save
-    // world", буфер предзаполняется именем текущего мира (пусто, если
-    // мир ещё не сохранён).
-    static bool showSaveDialog = false;
-    static char saveNameBuffer[64] = "";
     // Карта в текстуре — тоже состояние экрана: пересобирается только
     // когда пришло новое состояние мира или переключён слой.
     static MapTexture::Cache mapCache;
@@ -207,7 +200,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // слоя позади, а буквенные клавиши при вводе имени — с WASD/P/1-6.
     // Оверлей констант — по той же причине: он перекрывает экран целиком,
     // и слои под ним переключались бы вслепую.
-    const bool inputBlocked = confirmingExit || showSaveDialog || ConstantsOverlay::visible();
+    const bool inputBlocked = confirmingExit || ConstantsOverlay::visible();
     if (!inputBlocked) {
         if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) viewY -= scrollSpeedPx * dt;
         if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) viewY += scrollSpeedPx * dt;
@@ -313,6 +306,18 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // экране, и рука находит его не глядя.
         if (IsKeyPressed(KEY_SPACE)) {
             network.sendTogglePause();
+        }
+
+        // Быстрое сохранение — без диалога и без имени: сервер сам решает,
+        // куда писать (см. NetworkServer::handleClientMessage, "save_world"
+        // с пустым именем) — под именем текущего мира, а если он ещё ни
+        // разу не сохранялся, придумывает новое. Результат виден в полосе
+        // состояния снизу (notice), поэтому отдельного подтверждения на
+        // экране не нужно. Кнопка "Save world" убрана — это единственный
+        // способ сохранить мир руками, не считая выхода с экрана.
+        const bool ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+        if (ctrlDown && IsKeyPressed(KEY_S)) {
+            network.sendSaveWorld();
         }
     }
 
@@ -666,35 +671,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         DrawText("NOT WATCHING (H)", hudExtraX, 8, 16, pausedColor);
     }
 
-    // Пока открыт любой из модальных диалогов, ни кнопки полосы, ни панель
-    // настроек под ним не должны ловить клики.
-    const bool modalOpen = confirmingExit || showSaveDialog;
+    // Верхняя полоса больше не несёт кнопок: Back/Save/Panel/Stop
+    // дублировали клавиши (Esc, Ctrl+S, P, Space) и только отнимали место
+    // у карты. Список того, что и как включается, — на вкладке Keys.
+    //
+    // Пока открыт любой из модальных диалогов, панель под ним не должна
+    // ловить клики.
+    const bool modalOpen = confirmingExit;
     if (modalOpen) GuiLock();
-
-    // Кнопки полосы — справа налево. Пауза здесь же кнопкой, а не только
-    // клавишей P: на прежнем экране генерации Start/Stop нажимали мышью,
-    // не отрываясь от ползунков.
-    float buttonX = static_cast<float>(viewportW) - 110.0f;
-    const bool backPressed = GuiButton(Rectangle{buttonX, 2, 100, kHudHeight - 4}, "Back (Esc)");
-    buttonX -= 110.0f;
-    const bool savePressed = GuiButton(Rectangle{buttonX, 2, 100, kHudHeight - 4}, "Save world");
-    buttonX -= 110.0f;
-    const bool panelPressed = GuiButton(Rectangle{buttonX, 2, 100, kHudHeight - 4}, panelOpen ? "Hide (P)" : "Panel (P)");
-    buttonX -= 80.0f;
-    const bool pausePressed = GuiButton(Rectangle{buttonX, 2, 70, kHudHeight - 4}, snapshot.paused ? "Start" : "Stop");
-
-    if (savePressed) {
-        std::snprintf(saveNameBuffer, sizeof(saveNameBuffer), "%s", snapshot.currentWorld.c_str());
-        showSaveDialog = true;
-    }
-    if (panelPressed) {
-        tab = panelOpen ? Tab::Hidden : Tab::Info;
-        config.panel_tab = tabName(tab);
-        goblins::saveClientConfig(configPath, config);
-    }
-    if (pausePressed) {
-        network.sendTogglePause();
-    }
 
     // Правая панель. Рисуется после карты и полосы, но до модальных
     // диалогов: она часть экрана, а не наложение поверх него.
@@ -806,51 +790,19 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         closeRequested = false;
         confirmingExit = true;
         exitingApp = true;
-        // Ввод имени поверх вопроса о выходе только запутал бы: имя
-        // спросят снова, если игрок выберет "Save".
-        showSaveDialog = false;
     }
 
+    // Кнопка Back ушла вместе с остальными кнопками полосы — выйти можно
+    // только клавишей Esc, и диалог подтверждения открывает именно она.
     const bool escapePressed = IsKeyPressed(KEY_ESCAPE);
-    if (showSaveDialog) {
+    if (!confirmingExit) {
         if (escapePressed) {
-            showSaveDialog = false;
-        }
-    } else if (!confirmingExit) {
-        if (backPressed || escapePressed) {
             confirmingExit = true;
             exitingApp = false;
         }
     } else if (escapePressed) {
         confirmingExit = false;
         exitingApp = false;
-    }
-
-    if (showSaveDialog) {
-        DrawRectangle(0, 0, screenW, screenH, Color{0, 0, 0, 150});
-
-        const int boxW = 380;
-        const int boxH = 130;
-        const int boxX = screenW / 2 - boxW / 2;
-        const int boxY = screenH / 2 - boxH / 2;
-        DrawRectangle(boxX, boxY, boxW, boxH, hudColor);
-        DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
-        DrawText("Save world as:", boxX + 20, boxY + 16, 18, textColor);
-
-        GuiTextBox(Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 44, 340, 28}, saveNameBuffer,
-                   sizeof(saveNameBuffer), true);
-
-        const bool confirmSave = GuiButton(
-            Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 84, 160, 30}, "Save");
-        const bool cancelSave = GuiButton(
-            Rectangle{static_cast<float>(boxX) + 200, static_cast<float>(boxY) + 84, 160, 30}, "Cancel (Esc)");
-
-        if (confirmSave || (IsKeyPressed(KEY_ENTER) && std::strlen(saveNameBuffer) > 0)) {
-            network.sendSaveWorld(saveNameBuffer);
-            showSaveDialog = false;
-        } else if (cancelSave) {
-            showSaveDialog = false;
-        }
     }
 
     if (confirmingExit) {
@@ -893,10 +845,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         }
     }
 
-    // Оверлей констант — последним: он перекрывает всё, включая диалоги.
-    // Переключение отключено, пока открыто поле ввода имени мира, иначе
-    // буква "C" в имени открывала бы оверлей вместо того, чтобы набраться.
-    ConstantsOverlay::update(snapshot, !showSaveDialog);
+    // Оверлей констант — последним: он перекрывает всё, включая диалог выхода.
+    ConstantsOverlay::update(snapshot);
 
     return AppScreen::World;
 }
