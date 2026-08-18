@@ -286,7 +286,7 @@ void NetworkClient::applyWatched(const nlohmann::json& message) {
                 if (!entry.is_array() || entry.size() < 2 || !entry[0].is_string() || !entry[1].is_number()) {
                     continue;
                 }
-                parsedGroup.values.emplace_back(entry[0].get<std::string>(), entry[1].get<float>());
+                parsedGroup.values.emplace_back(entry[0].get<std::string>(), entry[1].get<int>());
             }
             parsed.groups.push_back(std::move(parsedGroup));
         }

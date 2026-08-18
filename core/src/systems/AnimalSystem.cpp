@@ -23,6 +23,7 @@
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Hunting.hpp"
+#include "core/Mating.hpp"
 #include "core/Needs.hpp"
 #include "core/Scale.hpp"
 
@@ -660,11 +661,23 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         preyOwner.push_back(static_cast<int>(b));
     }
 
-    // Округа хищника и дорога по ней. Живут снаружи цикла и
+    // Возможная пара в том виде, в каком её видно со стороны
+    // (core/Mating.hpp): кто такой и согласен ли сойтись. Список один на
+    // всех ищущих и на обе диеты — кому кто ровня, разбирается сам закон.
+    // Желания у всех уже посчитаны (п.3), поэтому "согласен" здесь честное,
+    // а не прошлотиковое.
+    std::vector<MateCandidate> mates;
+    for (std::size_t b = 0; b < animals.size(); ++b) {
+        mates.push_back(MateCandidate{animals[b].id, animals[b].x, animals[b].y, animals[b].genome->species,
+                                       animals[b].predator, animals[b].state->sex,
+                                       alive[b] && animals[b].desire->current == Desire::Mate});
+    }
+
+    // Округа зверя и дорога по ней (core/Path.hpp). Живут снаружи цикла и
     // переиспользуются: за тик волна пускается столько раз, сколько в мире
-    // хищников, а массивы у неё на всю Область.
-    HuntReach huntReach;
-    std::vector<HuntCell> road;
+    // ищущих, а массивы у неё на всю Область.
+    Reach reachOf;
+    std::vector<PathCell> road;
 
     // --- 4. Решения: что животное делает со своим желанием ---
     for (std::size_t a = 0; a < animals.size(); ++a) {
@@ -773,9 +786,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // (кого выбрать и какой дорогой идти) живёт в
                     // core/Hunting.hpp: по нему же наблюдатель рисует эту
                     // дорогу на карте, и разъехаться им негде.
-                    huntReach.build(world.area(), animal.x, animal.y, reach, standable);
+                    reachOf.build(world.area(), animal.x, animal.y, reach, standable);
                     const HuntChoice choice = chooseHuntTarget(
-                        huntReach, Hunter{animal.x, animal.y, reach, genome.speed, animal.hunger}, preys,
+                        reachOf, Hunter{animal.x, animal.y, reach, genome.speed, animal.hunger}, preys,
                         [&](int nx, int ny) { return carcassMeat[index(nx, ny)]; }, random);
 
                     // Добыча в пределах досягаемости зубов — бьём, и никуда
@@ -792,7 +805,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // не напролом. Напролом он упрётся ровно в тот берег,
                     // который дорога и обходит, и вся находка пропадёт зря.
                     if (choice.kind != HuntChoice::Kind::None) {
-                        huntReach.roadTo(choice.x, choice.y, road);
+                        reachOf.roadTo(choice.x, choice.y, road);
                         if (!road.empty()) {
                             targetX = road.front().x;
                             targetY = road.front().y;
@@ -851,35 +864,36 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 break;
             }
             case Desire::Mate: {
-                // Партнёров ищем перебором по всем животным, а не по клеткам
-                // карты: их десятки, и квадрат от десятков дешевле, чем
-                // просмотр круга клеток на каждого.
-                int bestDistance = 0;
-                for (std::size_t b = 0; b < animals.size(); ++b) {
-                    if (b == a || !alive[b]) {
-                        continue;
-                    }
-                    const Animal& other = animals[b];
-                    if (other.predator != animal.predator || other.genome->species != genome.species ||
-                        other.state->sex == state.sex) {
-                        continue; // пара — своего вида и своей диеты
-                    }
-                    if (other.desire->current != Desire::Mate) {
-                        continue; // пара нужна согласная: тот, кто занят едой, не сойдётся
-                    }
-                    const int dx = other.x - animal.x;
-                    const int dy = other.y - animal.y;
-                    const int distance = dx * dx + dy * dy;
-                    if (distance > reach * reach) {
-                        continue;
-                    }
-                    if (hasTarget && distance >= bestDistance) {
-                        continue;
-                    }
-                    bestDistance = distance;
-                    targetX = other.x;
-                    targetY = other.y;
-                    hasTarget = true;
+                // Пару ищут той же дорогой, что хищник ищет добычу
+                // (core/Mating.hpp): увиденное через реку — ещё не
+                // найденное. Пара за водой видна обоим, сойтись им негде, и
+                // оба стоят — самка ждёт на месте, самец упирается в берег;
+                // так и проходит остаток их жизни в двадцати шагах друг от
+                // друга.
+                //
+                // Волна считается только тогда, когда есть на кого смотреть:
+                // перебор животных дёшев, а волна по округе — нет, и платить
+                // за неё каждым ищущим зверем каждый тик незачем.
+                const Suitor suitor{animal.id,      animal.x,        animal.y, reach,
+                                    genome.species, animal.predator, state.sex};
+                if (!anyMateInSight(suitor, mates)) {
+                    break;
+                }
+                reachOf.build(world.area(), animal.x, animal.y, reach, standable);
+                const MateChoice mate = chooseMate(reachOf, suitor, mates);
+                if (!mate.found) {
+                    break;
+                }
+
+                // Сошлись — встреча случилась на этой клетке. Кто с кем
+                // именно, решится ниже (п.10), когда соберутся все:
+                // намерение здесь не называет второго, потому что на одной
+                // клетке их может ждать и трое.
+                if (mate.x == animal.x && mate.y == animal.y) {
+                    matings.push_back(MateIntent{here, static_cast<int>(a), animal.id, genome.species,
+                                                  animal.predator, state.sex});
+                    busy = true;
+                    break;
                 }
 
                 // Навстречу идёт только самец, самка при виде него ждёт на
@@ -890,16 +904,20 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // друга. Кто именно ждёт, мир решает полом, а не жребием:
                 // жребий пришлось бы бросать заново каждый тик, и пара
                 // снова начала бы топтаться.
-                if (hasTarget && (targetX != animal.x || targetY != animal.y) && state.sex == Sex::Female) {
-                    hasTarget = false;
+                //
+                // Ждёт она теперь только того, до кого есть дорога: раньше
+                // самка садилась ждать всякого, кого увидит, — в том числе
+                // того, кто до неё никогда не дойдёт.
+                if (state.sex == Sex::Female) {
                     busy = true;
+                    break;
                 }
 
-                if (hasTarget && targetX == animal.x && targetY == animal.y) {
-                    matings.push_back(MateIntent{here, static_cast<int>(a), animal.id, genome.species,
-                                                  animal.predator, state.sex});
-                    hasTarget = false;
-                    busy = true;
+                reachOf.roadTo(mate.x, mate.y, road);
+                if (!road.empty()) {
+                    targetX = road.front().x;
+                    targetY = road.front().y;
+                    hasTarget = true;
                 }
                 break;
             }
