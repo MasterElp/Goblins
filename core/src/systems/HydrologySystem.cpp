@@ -64,6 +64,10 @@ constexpr int kPoolCells = 9;
 // бесконечность float; на целой шкале её место занимает заведомо
 // недостижимая высота — выше любой горы, какую можно заказать генерации.
 constexpr int kNoNeighborBed = 1 << 30;
+// Тот же приём для верхней стороны: заведомо недостижимая НИЗКАЯ высота —
+// используется, когда среди соседей клетки не нашлось ни одного выше неё
+// (клетка сама самая высокая в округе, эрозии сверху взяться неоткуда).
+constexpr int kNoHighNeighborBed = -(1 << 30);
 
 // Сколько воды почва удерживает у себя и НЕ отдаёт течению — плёнка,
 // смачивающая грунт. Течёт только то, что выше этой глубины.
@@ -102,6 +106,20 @@ constexpr int kMineralMoistureThreshold = 500;
 // это 20, 0.005/тик — 500) и при этом не заставляет ждать тысячу тиков,
 // прежде чем испарится первая единица.
 constexpr int kEvaporationBase = 100;
+
+// Потолок эрозии от перепада высот: клетку B, в которую упала вода с более
+// высокого соседа A, разрешено размыть за тик не больше, чем на
+// (heightA - heightB) * kErosionHeightFactor, где heightA/heightB — дно
+// (terrainHeight, снимок ДО течения этого тика). Смысл — как у водопада:
+// маленькая ступенька несёт мало силы и почти не размывает, большая бьёт в
+// дно и вымывает заметно больше, даже при том же объёме воды. Так дно и
+// формирует ступенчатый профиль вниз по течению, а не резкий каньон —
+// каждая следующая ступень ограничена своим локальным перепадом. Считается
+// заново для каждой клетки в момент вымывания, а не хранится отдельным
+// свойством мира — это форма самого закона размыва, а не то, что имеет
+// смысл настраивать по мирам. kFull-масштаб: 200 — это те же 0.2, что и у
+// остальных долей в проекте.
+constexpr int kErosionHeightFactor = 200;
 
 // Минералы: выравнивание с единственным соседом за тик, а не раздача
 // всем сразу. Клетка A ищет среди соседей, которые "притягивают" минералы
@@ -151,7 +169,6 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const int rainIntervalTicks = worldProperties.rainIntervalTicks;
     const int rainAmount = worldProperties.rainAmount;
     const int soilErosionRate = worldProperties.soilErosionRate;
-    const int maxErosionDepth = worldProperties.maxErosionDepth;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -273,14 +290,19 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     std::vector<int> nextTerrainHeight(terrainHeight);
 
     // Сумма правок глубины по всем группам, куда попала клетка (делится на
-    // kPoolCells ниже), и самое низкое ЧУЖОЕ дно среди них — потолок для
-    // размыва и осаждения в 5.1.
+    // kPoolCells ниже). Самое низкое ЧУЖОЕ дно среди соседей — потолок для
+    // осаждения в 5.1 (сюда вода стекала бы и без клетки-получателя, значит
+    // выше него наносу подниматься незачем). Самое высокое ЧУЖОЕ дно —
+    // потолок для эрозии: он и есть клетка A, с которой вода упала в B (эту
+    // клетку), и разница высот A-B задаёт, сколько B в этот тик разрешено
+    // размыть (см. kErosionHeightFactor).
     //
-    // Сумма 64-битная: до девяти групп по глубине в тысячных на карте, где
+    // Суммы 64-битные: до девяти групп по глубине в тысячных на карте, где
     // глубина бывает в десятки тысяч, — 32 бит хватило бы, но с запасом
     // спокойнее, а стоит он ничего.
     std::vector<long long> depthDelta(cellCount, 0);
     std::vector<int> lowestNeighborBed(cellCount, kNoNeighborBed);
+    std::vector<int> highestNeighborBed(cellCount, kNoHighNeighborBed);
 
     // Буферы одной группы: сама клетка плюс до восьми соседей.
     int poolCell[kPoolCells];
@@ -322,6 +344,8 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             addMember(ni, members);
             lowestNeighborBed[i] = std::min(lowestNeighborBed[i], terrainHeight[ni]);
             lowestNeighborBed[ni] = std::min(lowestNeighborBed[ni], terrainHeight[i]);
+            highestNeighborBed[i] = std::max(highestNeighborBed[i], terrainHeight[ni]);
+            highestNeighborBed[ni] = std::max(highestNeighborBed[ni], terrainHeight[i]);
         }
         if (members < 2) {
             continue;
@@ -387,11 +411,17 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // постоянное kPoolCells. Отсюда же берётся и "сколько воды через клетку
     // прошло": отдала (правка < 0) или приняла (правка > 0).
     //
-    // Эрозия и осаждение — две ветки одного закона, а не разные механизмы:
-    //   клетка ОТДАЁТ воду, и её дно не ниже соседского -> порода мешает
-    //     течению, вымываем;
-    //   клетка ПРИНИМАЕТ воду, а рядом дно выше -> здесь углубление, туда
-    //     оседает нанос.
+    // Эрозия и осаждение — обе происходят у клетки, которая воду ПРИНЯЛА
+    // (B), а не у той, что отдала (A) — вода бьёт в дно там, куда падает, а
+    // не там, откуда стекает:
+    //   у B есть сосед ВЫШЕ (вода упала оттуда) -> дно B вымывается, и тем
+    //     сильнее, чем больше перепад высот A-B (см. kErosionHeightFactor);
+    //   у B все соседи ВЫШЕ (это впадина, сток вокруг) -> сюда оседает
+    //     нанос.
+    // Обе ветки не исключают друг друга: у клетки посередине склона всегда
+    // есть и более высокий, и более низкий сосед, поэтому она может и
+    // немного вымыться сверху, и немного затянуться наносом снизу за один
+    // и тот же тик — это просто две независимые локальные силы.
     // Сколько за тик суммарно вымыло, столько же и раздаётся по
     // углублениям.
     long long totalEroded = 0;
@@ -420,13 +450,14 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
         nextWaterDepth[i] += static_cast<int>(delta);
 
-        if (delta >= 0 || lowestNeighborBed[i] == kNoNeighborBed) {
-            continue; // приняла воду (или не с кем было делиться) — не размываем
+        if (delta <= 0 || highestNeighborBed[i] == kNoHighNeighborBed) {
+            continue; // отдала воду (или ни у кого не забирала) — эрозия не здесь, а у получателя
         }
-        // Размываем только там, где вода идёт НЕ по готовому руслу: если
-        // дно клетки уже ниже соседского, вода и так течёт туда по уклону
-        // самого рельефа, и углублять нечего.
-        if (terrainHeight[i] > lowestNeighborBed[i]) {
+        // Эрозия только там, где вода действительно упала СВЕРХУ: если все
+        // соседи не выше самой клетки, ей неоткуда падать и нечего вымывать
+        // (сюда просто натекло с того же уровня или ниже).
+        const int drop = highestNeighborBed[i] - terrainHeight[i];
+        if (drop <= 0) {
             continue;
         }
 
@@ -437,22 +468,22 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         // docs/01_Cosmology.md, п.2.
         const int softness = kFull - rockiness[i];
 
-        // Потолок выемки. Без него клетка под постоянным источником
-        // размывается каждый тик без остановки — высота уезжает в минус, и
-        // появляется бездонная яма, никак не связанная с рельефом вокруг.
-        // Ограничиваем глубину относительно самого низкого соседа, с
-        // которым клетка делится водой. Считаем от снимка (terrainHeight),
-        // а не от накопителя, чтобы результат не зависел от порядка обхода
-        // клеток — как и всё остальное в этом шаге.
-        const int erosionFloor = lowestNeighborBed[i] - maxErosionDepth;
-        const long long allowedErosion = std::max(0, terrainHeight[i] - erosionFloor);
         // Скорость размыва и мягкость — обе в тысячных долях, поэтому
-        // делить приходится дважды.
-        const long long erosion =
-            std::min(-delta * soilErosionRate * softness / (static_cast<long long>(kFull) * kFull), allowedErosion);
+        // делить приходится дважды. delta здесь положительна (клетка
+        // приняла воду) — это и есть объём, которым по ней ударило.
+        const long long erosion = delta * soilErosionRate * softness / (static_cast<long long>(kFull) * kFull);
 
-        nextTerrainHeight[i] -= static_cast<int>(erosion);
-        totalEroded += erosion;
+        // Потолок эрозии — от перепада высот A-B (kErosionHeightFactor):
+        // чем больше перепад, тем глубже разрешено вымыть за тик, как у
+        // водопада — маленькая ступенька почти не размывается, большая бьёт
+        // в дно ощутимо сильнее. Разница берётся из СНИМКА (terrainHeight,
+        // до течения этого тика), поэтому результат не зависит от порядка
+        // обхода клеток, как и всё остальное в этом шаге.
+        const long long allowedErosion = static_cast<long long>(drop) * kErosionHeightFactor / kFull;
+
+        const long long appliedErosion = std::min(erosion, allowedErosion);
+        nextTerrainHeight[i] -= static_cast<int>(appliedErosion);
+        totalEroded += appliedErosion;
     }
 
     // Ёмкость углублений: клетку, принявшую воду, разрешено поднять
@@ -658,6 +689,7 @@ void appendHydrologyConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kWaterRetention", static_cast<float>(kWaterRetention)});
     out.push_back({g, "kPoolCells", static_cast<float>(kPoolCells)});
     out.push_back({g, "kVoidHeight", static_cast<float>(kVoidHeight)});
+    out.push_back({g, "kErosionHeightFactor", static_cast<float>(kErosionHeightFactor)});
     out.push_back({g, "kMineralMoistureThreshold", static_cast<float>(kMineralMoistureThreshold)});
     out.push_back({g, "kMineralSlopeThreshold", static_cast<float>(kMineralSlopeThreshold)});
     out.push_back({g, "kRainDurationTicks", static_cast<float>(kRainDurationTicks)});

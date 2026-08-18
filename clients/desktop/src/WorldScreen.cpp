@@ -463,13 +463,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                                  static_cast<float>(snapshot.areaHeight) * tileSizeF},
                        Vector2{0, 0}, 0.0f, WHITE);
 
-        // Охота выбранного хищника — глазами самого хищника (см. "watched"
-        // в протоколе; считает её мир, core/Hunting.hpp, клиент только
-        // рисует пришедшие клетки). Округа — подсветкой под всем остальным:
-        // это ответ на вопрос "почему он не пошёл за той добычей, что стоит
-        // на виду за рекой", и заслонять ею карту нельзя.
-        const bool watchingHunter = snapshot.watched.kind == "animal" && !snapshot.watched.reach.empty();
-        if (watchingHunter) {
+        // Дорога выбранного зверя — его же глазами (см. "watched" в
+        // протоколе; считает её мир — core/Path.hpp, — а клиент только
+        // рисует пришедшие клетки). Округа, до которой у него есть ход, —
+        // подсветкой под всем остальным: это ответ на вопрос "почему он не
+        // пошёл к тому, что стоит на виду за рекой", и заслонять ею карту
+        // нельзя.
+        const bool watchingWalker = snapshot.watched.kind == "animal" && !snapshot.watched.reach.empty();
+        if (watchingWalker) {
             for (const auto& cell : snapshot.watched.reach) {
                 const float screenX = static_cast<float>(cell.first) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(cell.second) * tileSizeF - viewY + kHudHeight;
@@ -560,15 +561,17 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         }
 
         // Дорога — поверх зверей: она и есть то, ради чего смотрят. Линия
-        // от самого хищника через клетки найденной дороги до цели, а на
-        // цели — кольцо. Цвет говорит, за чем он идёт: за живой добычей или
-        // к туше. Дороги нет вовсе — не нарисовано ничего, и это тоже
-        // ответ: значит, идти хищнику не за кем.
-        if (watchingHunter && !snapshot.watched.road.empty()) {
+        // от самого зверя через клетки найденной дороги до цели, а на цели
+        // — кольцо. Цвет говорит, за чем он идёт: за живой добычей, к туше
+        // или к паре. Дороги нет вовсе — не нарисовано ничего, и это тоже
+        // ответ: значит, идти ему не к кому.
+        if (watchingWalker && !snapshot.watched.road.empty()) {
             // "teeth" — та же живая добыча, просто уже под зубами.
             const bool huntingPrey =
                 snapshot.watched.roadKind == "prey" || snapshot.watched.roadKind == "teeth";
-            const Color roadColor = huntingPrey ? Color{255, 120, 90, 235} : Color{235, 225, 170, 225};
+            const Color roadColor = huntingPrey                             ? Color{255, 120, 90, 235}
+                                    : snapshot.watched.roadKind == "mate" ? Color{235, 140, 235, 235}
+                                                                           : Color{235, 225, 170, 225};
             const float thickness = std::max(1.5f, tileSizeF * 0.14f);
             auto centerOf = [&](int cellX, int cellY) {
                 return Vector2{static_cast<float>(cellX) * tileSizeF - viewX + tileSizeF * 0.5f,

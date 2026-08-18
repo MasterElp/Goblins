@@ -152,9 +152,6 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // Доля перенесённой воды, превращающаяся в вымытую породу. Порода не
     // исчезает: ровно столько же оседает там, куда пришла вода.
     ops.intRow("Erosion rate (per mille)", edited.terrain.soil_erosion_rate, 0, 500);
-    // Потолок выемки относительно соседа — без него клетка под источником
-    // размывается без остановки в бездонную яму.
-    ops.intRow("Max scour depth", edited.terrain.max_erosion_depth, 0, 3000);
 
     ops.section("Plant life");
     // Мутация — доля вложения черты, а не доля значения гена (у всех черт

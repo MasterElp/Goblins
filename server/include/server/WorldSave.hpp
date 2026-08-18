@@ -58,7 +58,6 @@ namespace goblins {
 //                                         "rain_interval_ticks": RI,
 //                                         "rain_amount": RA,
 //                                         "soil_erosion_rate": E,
-//                                         "max_erosion_depth": D,
 //                                         "plant_mutation_rate": M,
 //                                         "humus_decay_period": H,
 //                                         "plant_random_seed": P,
@@ -82,7 +81,7 @@ namespace goblins {
 // файлов без этого поля (или без отдельных полей внутри него) действуют
 // значения по умолчанию (water_source_depth = 1000,
 // water_evaporation_rate = 20, rain_interval_ticks = 400, rain_amount =
-// 50, soil_erosion_rate = 50, max_erosion_depth = 500,
+// 50, soil_erosion_rate = 50,
 // plant_mutation_rate = 60, humus_decay_period = 50,
 // animal_mutation_rate = 60) — World::reset выставляет их сам.
 //

@@ -44,7 +44,7 @@ PROBE = {
         "river_sinuosity": 310, "river_depth": 1234, "pond_depth": 1700,
         "minerals_average": 17, "water_source_count": 6, "water_source_depth": 3300,
         "water_evaporation_rate": 77, "rain_interval_ticks": 555, "rain_amount": 66,
-        "soil_erosion_rate": 88, "max_erosion_depth": 1900,
+        "soil_erosion_rate": 88,
     },
     "plants": {"grass_species": 9, "grass_coverage": 133, "mutation_rate": 202,
                "humus_decay_period": 27},

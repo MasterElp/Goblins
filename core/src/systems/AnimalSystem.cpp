@@ -13,6 +13,7 @@
 #include "core/components/DesireComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
+#include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
@@ -23,15 +24,19 @@
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Hunting.hpp"
+#include "core/Mating.hpp"
 #include "core/Needs.hpp"
 #include "core/Scale.hpp"
+#include "core/Walk.hpp"
 
 namespace goblins {
 
 namespace {
 
-constexpr int kDx8[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
-constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+// Своей таблицы восьми соседей у системы больше нет: она берёт круговую из
+// core/Walk.hpp. Две таблицы с одними и теми же клетками в разном порядке
+// уже стоили путаницы — по одной из них считалась разница направлений, где
+// порядок значит всё, по другой просто обходились соседи.
 
 // Насколько маленькое животное "меньше ест": и расход на жизнь, и укус, и
 // цена шага, и скорость пищеварения, и сила удара умножаются на размер (от
@@ -174,11 +179,10 @@ constexpr int kWanderChance = 250;
 // (tick / kRoamTicks): системе не нужно ничего помнить между тиками
 // (05_Entity.md, п.3), а животное всё равно идёт в одну сторону, пока
 // отрезок не сменится.
+// Отрезок — это направление, а не воображаемая цель где-то впереди
+// (прежняя kRoamReach): шаг и так выбирается направлением (core/Walk.hpp),
+// и расстоянию до придуманной точки взяться было неоткуда.
 constexpr std::uint64_t kRoamTicks = 40;
-// Как далеко впереди ставится воображаемая цель отрезка. Число значения не
-// имеет — важно лишь, что она заведомо дальше соседних клеток, поэтому шаг
-// выбирается в её сторону.
-constexpr int kRoamReach = 8;
 
 // --- Хищничество ---
 
@@ -262,6 +266,7 @@ struct Animal {
     AnimalComponent* state = nullptr;
     const AnimalGenomeComponent* genome = nullptr;
     DesireComponent* desire = nullptr;
+    MovementComponent* memory = nullptr;
 
     // Голод, жажда и страх живут здесь, в снимке тика, а не в компоненте.
     // Все три и раньше пересчитывались из тела и из чужого присутствия
@@ -422,7 +427,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<Animal> animals;
     auto animalView =
         registry.view<AnimalComponent, AnimalGenomeComponent, DesireComponent, IdentityComponent,
-                       PositionComponent>();
+                       MovementComponent, PositionComponent>();
     for (const auto entity : animalView) {
         const auto& position = animalView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
@@ -432,7 +437,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                                   registry.all_of<PredatorComponent>(entity),
                                   &animalView.get<AnimalComponent>(entity),
                                   &animalView.get<AnimalGenomeComponent>(entity),
-                                  &animalView.get<DesireComponent>(entity)});
+                                  &animalView.get<DesireComponent>(entity),
+                                  &animalView.get<MovementComponent>(entity)});
     }
 
     // Падаль живёт своей жизнью и без животных (гниёт), поэтому выйти
@@ -597,6 +603,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue;
         }
 
+        // Память ног тает со временем, а не от шагов (core/Walk.hpp): зверь,
+        // простоявший сотню тиков у куста, не должен помнить преграду,
+        // которой давно нет.
+        fadeWalkMemory(*animal.memory);
+
         // Навоз выпадает порциями на ту клетку, где животное сейчас стоит.
         if (state.dung >= kDungDrop) {
             const int dropped = state.dung;
@@ -675,22 +686,23 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         preyOwner.push_back(static_cast<int>(b));
     }
 
-    // Кто вообще ищет пару — тоже одним списком и по той же причине, что и
-    // хищники выше: ищущий пару перебирает согласных, а не весь мир.
-    // Желания к этому месту уже посчитаны все (п.3 закончился), а alive
-    // до конца решений не меняется — список действителен весь проход.
-    std::vector<int> mateSeekers;
+    // Возможная пара в том виде, в каком её видно со стороны
+    // (core/Mating.hpp): кто такой и согласен ли сойтись. Список один на
+    // всех ищущих и на обе диеты — кому кто ровня, разбирается сам закон.
+    // Желания у всех уже посчитаны (п.3), поэтому "согласен" здесь честное,
+    // а не прошлотиковое.
+    std::vector<MateCandidate> mates;
     for (std::size_t b = 0; b < animals.size(); ++b) {
-        if (alive[b] && animals[b].desire->current == Desire::Mate) {
-            mateSeekers.push_back(static_cast<int>(b));
-        }
+        mates.push_back(MateCandidate{animals[b].id, animals[b].x, animals[b].y, animals[b].genome->species,
+                                       animals[b].predator, animals[b].state->sex,
+                                       alive[b] && animals[b].desire->current == Desire::Mate});
     }
 
-    // Округа хищника и дорога по ней. Живут снаружи цикла и
+    // Округа зверя и дорога по ней (core/Path.hpp). Живут снаружи цикла и
     // переиспользуются: за тик волна пускается столько раз, сколько в мире
-    // хищников, а массивы у неё на всю Область.
-    HuntReach huntReach;
-    std::vector<HuntCell> road;
+    // ищущих, а массивы у неё на всю Область.
+    Reach reachOf;
+    std::vector<PathCell> road;
 
     // --- 4. Решения: что животное делает со своим желанием ---
     for (std::size_t a = 0; a < animals.size(); ++a) {
@@ -726,7 +738,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // не за границей Области, не на занятый непроходимым объектом тайл и
         // не в воду. Само правило — там, здесь только факты, из которых оно
         // складывается: снимок тайлов этого тика.
+        // Край Области проверяется здесь же, а не оставляется вызывающим:
+        // спрашивают эту годность и по клеткам вокруг (шаг — core/Walk.hpp),
+        // и по кругу видимости (дорога — core/Path.hpp), и за краем карты
+        // читать нечего — там нет ни почвы, ни воды, а есть чужая память.
         auto standable = [&](int nx, int ny) {
+            if (!world.area().inBounds(nx, ny)) {
+                return false;
+            }
             const std::size_t cell = index(nx, ny);
             return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell]);
         };
@@ -799,9 +818,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // (кого выбрать и какой дорогой идти) живёт в
                     // core/Hunting.hpp: по нему же наблюдатель рисует эту
                     // дорогу на карте, и разъехаться им негде.
-                    huntReach.build(world.area(), animal.x, animal.y, reach, standable);
+                    reachOf.build(world.area(), animal.x, animal.y, reach, standable);
                     const HuntChoice choice = chooseHuntTarget(
-                        huntReach, Hunter{animal.x, animal.y, reach, genome.speed, animal.hunger}, preys,
+                        reachOf, Hunter{animal.x, animal.y, reach, genome.speed, animal.hunger}, preys,
                         [&](int nx, int ny) { return carcassMeat[index(nx, ny)]; }, random);
 
                     // Добыча в пределах досягаемости зубов — бьём, и никуда
@@ -818,7 +837,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // не напролом. Напролом он упрётся ровно в тот берег,
                     // который дорога и обходит, и вся находка пропадёт зря.
                     if (choice.kind != HuntChoice::Kind::None) {
-                        huntReach.roadTo(choice.x, choice.y, road);
+                        reachOf.roadTo(choice.x, choice.y, road);
                         if (!road.empty()) {
                             targetX = road.front().x;
                             targetY = road.front().y;
@@ -853,8 +872,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     source = here;
                 } else {
                     for (int dir = 0; dir < 8; ++dir) {
-                        const int nx = animal.x + kDx8[dir];
-                        const int ny = animal.y + kDy8[dir];
+                        const int nx = animal.x + kWalkX[dir];
+                        const int ny = animal.y + kWalkY[dir];
                         if (!world.area().inBounds(nx, ny)) {
                             continue;
                         }
@@ -877,33 +896,36 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 break;
             }
             case Desire::Mate: {
-                // Партнёров ищем перебором по ищущим пару, а не по клеткам
-                // карты: согласных в мире всегда немного, и перебрать их
-                // дешевле, чем просмотреть круг клеток на каждого.
-                int bestDistance = 0;
-                for (const int seeker : mateSeekers) {
-                    const std::size_t b = static_cast<std::size_t>(seeker);
-                    if (b == a) {
-                        continue;
-                    }
-                    const Animal& other = animals[b];
-                    if (other.predator != animal.predator || other.genome->species != genome.species ||
-                        other.state->sex == state.sex) {
-                        continue; // пара — своего вида и своей диеты
-                    }
-                    const int dx = other.x - animal.x;
-                    const int dy = other.y - animal.y;
-                    const int distance = dx * dx + dy * dy;
-                    if (distance > reach * reach) {
-                        continue;
-                    }
-                    if (hasTarget && distance >= bestDistance) {
-                        continue;
-                    }
-                    bestDistance = distance;
-                    targetX = other.x;
-                    targetY = other.y;
-                    hasTarget = true;
+                // Пару ищут той же дорогой, что хищник ищет добычу
+                // (core/Mating.hpp): увиденное через реку — ещё не
+                // найденное. Пара за водой видна обоим, сойтись им негде, и
+                // оба стоят — самка ждёт на месте, самец упирается в берег;
+                // так и проходит остаток их жизни в двадцати шагах друг от
+                // друга.
+                //
+                // Волна считается только тогда, когда есть на кого смотреть:
+                // перебор животных дёшев, а волна по округе — нет, и платить
+                // за неё каждым ищущим зверем каждый тик незачем.
+                const Suitor suitor{animal.id,      animal.x,        animal.y, reach,
+                                    genome.species, animal.predator, state.sex};
+                if (!anyMateInSight(suitor, mates)) {
+                    break;
+                }
+                reachOf.build(world.area(), animal.x, animal.y, reach, standable);
+                const MateChoice mate = chooseMate(reachOf, suitor, mates);
+                if (!mate.found) {
+                    break;
+                }
+
+                // Сошлись — встреча случилась на этой клетке. Кто с кем
+                // именно, решится ниже (п.10), когда соберутся все:
+                // намерение здесь не называет второго, потому что на одной
+                // клетке их может ждать и трое.
+                if (mate.x == animal.x && mate.y == animal.y) {
+                    matings.push_back(MateIntent{here, static_cast<int>(a), animal.id, genome.species,
+                                                  animal.predator, state.sex});
+                    busy = true;
+                    break;
                 }
 
                 // Навстречу идёт только самец, самка при виде него ждёт на
@@ -914,16 +936,20 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // друга. Кто именно ждёт, мир решает полом, а не жребием:
                 // жребий пришлось бы бросать заново каждый тик, и пара
                 // снова начала бы топтаться.
-                if (hasTarget && (targetX != animal.x || targetY != animal.y) && state.sex == Sex::Female) {
-                    hasTarget = false;
+                //
+                // Ждёт она теперь только того, до кого есть дорога: раньше
+                // самка садилась ждать всякого, кого увидит, — в том числе
+                // того, кто до неё никогда не дойдёт.
+                if (state.sex == Sex::Female) {
                     busy = true;
+                    break;
                 }
 
-                if (hasTarget && targetX == animal.x && targetY == animal.y) {
-                    matings.push_back(MateIntent{here, static_cast<int>(a), animal.id, genome.species,
-                                                  animal.predator, state.sex});
-                    hasTarget = false;
-                    busy = true;
+                reachOf.roadTo(mate.x, mate.y, road);
+                if (!road.empty()) {
+                    targetX = road.front().x;
+                    targetY = road.front().y;
+                    hasTarget = true;
                 }
                 break;
             }
@@ -962,111 +988,61 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         const bool fleeing = desire.current == Desire::Flee;
 
-        // Куда идти, когда желаемого не видно (или когда до него нет
-        // дороги, см. ниже): направление отрезка поиска. Берётся из
-        // постоянного идентификатора и номера отрезка, поэтому пересчёт
-        // даёт то же самое, сколько раз за тик его ни спроси.
-        auto roamTarget = [&](int& rx, int& ry) {
+        // Направление поиска, когда желаемого не видно. Ищущее животное
+        // идёт в одну сторону целый отрезок пути (kRoamTicks), а не
+        // топчется на месте: за пределами собственной видимости другого
+        // способа что-нибудь найти у него нет. Берётся из постоянного
+        // идентификатора и номера отрезка, поэтому системе не нужно ничего
+        // помнить между тиками, а животное всё равно идёт в одну сторону,
+        // пока отрезок не сменится.
+        auto roamDirection = [&]() {
             std::uint64_t roam = mixSeed(animal.id, tick / kRoamTicks);
-            const int dir = static_cast<int>(nextState(roam) % 8u);
-            rx = animal.x + kDx8[dir] * kRoamReach;
-            ry = animal.y + kDy8[dir] * kRoamReach;
+            return static_cast<int>(nextState(roam) % 8u);
         };
 
-        // Желаемого не видно — значит, надо искать. Ищущее животное идёт в
-        // одну сторону целый отрезок пути (kRoamTicks), а не топчется на
-        // месте: за пределами собственной видимости другого способа
-        // что-нибудь найти у него нет. Ищут все трое — и еду, и воду, и
-        // пару; река, до которой не дошли, убивает вернее любых зубов.
-        bool roaming = false;
-        if (!fleeing && !hasTarget &&
-            (desire.current == Desire::Food || desire.current == Desire::Water ||
-             desire.current == Desire::Mate)) {
-            roamTarget(targetX, targetY);
-            hasTarget = true;
-            roaming = true;
-        }
-
-        if (!fleeing && !hasTarget && static_cast<int>(randomBelow(random, kFull)) >= kWanderChance) {
+        // Куда животное хочет — ОДНО направление на все случаи движения, и
+        // дальше шаг считается для всех одинаково (core/Walk.hpp). Идущий к
+        // цели, бегущий от зубов, ищущий за пределами видимости и просто
+        // бродящий отличаются только тем, откуда взялось это направление.
+        //
+        // Прежде здесь было три разных перебора соседей — "ближе к цели",
+        // "дальше от опасности" и "первый попавшийся", — и к ним обход
+        // преграды отдельным случаем. Обход теперь получается сам: если
+        // прямо на цель пройти нельзя, лучшим оказывается шаг вбок, а
+        // память ног не даёт вернуться назад тем же путём.
+        int aim = -1;
+        if (fleeing) {
+            // От опасности не идут к цели — от неё уходят: направление
+            // берётся от неё к себе и ведёт прочь.
+            aim = walkDirectionTo(threatX[a], threatY[a], animal.x, animal.y);
+            if (aim < 0) {
+                // Хищник стоит ровно на той же клетке: бежать можно куда
+                // угодно, лишь бы не стоять.
+                aim = roamDirection();
+            }
+        } else if (hasTarget) {
+            aim = walkDirectionTo(animal.x, animal.y, targetX, targetY);
+        } else if (desire.current == Desire::Food || desire.current == Desire::Water ||
+                   desire.current == Desire::Mate) {
+            // Желаемого не видно — значит, надо искать. Ищут все трое: и
+            // еду, и воду, и пару; река, до которой не дошли, убивает
+            // вернее любых зубов.
+            aim = roamDirection();
+        } else if (static_cast<int>(randomBelow(random, kFull)) >= kWanderChance) {
             continue; // ничего не гонит — стоит и щиплет что придётся
         }
 
-        // Куда именно: из проходимых соседей выбирается тот, что ближе к
-        // цели (а бегущим — тот, что дальше от опасности); без цели —
-        // случайный. На занятый непроходимым объектом тайл и в воду
-        // животное не идёт, а вот на клетку с травой и с другим животным —
-        // сколько угодно.
-        int stepX = animal.x;
-        int stepY = animal.y;
-        bool stepFound = false;
-        const int firstDir = static_cast<int>(randomBelow(random, 8));
-
-        // Один и тот же перебор соседей для любой цели: идущий выбирает
-        // ближайшего к ней, бегущий — самого дальнего от опасности,
-        // разница только в знаке сравнения. Возвращает, приближает ли
-        // найденный шаг к цели: этим отличается дорога от тупика.
-        auto stepToward = [&](int aimX, int aimY, bool aimless) {
-            auto scoreOf = [&](int x, int y) {
-                const int dx = aimX - x;
-                const int dy = aimY - y;
-                return dx * dx + dy * dy;
-            };
-
-            stepFound = false;
-            int bestScore = 0;
-            for (int n = 0; n < 8; ++n) {
-                const int dir = (firstDir + n) % 8;
-                const int nx = animal.x + kDx8[dir];
-                const int ny = animal.y + kDy8[dir];
-                if (!world.area().inBounds(nx, ny) || !standable(nx, ny)) {
-                    continue;
-                }
-                if (aimless) {
-                    stepX = nx;
-                    stepY = ny;
-                    stepFound = true;
-                    break; // случайное блуждание: первый же годный сосед по кругу
-                }
-                const int distance = scoreOf(nx, ny);
-                const bool better = fleeing ? distance > bestScore : distance < bestScore;
-                if (!stepFound || better) {
-                    bestScore = distance;
-                    stepX = nx;
-                    stepY = ny;
-                    stepFound = true;
-                }
-            }
-            return stepFound && (aimless || (fleeing ? bestScore > scoreOf(animal.x, animal.y)
-                                                     : bestScore < scoreOf(animal.x, animal.y)));
-        };
-
-        const bool aimless = !fleeing && !hasTarget;
-        const bool approached = stepToward(fleeing ? threatX[a] : targetX, fleeing ? threatY[a] : targetY, aimless);
-
-        // Дороги нет: ни один сосед не подводит к цели ближе — между
-        // животным и желаемым вода или камень. Стоять и смотреть на
-        // недостижимое нельзя: голод сам не пройдёт, а цель будет
-        // выбираться заново каждый тик, одна и та же, — зверь так и умрёт
-        // на берегу напротив луга. Поэтому упёршийся идёт вдоль преграды —
-        // тем же отрезком поиска, каким ищут невидимое: обойти реку или
-        // не обойти, он не знает, но стоя не узнает точно.
-        //
-        // Раньше на этом месте животное лезло в воду вброд. Теперь вода
-        // непроходима совсем, и обход — единственное, что у него осталось:
-        // паводок (HydrologySystem) режет карту на острова, и застрявшему
-        // на острове зверю остаётся только доесть его и умереть.
-        if (!approached && !aimless && !fleeing && !roaming) {
-            int detourX = animal.x;
-            int detourY = animal.y;
-            roamTarget(detourX, detourY);
-            stepToward(detourX, detourY, false);
-        }
-        if (!stepFound) {
-            continue;
+        // Сам шаг: восемь соседей, тяга к выбранной стороне, инерция,
+        // память о своём следе и о преградах, щепоть случайности. На клетку
+        // с травой, с падалью и с другим животным идут свободно — заняты
+        // для животного только вода и камень (core/Path.hpp).
+        const WalkStep step = chooseStep(*animal.memory, animal.x, animal.y, aim, standable, random);
+        if (!step.moved) {
+            continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
 
         state.energy = std::max(0, state.energy - kStepEnergy * size / kFull);
-        steps.push_back(StepIntent{static_cast<int>(a), stepX, stepY});
+        steps.push_back(StepIntent{static_cast<int>(a), step.x, step.y});
     }
 
     // --- 5. Кормёжка травоядных: один куст на всех, кто до него дотянулся ---
@@ -1361,8 +1337,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             w.registry().emplace<AnimalComponent>(entity, calf);
             w.registry().emplace<AnimalGenomeComponent>(entity, childGenome);
             // Новорождённый ничего ещё не хочет — тело у него полное; чего
-            // хотеть, ему скажет первый же тик (см. п.3 выше).
+            // хотеть, ему скажет первый же тик (см. п.3 выше). И ногами он
+            // пока ничего не помнит: ни шага, ни преграды.
             w.registry().emplace<DesireComponent>(entity, DesireComponent{});
+            w.registry().emplace<MovementComponent>(entity);
             // Диета наследуется без вариантов: у травоядных родителей не
             // родится хищник.
             if (predatorChild) {
@@ -1444,11 +1422,24 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kNewbornGrowth", kNewbornGrowth});
     out.push_back({g, "kWanderChance", kWanderChance});
     out.push_back({g, "kRoamTicks", static_cast<float>(kRoamTicks)});
-    out.push_back({g, "kRoamReach", static_cast<float>(kRoamReach)});
     out.push_back({g, "kMeatPerSize", kMeatPerSize});
     out.push_back({g, "kHuntHunger", kHuntHunger});
     out.push_back({g, "kCarcassRot", kCarcassRot});
     out.push_back({g, "kAttackReach", static_cast<float>(kAttackReach)});
+
+    // Веса шага (core/Walk.hpp) — своей группой: они не про жизнь животного,
+    // а про его походку, и подбираются вместе, друг против друга.
+    constexpr const char* w = "Animals (walk)";
+    out.push_back({w, "kTrailSteps", static_cast<float>(kTrailSteps)});
+    out.push_back({w, "kAimPull", kAimPull});
+    out.push_back({w, "kInertiaPull", kInertiaPull});
+    out.push_back({w, "kTrailPenalty", kTrailPenalty});
+    out.push_back({w, "kBlockedPenalty", kBlockedPenalty});
+    out.push_back({w, "kBlockedFade", kBlockedFade});
+    out.push_back({w, "kStepNoise", kStepNoise});
+    out.push_back({w, "kStuckNoise", kStuckNoise});
+    out.push_back({w, "kStuckGain", kStuckGain});
+    out.push_back({w, "kStuckRelief", kStuckRelief});
 }
 
 } // namespace goblins

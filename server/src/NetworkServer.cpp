@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/Hunting.hpp"
+#include "core/Mating.hpp"
 #include "core/Needs.hpp"
 #include "core/Random.hpp"
 #include "core/components/AnimalComponent.hpp"
@@ -20,6 +21,7 @@
 #include "core/components/HumusComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
+#include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
@@ -473,33 +475,38 @@ TileFacts tileFactsAt(const World& world, int x, int y) {
     return facts;
 }
 
-// Дорога выбранного хищника — та же самая, по которой он идёт сам.
+// Дорога выбранного зверя — та же самая, по которой он идёт сам.
 //
-// Считается она не копией правил, а тем же законом (core/Hunting.hpp), и
-// из тех же чисел: клетка, зоркость, скорость, голод из тела (core/
-// Needs.hpp) и розыгрыш, собранный ровно так же, как его собирает
-// AnimalSystem (seed мира, тик, идентификатор зверя). Иначе нарисованная
-// дорога рано или поздно разошлась бы с настоящей, а дорога, по которой
-// зверь не идёт, хуже ненарисованной: по ней в первую очередь и судят,
-// работает ли охота вообще.
+// Считается она не копией правил, а теми же законами (core/Path.hpp,
+// core/Hunting.hpp, core/Mating.hpp) и из тех же чисел: клетка, зоркость,
+// скорость, голод из тела (core/Needs.hpp) и розыгрыш, собранный ровно так
+// же, как его собирает AnimalSystem (seed мира, тик, идентификатор зверя).
+// Иначе нарисованная дорога рано или поздно разошлась бы с настоящей, а
+// дорога, по которой зверь не идёт, хуже ненарисованной: по ней в первую
+// очередь и судят, работает ли поиск пути вообще.
 //
-// "reach" — вся округа, до которой у хищника есть ход: по ней сразу видно,
-// почему он не пошёл за той добычей, что стоит на виду за рекой.
-void appendHuntRoad(const World& world, entt::entity entity, const AnimalComponent& animal,
-                    const AnimalGenomeComponent& genome, const PositionComponent& position, Desire desire,
-                    std::uint64_t id, nlohmann::json& watched, nlohmann::json& groups) {
+// "reach" — вся округа, до которой у зверя есть ход: по ней сразу видно,
+// почему он не пошёл за тем, что стоит на виду за рекой. Она есть у всякого
+// животного; дорога — только у того, кто сейчас куда-то идёт: хищник за
+// добычей или всякий зверь за парой. За травой и за водой дороги не
+// считают — туда идут напролом и обходят преграду вслепую (09_Animals.md,
+// п.8), и рисовать там дорогу значило бы показывать решение, которого зверь
+// не принимал.
+void appendRoad(const World& world, entt::entity entity, const AnimalComponent& animal,
+                const AnimalGenomeComponent& genome, const PositionComponent& position, Desire desire,
+                bool predator, std::uint64_t id, nlohmann::json& watched, nlohmann::json& groups) {
     const auto& registry = world.registry();
     const auto& properties = registry.get<const WorldPropertiesComponent>(world.worldEntity());
     const std::uint64_t tick = registry.get<const TimeComponent>(world.worldEntity()).tick;
     const int sight = std::max(1, genome.perception);
 
-    HuntReach reach;
+    Reach reach;
     reach.build(world.area(), position.x, position.y, sight, [&world](int x, int y) {
         const TileFacts facts = tileFactsAt(world, x, y);
         return standableAt(world.area().isBlocked(x, y), facts.soil, facts.water);
     });
 
-    std::vector<HuntCell> cells;
+    std::vector<PathCell> cells;
     reach.reachedCells(cells);
     const int reachCount = static_cast<int>(cells.size());
     auto reachJson = nlohmann::json::array();
@@ -511,51 +518,87 @@ void appendHuntRoad(const World& world, entt::entity entity, const AnimalCompone
 
     // Те же две величины числами, рядом с телом и геномом: "докуда есть
     // ход" и "сколько шагов до цели". Ноль шагов при полной округе — это и
-    // есть "добычи нет ни одной, до которой можно дойти", и увидеть это в
+    // есть "не нашлось никого, до кого можно дойти", и увидеть это в
     // карточке проще, чем вглядываться в карту.
-    auto huntGroup = [&groups, reachCount](int roadSteps) {
-        groups.push_back(makeGroup("Hunt", {{"reach_cells", reachCount}, {"road_steps", roadSteps}}));
+    // "stuck" — то, что животное помнит ногами (core/Walk.hpp): насколько
+    // давно у него нет продвижения. Число рядом с дорогой, потому что
+    // отвечает оно на тот же вопрос: почему зверь стоит или ходит кругами.
+    const auto* memory = registry.try_get<const MovementComponent>(entity);
+    auto pathGroup = [&groups, reachCount, memory](int roadSteps) {
+        groups.push_back(makeGroup("Path", {{"reach_cells", reachCount},
+                                             {"road_steps", roadSteps},
+                                             {"stuck", memory != nullptr ? memory->stuck : 0}}));
     };
 
-    // Дорога есть только у того, кто идёт за едой. Хищник, севший пить или
-    // ушедший искать пару, никакой добычи сейчас не выбирает, и рисовать
-    // ему дорогу значило бы показывать решение, которого он не принимал.
-    if (desire != Desire::Food) {
-        huntGroup(0);
-        return;
-    }
+    // Куда идёт зверь: цель и её род. Считают их два разных закона, но
+    // дальше с ними делают одно и то же, поэтому и сходятся они здесь.
+    bool hasTarget = false;
+    int targetX = 0;
+    int targetY = 0;
+    const char* kind = "";
 
-    std::vector<HuntPrey> preys;
-    for (const auto other : registry.view<const AnimalComponent, const AnimalGenomeComponent, const PositionComponent>()) {
-        if (other == entity || registry.all_of<PredatorComponent>(other)) {
-            continue;
+    if (predator && desire == Desire::Food) {
+        std::vector<HuntPrey> preys;
+        for (const auto other :
+             registry.view<const AnimalComponent, const AnimalGenomeComponent, const PositionComponent>()) {
+            if (other == entity || registry.all_of<PredatorComponent>(other)) {
+                continue;
+            }
+            const auto& preyPosition = registry.get<const PositionComponent>(other);
+            preys.push_back(HuntPrey{preyPosition.x, preyPosition.y,
+                                      registry.get<const AnimalGenomeComponent>(other).speed});
         }
-        const auto& preyPosition = registry.get<const PositionComponent>(other);
-        preys.push_back(HuntPrey{preyPosition.x, preyPosition.y,
-                                  registry.get<const AnimalGenomeComponent>(other).speed});
+
+        const HuntChoice choice = chooseHuntTarget(
+            reach, Hunter{position.x, position.y, sight, genome.speed, hungerOf(animal, genome)}, preys,
+            [&world](int x, int y) { return tileFactsAt(world, x, y).carcass; },
+            mixSeed(static_cast<std::uint64_t>(properties.animalRandomSeed), mixSeed(tick, id)));
+        if (choice.kind != HuntChoice::Kind::None) {
+            hasTarget = true;
+            targetX = choice.x;
+            targetY = choice.y;
+            kind = choice.kind == HuntChoice::Kind::Carcass ? "carcass" : (choice.atTeeth ? "teeth" : "prey");
+        }
+    } else if (desire == Desire::Mate) {
+        std::vector<MateCandidate> mates;
+        for (const auto other : registry.view<const AnimalComponent, const AnimalGenomeComponent,
+                                              const DesireComponent, const IdentityComponent,
+                                              const PositionComponent>()) {
+            const auto& matePosition = registry.get<const PositionComponent>(other);
+            mates.push_back(MateCandidate{registry.get<const IdentityComponent>(other).id, matePosition.x,
+                                           matePosition.y,
+                                           registry.get<const AnimalGenomeComponent>(other).species,
+                                           registry.all_of<PredatorComponent>(other),
+                                           registry.get<const AnimalComponent>(other).sex,
+                                           registry.get<const DesireComponent>(other).current == Desire::Mate});
+        }
+
+        const Suitor suitor{id, position.x, position.y, sight, genome.species, predator, animal.sex};
+        const MateChoice choice = chooseMate(reach, suitor, mates);
+        if (choice.found) {
+            hasTarget = true;
+            targetX = choice.x;
+            targetY = choice.y;
+            kind = "mate";
+        }
     }
 
-    const HuntChoice choice = chooseHuntTarget(
-        reach, Hunter{position.x, position.y, sight, genome.speed, hungerOf(animal, genome)}, preys,
-        [&world](int x, int y) { return tileFactsAt(world, x, y).carcass; },
-        mixSeed(static_cast<std::uint64_t>(properties.animalRandomSeed), mixSeed(tick, id)));
-
-    if (choice.kind == HuntChoice::Kind::None) {
-        huntGroup(0);
+    if (!hasTarget) {
+        pathGroup(0);
         return;
     }
-    watched["road_kind"] = choice.kind == HuntChoice::Kind::Prey ? (choice.atTeeth ? "teeth" : "prey") : "carcass";
-    watched["road_x"] = choice.x;
-    watched["road_y"] = choice.y;
+    watched["road_kind"] = kind;
+    watched["road_x"] = targetX;
+    watched["road_y"] = targetY;
 
-    reach.roadTo(choice.x, choice.y, cells);
+    reach.roadTo(targetX, targetY, cells);
     auto roadJson = nlohmann::json::array();
     for (const auto& cell : cells) {
         roadJson.push_back(cell.x);
         roadJson.push_back(cell.y);
     }
     watched["road"] = std::move(roadJson);
-    huntGroup(static_cast<int>(cells.size()));
+    pathGroup(static_cast<int>(cells.size()));
 }
 
 // Геном — по таблице черт своей диеты, а не полем за полем: новая черта
@@ -630,13 +673,11 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                                                     {"mating", desire.mating}}));
             groups.push_back(makeGenomeGroup(predator ? predatorTraits() : herbivoreTraits(), genome));
 
-            // Охота — единственное, что видно не только в числах, но и на
-            // карте: куда хищник может дойти и за кем сейчас идёт (см.
-            // appendHuntRoad). У травоядного дороги нет — оно ходит
-            // напролом и обходит преграду вслепую (09_Animals.md, п.8).
-            if (predator) {
-                appendHuntRoad(world_, entity, animal, genome, position, desire.current, target.id, watched, groups);
-            }
+            // Дорога — единственное, что видно не только в числах, но и на
+            // карте: докуда зверь может дойти и куда сейчас идёт (см.
+            // appendRoad).
+            appendRoad(world_, entity, animal, genome, position, desire.current, predator, target.id, watched,
+                       groups);
 
             watched["groups"] = std::move(groups);
             return watched;

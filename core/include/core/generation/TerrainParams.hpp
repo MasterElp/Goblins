@@ -114,12 +114,10 @@ struct TerrainParams {
     int rainIntervalTicks = 400;
     int rainAmount = 50;
 
-    // Эрозия: скорость вымывания породы потоком и потолок выемки
-    // относительно соседа (см. WorldPropertiesComponent) — тоже свойства
-    // мира: выбираются здесь, при генерации, HydrologySystem только
-    // читает.
+    // Эрозия: скорость вымывания породы потоком (см.
+    // WorldPropertiesComponent) — тоже свойство мира: выбирается здесь,
+    // при генерации, HydrologySystem только читает.
     int soilErosionRate = 50;
-    int maxErosionDepth = 500;
 };
 
 } // namespace goblins

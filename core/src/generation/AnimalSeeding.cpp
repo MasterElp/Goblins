@@ -9,6 +9,7 @@
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
 #include "core/components/DesireComponent.hpp"
+#include "core/components/MovementComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
 #include "core/components/PlantComponent.hpp"
@@ -166,7 +167,7 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
         // задаётся здесь, — разброс готовности к размножению: иначе всё
         // поголовье потянулось бы искать пару в один и тот же тик.
         DesireComponent desire;
-        desire.mating = randomUnit(state);
+        desire.mating = static_cast<int>(randomBelow(state, kFull));
 
         const auto entity = world.registry().create();
         world.registry().emplace<IdentityComponent>(
@@ -174,6 +175,8 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
         world.registry().emplace<AnimalComponent>(entity, animal);
         world.registry().emplace<AnimalGenomeComponent>(entity, genome);
         world.registry().emplace<DesireComponent>(entity, desire);
+        // Память ног пуста: расставленное животное ещё никуда не ходило.
+        world.registry().emplace<MovementComponent>(entity);
         world.registry().emplace<Diet>(entity);
         world.place(entity, x, y);
 
