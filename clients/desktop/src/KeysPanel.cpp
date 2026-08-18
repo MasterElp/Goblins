@@ -22,7 +22,7 @@ const Color kOffColor{120, 120, 126, 255};
 
 } // namespace
 
-void draw(Rectangle bounds, const MapTexture::Layers& layers) {
+void draw(Rectangle bounds, const MapTexture::Layers& layers, bool watching) {
     float y = bounds.y;
     const int x = static_cast<int>(bounds.x);
     const int textX = static_cast<int>(bounds.x + kKeyColumnWidth);
@@ -71,6 +71,9 @@ void draw(Rectangle bounds, const MapTexture::Layers& layers) {
     group("World");
     row("Space", "pause / resume (the world stops)");
     row("C", "world law constants (read-only)");
+    layerRow("H", "watch the world (the world keeps living)", watching);
+    row("", "off also while the window is minimised");
+    row("", "or another window has the focus");
 
     group("Panel");
     row("P", "next tab, then hide the panel");

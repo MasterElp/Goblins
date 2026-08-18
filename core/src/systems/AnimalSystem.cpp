@@ -497,6 +497,24 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<int> threatX(animals.size(), 0);
     std::vector<int> threatY(animals.size(), 0);
 
+    // Где стоят хищники — отдельным коротким списком, собранным один раз
+    // за тик. Страх ищется перебором, и перебирать весь мир ради горстки
+    // зубов дорого не на десятках животных, а на тысячах: перебор "каждое
+    // травоядное против всех животных" — это квадрат поголовья, и на пяти
+    // тысячах он даёт двадцать пять миллионов проверок за тик, из которых
+    // осмысленны сотые доли процента. По списку хищников тот же поиск —
+    // "травоядные на хищников", то есть в разы меньше самого квадрата.
+    // Тот же приём, что и с preys ниже: собрать один раз, а не заново для
+    // каждого.
+    std::vector<int> predatorX;
+    std::vector<int> predatorY;
+    for (const Animal& other : animals) {
+        if (other.predator) {
+            predatorX.push_back(other.x);
+            predatorY.push_back(other.y);
+        }
+    }
+
     // --- 3. Тело и желания ---
     // Отдельным проходом от решений (п.4) намеренно: животное, выбирая
     // пару, смотрит, чего хочет сосед, — и если бы желания и решения
@@ -599,12 +617,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         animal.fear = 0;
         if (!animal.predator) {
             const float sight = static_cast<float>(std::max(1, genome.perception));
-            for (std::size_t b = 0; b < animals.size(); ++b) {
-                if (!animals[b].predator) {
-                    continue;
-                }
-                const int dx = animals[b].x - animal.x;
-                const int dy = animals[b].y - animal.y;
+            for (std::size_t b = 0; b < predatorX.size(); ++b) {
+                const int dx = predatorX[b] - animal.x;
+                const int dy = predatorY[b] - animal.y;
                 const float distance = std::sqrt(static_cast<float>(dx * dx + dy * dy));
                 if (distance > sight) {
                     continue;
@@ -627,8 +642,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     kDesireFloor + static_cast<int>((kFull - kDesireFloor) * (1.0f - distance / sight));
                 if (scare > animal.fear) {
                     animal.fear = scare;
-                    threatX[a] = animals[b].x;
-                    threatY[a] = animals[b].y;
+                    threatX[a] = predatorX[b];
+                    threatY[a] = predatorY[b];
                 }
             }
         }
@@ -658,6 +673,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         }
         preys.push_back(HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed});
         preyOwner.push_back(static_cast<int>(b));
+    }
+
+    // Кто вообще ищет пару — тоже одним списком и по той же причине, что и
+    // хищники выше: ищущий пару перебирает согласных, а не весь мир.
+    // Желания к этому месту уже посчитаны все (п.3 закончился), а alive
+    // до конца решений не меняется — список действителен весь проход.
+    std::vector<int> mateSeekers;
+    for (std::size_t b = 0; b < animals.size(); ++b) {
+        if (alive[b] && animals[b].desire->current == Desire::Mate) {
+            mateSeekers.push_back(static_cast<int>(b));
+        }
     }
 
     // Округа хищника и дорога по ней. Живут снаружи цикла и
@@ -851,21 +877,19 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 break;
             }
             case Desire::Mate: {
-                // Партнёров ищем перебором по всем животным, а не по клеткам
-                // карты: их десятки, и квадрат от десятков дешевле, чем
-                // просмотр круга клеток на каждого.
+                // Партнёров ищем перебором по ищущим пару, а не по клеткам
+                // карты: согласных в мире всегда немного, и перебрать их
+                // дешевле, чем просмотреть круг клеток на каждого.
                 int bestDistance = 0;
-                for (std::size_t b = 0; b < animals.size(); ++b) {
-                    if (b == a || !alive[b]) {
+                for (const int seeker : mateSeekers) {
+                    const std::size_t b = static_cast<std::size_t>(seeker);
+                    if (b == a) {
                         continue;
                     }
                     const Animal& other = animals[b];
                     if (other.predator != animal.predator || other.genome->species != genome.species ||
                         other.state->sex == state.sex) {
                         continue; // пара — своего вида и своей диеты
-                    }
-                    if (other.desire->current != Desire::Mate) {
-                        continue; // пара нужна согласная: тот, кто занят едой, не сойдётся
                     }
                     const int dx = other.x - animal.x;
                     const int dy = other.y - animal.y;

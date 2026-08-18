@@ -1,6 +1,7 @@
 #include "NetworkClient.hpp"
 
 #include <algorithm>
+#include <iterator>
 
 #include <nlohmann/json.hpp>
 
@@ -32,6 +33,25 @@ void applyChangedCells(const nlohmann::json& message, const char* key, std::vect
             target[index] = decode(pairs[p + 1].get<int>());
         }
     }
+}
+
+// Карточка животного — всё, что о нём знает клиент. Одна на полный список
+// из world_init и на родившихся в дельте: приходят они одинаковыми, и
+// разбираться должны одним местом.
+WorldState::Animal parseAnimal(const nlohmann::json& animal) {
+    WorldState::Animal parsed;
+    parsed.id = animal.value("id", static_cast<std::uint64_t>(0));
+    parsed.x = animal.value("x", 0);
+    parsed.y = animal.value("y", 0);
+    parsed.species = animal.value("species", 0);
+    parsed.growth = animal.value("growth", 0) * kFromHundredths;
+    // Умолчание — целое здоровье: животное без поля "health" в сообщении
+    // рисуется здоровым, а не мёртвым. Сотые, как и всё остальное в слоях.
+    parsed.health = animal.value("health", 100) * kFromHundredths;
+    parsed.predator = animal.value("kind", std::string{}) == "predator";
+    parsed.sex = animal.value("sex", std::string{});
+    parsed.desire = animal.value("desire", std::string{});
+    return parsed;
 }
 
 // Плотный слой из world_init: сервер шлёт его целыми (в JSON это вчетверо
@@ -119,6 +139,17 @@ void NetworkClient::sendTogglePause() {
     webSocket_.send(request.dump());
 }
 
+void NetworkClient::sendUpdatesEnabled(bool enabled) {
+    if (updatesEnabled_ == enabled) {
+        return;
+    }
+    updatesEnabled_ = enabled;
+    nlohmann::json request;
+    request["type"] = "updates";
+    request["enabled"] = enabled;
+    webSocket_.send(request.dump());
+}
+
 void NetworkClient::sendRegenerate(const goblins::RegenerationRequest& request) {
     nlohmann::json message;
     message["type"] = "regenerate";
@@ -176,10 +207,9 @@ void NetworkClient::sendSaveGenerationConfig(const goblins::RegenerationRequest&
     webSocket_.send(message.dump());
 }
 
-// Список животных — один и тот же в world_init и в дельте, поэтому и
-// разбирается одним местом. Отсутствие ключа означает "стадо не менялось",
-// а не "животных не стало": пустой список сервер шлёт явным пустым
-// массивом.
+// Полный список животных — в world_init. Отсутствие ключа означает "стадо
+// не менялось", а не "животных не стало": пустой список сервер шлёт явным
+// пустым массивом.
 void NetworkClient::applyAnimals(const nlohmann::json& message) {
     if (!message.contains("animals") || !message["animals"].is_array()) {
         return;
@@ -189,20 +219,95 @@ void NetworkClient::applyAnimals(const nlohmann::json& message) {
         if (!animal.is_object()) {
             continue;
         }
-        WorldState::Animal parsed;
-        parsed.id = animal.value("id", static_cast<std::uint64_t>(0));
-        parsed.x = animal.value("x", 0);
-        parsed.y = animal.value("y", 0);
-        parsed.species = animal.value("species", 0);
-        parsed.growth = animal.value("growth", 0) * kFromHundredths;
-        // Умолчание — целое здоровье: животное без поля "health" в
-        // сообщении рисуется здоровым, а не мёртвым. Сотые, как и всё
-        // остальное в слоях.
-        parsed.health = animal.value("health", 100) * kFromHundredths;
-        parsed.predator = animal.value("kind", std::string{}) == "predator";
-        parsed.sex = animal.value("sex", std::string{});
-        parsed.desire = animal.value("desire", std::string{});
-        working_.animals.push_back(std::move(parsed));
+        working_.animals.push_back(parseAnimal(animal));
+    }
+}
+
+// Изменения списка животных (см. "animals" в описании дельты в
+// server/NetworkServer.hpp). Индексы во всех частях сообщения — места в
+// прежнем списке, поэтому порядок применения обязателен: сперва правки,
+// потом удаления, и только потом вставка родившихся.
+void NetworkClient::applyAnimalChanges(const nlohmann::json& message) {
+    if (!message.contains("animals") || !message["animals"].is_object()) {
+        return;
+    }
+    const auto& changes = message["animals"];
+    auto& animals = working_.animals;
+
+    // Пары "индекс - значение", как у тайловых слоёв, только правится не
+    // клетка, а животное. Индекс проверяется: сообщение приходит извне.
+    const auto applyPairs = [&](const char* key, auto&& write) {
+        if (!changes.contains(key) || !changes[key].is_array()) {
+            return;
+        }
+        const auto& pairs = changes[key];
+        for (std::size_t p = 0; p + 1 < pairs.size(); p += 2) {
+            const auto index = pairs[p].get<std::size_t>();
+            if (index < animals.size()) {
+                write(animals[index], pairs[p + 1]);
+            }
+        }
+    };
+
+    if (changes.contains("pos") && changes["pos"].is_array()) {
+        const auto& triples = changes["pos"];
+        for (std::size_t p = 0; p + 2 < triples.size(); p += 3) {
+            const auto index = triples[p].get<std::size_t>();
+            if (index < animals.size()) {
+                animals[index].x = triples[p + 1].get<int>();
+                animals[index].y = triples[p + 2].get<int>();
+            }
+        }
+    }
+    applyPairs("growth", [](WorldState::Animal& a, const nlohmann::json& v) {
+        a.growth = v.get<int>() * kFromHundredths;
+    });
+    applyPairs("health", [](WorldState::Animal& a, const nlohmann::json& v) {
+        a.health = v.get<int>() * kFromHundredths;
+    });
+    applyPairs("desire", [](WorldState::Animal& a, const nlohmann::json& v) {
+        if (v.is_string()) {
+            a.desire = v.get<std::string>();
+        }
+    });
+
+    if (changes.contains("gone") && changes["gone"].is_array()) {
+        // Пометить и выбросить одним проходом: удалять по одному значило бы
+        // сдвигать хвост списка на каждом ушедшем, а индексы в сообщении
+        // считаны в списке до всяких удалений.
+        std::vector<bool> gone(animals.size(), false);
+        for (const auto& index : changes["gone"]) {
+            const auto i = index.get<std::size_t>();
+            if (i < gone.size()) {
+                gone[i] = true;
+            }
+        }
+        std::vector<WorldState::Animal> kept;
+        kept.reserve(animals.size());
+        for (std::size_t i = 0; i < animals.size(); ++i) {
+            if (!gone[i]) {
+                kept.push_back(std::move(animals[i]));
+            }
+        }
+        animals = std::move(kept);
+    }
+
+    if (changes.contains("born") && changes["born"].is_array()) {
+        // Родившиеся приходят полными карточками и в порядке id, остаток
+        // списка в том же порядке — значит слияние, а не сортировка.
+        std::vector<WorldState::Animal> born;
+        for (const auto& record : changes["born"]) {
+            if (record.is_object()) {
+                born.push_back(parseAnimal(record));
+            }
+        }
+        std::vector<WorldState::Animal> merged;
+        merged.reserve(animals.size() + born.size());
+        std::merge(std::make_move_iterator(animals.begin()), std::make_move_iterator(animals.end()),
+                   std::make_move_iterator(born.begin()), std::make_move_iterator(born.end()),
+                   std::back_inserter(merged),
+                   [](const WorldState::Animal& a, const WorldState::Animal& b) { return a.id < b.id; });
+        animals = std::move(merged);
     }
 }
 
@@ -474,10 +579,9 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "carcass", working_.carcass, toFraction);
         applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
         applyChangedCells(json, "seeds", working_.seedSpeciesAt, [](int raw) { return raw; });
-        // Поголовье приходит целиком и только когда сдвинулось (см.
-        // протокол в server/NetworkServer.hpp), поэтому не накладывается по
-        // клеткам, а заменяет прежний список.
-        applyAnimals(json);
+        // Поголовье — изменениями, как и слои, только правится не клетка,
+        // а животное (см. протокол в server/NetworkServer.hpp).
+        applyAnimalChanges(json);
         applyPopulationHistory(json, /*replace=*/false);
         applyWatched(json);
         publishState();

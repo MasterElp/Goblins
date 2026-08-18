@@ -114,8 +114,15 @@ NetworkServer::NetworkServer(const World& world, const PopulationHistory& histor
                 // (publish), как и всё остальное состояние мира.
                 webSocket.send(buildWorldListMessage());
                 requestFullResync();
+            } else if (msg->type == ix::WebSocketMessageType::Close) {
+                // Отвернувшийся клиент, который ушёл совсем, не должен
+                // оставлять за собой запись: указатели соединений
+                // переиспользуются, и новый клиент занял бы место старого
+                // уже отвернувшимся.
+                std::lock_guard<std::mutex> lock(suspendedMutex_);
+                suspended_.erase(&webSocket);
             } else if (msg->type == ix::WebSocketMessageType::Message) {
-                handleClientMessage(msg->str);
+                handleClientMessage(msg->str, &webSocket);
             }
         });
 }
@@ -141,12 +148,14 @@ void NetworkServer::requestFullResync() {
 }
 
 void NetworkServer::publish(bool force) {
-    if (server_.getClients().empty()) {
+    if (!anyoneWatching()) {
         // Мир существует независимо от наблюдателя (02_CorePrinciples.md,
         // п.1) и продолжает тикать — но сериализовать его сейчас некому,
-        // а это самая дорогая часть тика. Точка отсчёта для дельт при
-        // этом протухает, поэтому следующий подключившийся клиент
-        // получит полный world_init (его же запрашивает и колбэк Open).
+        // а это самая дорогая часть тика. Никто не подключён или все
+        // отвернулись (свёрнутое окно, окно без фокуса) — разницы нет.
+        // Точка отсчёта для дельт при этом протухает, поэтому вернувшийся
+        // клиент получит полный world_init (его же запрашивает и колбэк
+        // Open).
         sentValid_ = false;
         return;
     }
@@ -192,7 +201,7 @@ void NetworkServer::publish(bool force) {
         }
     }
 
-    broadcastToAll(payload);
+    broadcastSnapshot(payload);
 
     std::swap(sent_, current_);
     sentValid_ = true;
@@ -300,45 +309,116 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
         .each([&](const entt::entity entity, const PositionComponent& pos, const AnimalComponent& animal,
                    const AnimalGenomeComponent& genome, const DesireComponent& desire) {
             const auto* identity = registry.try_get<const IdentityComponent>(entity);
-            out.animals.push_back(LayerSnapshot::AnimalView{identity != nullptr ? identity->id : 0, pos.x, pos.y,
-                                                            genome.species, toWire(animal.growth),
-                                                            toWire(animal.health),
-                                                            registry.all_of<PredatorComponent>(entity), animal.sex,
-                                                            desire.current});
+            // По имени поля, а не по порядку: полей девять, половина из
+            // них int, и перепутанные местами вид с развитостью собрались
+            // бы молча.
+            out.animals.push_back(LayerSnapshot::AnimalView{
+                .id = identity != nullptr ? identity->id : 0,
+                .x = pos.x,
+                .y = pos.y,
+                .growth = toWire(animal.growth),
+                .health = toWire(animal.health),
+                .desire = desire.current,
+                .species = genome.species,
+                .predator = registry.all_of<PredatorComponent>(entity),
+                .sex = animal.sex});
         });
+    // По идентификатору, и только по нему. Порядок обязан быть одинаковым
+    // от тика к тику — иначе дельта видела бы изменение там, где мир не
+    // менялся, — а из всего, что есть у животного, постоянен один лишь id:
+    // клетка меняется каждый шаг, желание и здоровье тоже. Он же и ключ
+    // дельты: список, отсортированный по id, правится по индексам без
+    // всякого поиска (см. "animals" в описании дельты).
     std::sort(out.animals.begin(), out.animals.end(),
               [](const LayerSnapshot::AnimalView& a, const LayerSnapshot::AnimalView& b) {
-                  if (a.y != b.y) return a.y < b.y;
-                  if (a.x != b.x) return a.x < b.x;
-                  if (a.predator != b.predator) return a.predator < b.predator;
-                  if (a.species != b.species) return a.species < b.species;
-                  if (a.sex != b.sex) return a.sex < b.sex;
-                  if (a.desire != b.desire) return a.desire < b.desire;
-                  if (a.growth != b.growth) return a.growth < b.growth;
-                  if (a.health != b.health) return a.health < b.health;
-                  // Двух неразличимых снаружи животных на одной клетке
-                  // порядок всё равно обязан расставить одинаково от тика к
-                  // тику, иначе дельта видела бы изменение там, где мир не
-                  // менялся; постоянный идентификатор — единственное, чем
-                  // они точно отличаются.
                   return a.id < b.id;
               });
+}
+
+// Карточка одного животного — всё, что о нём знает клиент. Одна на
+// world_init и на "born" дельты: разойтись эти два места не должны.
+nlohmann::json NetworkServer::animalToJson(const LayerSnapshot::AnimalView& animal) {
+    return {{"id", animal.id},
+            {"x", animal.x},
+            {"y", animal.y},
+            {"species", animal.species},
+            {"kind", animal.predator ? "predator" : "herbivore"},
+            {"growth", animal.growth},
+            {"health", animal.health},
+            {"sex", sexName(animal.sex)},
+            {"desire", desireName(animal.desire)}};
 }
 
 nlohmann::json NetworkServer::animalsToJson(const std::vector<LayerSnapshot::AnimalView>& animals) {
     auto array = nlohmann::json::array();
     for (const auto& animal : animals) {
-        array.push_back({{"id", animal.id},
-                          {"x", animal.x},
-                          {"y", animal.y},
-                          {"species", animal.species},
-                          {"kind", animal.predator ? "predator" : "herbivore"},
-                          {"growth", animal.growth},
-                          {"health", animal.health},
-                          {"sex", sexName(animal.sex)},
-                          {"desire", desireName(animal.desire)}});
+        array.push_back(animalToJson(animal));
     }
     return array;
+}
+
+nlohmann::json NetworkServer::animalsDeltaJson(const std::vector<LayerSnapshot::AnimalView>& previous,
+                                                const std::vector<LayerSnapshot::AnimalView>& current) {
+    auto gone = nlohmann::json::array();
+    auto born = nlohmann::json::array();
+    auto pos = nlohmann::json::array();
+    auto growth = nlohmann::json::array();
+    auto health = nlohmann::json::array();
+    auto desire = nlohmann::json::array();
+
+    // Оба списка отсортированы по id (см. captureLayers), поэтому сравнение
+    // — обычное слияние: ушедший есть только слева, родившийся — только
+    // справа, а тот, кто есть с обеих сторон, сравнивается по полям.
+    std::size_t p = 0;
+    std::size_t c = 0;
+    while (p < previous.size() || c < current.size()) {
+        if (c == current.size() || (p < previous.size() && previous[p].id < current[c].id)) {
+            gone.push_back(p);
+            ++p;
+            continue;
+        }
+        if (p == previous.size() || current[c].id < previous[p].id) {
+            born.push_back(animalToJson(current[c]));
+            ++c;
+            continue;
+        }
+        const auto& was = previous[p];
+        const auto& now = current[c];
+        // Индекс — место в ПРЕЖНЕМ списке: клиент правит тот список,
+        // который у него уже есть, и делает это до удалений и вставок.
+        if (was.x != now.x || was.y != now.y) {
+            pos.push_back(p);
+            pos.push_back(now.x);
+            pos.push_back(now.y);
+        }
+        if (was.growth != now.growth) {
+            growth.push_back(p);
+            growth.push_back(now.growth);
+        }
+        if (was.health != now.health) {
+            health.push_back(p);
+            health.push_back(now.health);
+        }
+        if (was.desire != now.desire) {
+            desire.push_back(p);
+            desire.push_back(desireName(now.desire));
+        }
+        // Вид, диета и пол животного не меняются за всю его жизнь, поэтому
+        // в дельте их нет вовсе: они приезжают один раз, в карточке.
+        ++p;
+        ++c;
+    }
+
+    nlohmann::json message = nlohmann::json::object();
+    // Порядок ключей здесь и есть порядок применения на клиенте
+    // (правки -> удаления -> вставки), и он же описан в протоколе.
+    if (!pos.empty()) message["pos"] = std::move(pos);
+    if (!growth.empty()) message["growth"] = std::move(growth);
+    if (!health.empty()) message["health"] = std::move(health);
+    if (!desire.empty()) message["desire"] = std::move(desire);
+    if (!gone.empty()) message["gone"] = std::move(gone);
+    if (!born.empty()) message["born"] = std::move(born);
+    return message.empty() ? nlohmann::json{} : message;
 }
 
 namespace {
@@ -761,13 +841,13 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
         }
     }
 
-    // Список животных — целиком и только если изменился (см. протокол в
-    // NetworkServer.hpp): при десятках животных это дешевле, чем описывать
-    // перемещения ключами, а не изменился он ровно тогда, когда стадо
-    // стояло на месте.
-    if (previous.animals != current.animals) {
+    // Животные — изменениями, как и слои (см. протокол в
+    // NetworkServer.hpp): ушедшие и правки по индексам в прежнем списке,
+    // родившиеся — полными карточками.
+    auto animals = animalsDeltaJson(previous.animals, current.animals);
+    if (!animals.is_null()) {
         anyChange = true;
-        message["animals"] = animalsToJson(current.animals);
+        message["animals"] = std::move(animals);
     }
 
     // Летопись — только точки новее отправленных. Прореживание меняет все
@@ -837,7 +917,7 @@ std::optional<SaveWorldRequest> NetworkServer::takePendingSaveWorld() {
     return result;
 }
 
-void NetworkServer::handleClientMessage(const std::string& payload) {
+void NetworkServer::handleClientMessage(const std::string& payload, const ix::WebSocket* sender) {
     // Этот колбэк вызывается на внутреннем потоке IXWebSocket, не на
     // потоке GameLoop::run(). Прямая мутация ECS registry отсюда была бы
     // гонкой данных — поэтому регенерация только складывается в
@@ -850,6 +930,29 @@ void NetworkServer::handleClientMessage(const std::string& payload) {
     }
 
     const std::string type = json.value("type", "");
+    if (type == "updates") {
+        // "Мне сейчас не показывай". Свёрнутое окно, окно без фокуса,
+        // нажатая клавиша — что именно, решает клиент; сервер только
+        // перестаёт слать ЭТОМУ клиенту состояние мира. Мир при этом
+        // продолжает жить: отвернуться — не то же самое, что поставить на
+        // паузу (для паузы есть toggle_pause).
+        const bool enabled = json.value("enabled", true);
+        {
+            std::lock_guard<std::mutex> lock(suspendedMutex_);
+            if (enabled) {
+                suspended_.erase(sender);
+            } else {
+                suspended_.insert(sender);
+            }
+        }
+        if (enabled) {
+            // Вернувшемуся — мир целиком: пока он не смотрел, дельты
+            // уходили без него (или не собирались вовсе), и накладывать
+            // новую дельту не на что.
+            requestFullResync();
+        }
+        return;
+    }
     if (type == "toggle_pause") {
         const bool newState = !paused_.load();
         pauseCommandCount_.fetch_add(1);
@@ -1006,6 +1109,25 @@ void NetworkServer::broadcastToAll(const std::string& payload) {
     for (const auto& client : server_.getClients()) {
         client->send(payload);
     }
+}
+
+void NetworkServer::broadcastSnapshot(const std::string& payload) {
+    std::lock_guard<std::mutex> lock(suspendedMutex_);
+    for (const auto& client : server_.getClients()) {
+        if (suspended_.count(client.get()) == 0) {
+            client->send(payload);
+        }
+    }
+}
+
+bool NetworkServer::anyoneWatching() {
+    std::lock_guard<std::mutex> lock(suspendedMutex_);
+    for (const auto& client : server_.getClients()) {
+        if (suspended_.count(client.get()) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace goblins

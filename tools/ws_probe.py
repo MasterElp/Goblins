@@ -19,29 +19,63 @@ class WebSocketProbe:
             buf += self.s.recv(4096)
         self.buf = buf.split(b"\r\n\r\n", 1)[1]
 
-    def _read(self, n):
-        while len(self.buf) < n:
-            chunk = self.s.recv(65536)
-            if not chunk:
-                raise EOFError
-            self.buf += chunk
-        out, self.buf = self.buf[:n], self.buf[n:]
-        return out
+    def _take_frame(self):
+        """Снять из буфера один целый кадр или вернуть None.
 
-    def recv(self):
+        Целиком, а не по кусочкам: разбор с ожиданием посреди кадра
+        (self._read внутри разбора) при таймауте съедал бы уже прочитанный
+        заголовок и разъезжался с потоком навсегда. Проверке, которая
+        СЛУШАЕТ ТИШИНУ (сервер обязан замолчать, см. "updates" в
+        протоколе), таймаут нужен по определению — поэтому буфер трогается
+        только тогда, когда кадр в нём целый.
+        """
+        b = self.buf
+        if len(b) < 2:
+            return None
+        length = b[1] & 0x7F
+        offset = 2
+        if length == 126:
+            if len(b) < 4:
+                return None
+            length = struct.unpack("!H", b[2:4])[0]
+            offset = 4
+        elif length == 127:
+            if len(b) < 10:
+                return None
+            length = struct.unpack("!Q", b[2:10])[0]
+            offset = 10
+        if len(b) < offset + length:
+            return None
+        self.buf = b[offset + length:]
+        return b[0] & 0x80, b[0] & 0x0F, b[offset:offset + length]
+
+    def recv(self, timeout=None):
+        """Дождаться сообщения. timeout в секундах — вернуть None, если за
+        это время сообщение не пришло; поток при этом не портится."""
+        deadline = None if timeout is None else time.monotonic() + timeout
         # Кадры фрагментируются: собираем до FIN, продолжения идут opcode 0.
         acc = b""
         started = False
         while True:
-            h = self._read(2)
-            fin = h[0] & 0x80
-            opcode = h[0] & 0x0F
-            ln = h[1] & 0x7F
-            if ln == 126:
-                ln = struct.unpack("!H", self._read(2))[0]
-            elif ln == 127:
-                ln = struct.unpack("!Q", self._read(8))[0]
-            payload = self._read(ln)
+            frame = self._take_frame()
+            if frame is None:
+                if deadline is not None:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        return None
+                    self.s.settimeout(left)
+                try:
+                    chunk = self.s.recv(65536)
+                except (TimeoutError, socket.timeout):
+                    return None
+                finally:
+                    if deadline is not None:
+                        self.s.settimeout(30)
+                if not chunk:
+                    raise EOFError
+                self.buf += chunk
+                continue
+            fin, opcode, payload = frame
             if opcode == 8:
                 raise EOFError("closed")
             if opcode in (9, 10):

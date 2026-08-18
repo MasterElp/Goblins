@@ -18,6 +18,10 @@
 // состояние может жить, — рядом с самими клавишами.
 namespace KeysPanel {
 
-void draw(Rectangle bounds, const MapTexture::Layers& layers);
+// watching — присылает ли сервер сейчас состояние мира (см. клавишу H).
+// Показано здесь же и таким же переключателем, как слои, по той же
+// причине: выключенное состояние меняет то, что видно на карте, и не
+// видеть его — значит смотреть вслепую.
+void draw(Rectangle bounds, const MapTexture::Layers& layers, bool watching);
 
 } // namespace KeysPanel

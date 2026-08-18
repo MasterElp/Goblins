@@ -650,8 +650,17 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // надписью поверх карты: это состояние мира, и место ему там же, где
     // остальное состояние мира. Заодно оно всегда на одном месте, а не
     // посреди того, на что игрок в этот момент смотрит.
+    int hudExtraX = 10 + MeasureText(hudLabel.c_str(), 16) + 20;
     if (snapshot.paused) {
-        DrawText("PAUSED", 10 + MeasureText(hudLabel.c_str(), 16) + 20, 8, 16, pausedColor);
+        DrawText("PAUSED", hudExtraX, 8, 16, pausedColor);
+        hudExtraX += MeasureText("PAUSED", 16) + 20;
+    }
+    // Отвернувшийся клиент — тут же, рядом с паузой, и по той же причине,
+    // по которой надпись о паузе вообще существует: карта застывает, и без
+    // слова это неотличимо от остановленного или зависшего мира. Но
+    // состояние тут не мира, а взгляда на него — мир продолжает жить.
+    if (!network.updatesEnabled()) {
+        DrawText("NOT WATCHING (H)", hudExtraX, 8, 16, pausedColor);
     }
 
     // Пока открыт любой из модальных диалогов, ни кнопки полосы, ни панель
@@ -740,7 +749,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 PopulationGraph::draw(snapshot, panelContent, !modalOpen);
                 break;
             case Tab::Keys:
-                KeysPanel::draw(panelContent, layers);
+                KeysPanel::draw(panelContent, layers, network.updatesEnabled());
                 break;
             case Tab::Hidden:
                 break;
