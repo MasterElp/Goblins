@@ -153,29 +153,12 @@ inline Color water(float depth) {
     return lerp(shallow, deep, t);
 }
 
-// Рельефный шейдинг — не отдельный цвет, а множитель поверх уже
-// смешанного цвета тайла (soil()/water()): низины темнее, возвышенности
-// светлее. normalizedHeight — 0..1, нормализовано вызывающей стороной по
-// min/max текущей карты (у HeightComponent.height нет фиксированного
-// диапазона — он зависит от параметров генерации).
-//
-// Корень перед растяжением — не украшение, а поправка на форму рельефа:
-// высота растёт от шума с нажимом (kMountainSharpness в
-// TerrainGenerator.cpp), поэтому бо́льшая часть карты сидит у нижнего края
-// диапазона. Без поправки почти вся карта красилась бы одинаково тёмным, и
-// чем выше горы, тем хуже: весь рельеф низин сминался бы в пару оттенков.
-// Корень растягивает как раз низкую половину, где и лежит основная часть
-// карты.
-//
-// Диапазон множителя широкий (0.45..1.5 против прежних 0.7..1.3): перепад
-// высот в мире вырос в десятки раз, и прежнего размаха было мало, чтобы
-// гору было видно горой.
-inline Color applyHeightShading(Color c, float normalizedHeight) {
-    const float t = std::sqrt(std::clamp(normalizedHeight, 0.0f, 1.0f));
-    const float factor = 0.45f + 1.05f * t;
-    return Color{static_cast<unsigned char>(std::clamp(c.r * factor, 0.0f, 255.0f)),
-                 static_cast<unsigned char>(std::clamp(c.g * factor, 0.0f, 255.0f)),
-                 static_cast<unsigned char>(std::clamp(c.b * factor, 0.0f, 255.0f)), c.a};
+inline Color applyHeightShading(float height) {
+    static const Color low{ 0, 0, 0, 255 };
+    static const Color high{ 255, 255, 255, 255 };
+
+    const float t = std::clamp((height + 20.0f) / 80.0f, 0.0f, 1.0f);
+    return lerp(low, high, t);
 }
 
 } // namespace TileColors

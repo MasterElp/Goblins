@@ -39,18 +39,6 @@ constexpr int kDy8[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 // увлажняется постепенно, а не мгновенно.
 constexpr int kMoistureAdaptDivisor = 100;
 
-// Утрамбованности в почве больше нет, и размягчать её у воды больше
-// некому. Она жила ради одного потребителя — пригодности почвы для
-// растения, — а та оказалась вторым способом сказать то, что уже говорит
-// влажность (см. SoilComponent). Вместе с ней ушли три константы:
-// kCompactionRockFloor, kCompactionSoftenReach, kCompactionSoftenRate.
-
-// Порога "ниже этой глубины воды на тайле нет" здесь больше нет вовсе. На
-// целой шкале (core/Scale.hpp) самая мелкая различимая глубина — одна
-// тысячная, она же единица: ноль и есть отсутствие воды, а меньше единицы
-// не бывает. Всё, что прежние пороги объясняли про потери массы на кромке
-// водоёма, целая шкала решает тем, что терять там нечего.
-
 // Сколько клеток в "луже" — сама клетка и восемь соседей. Делить сумму
 // правок надо именно на это ПОСТОЯННОЕ число, а не на то, во скольких
 // группах клетка реально участвовала: внутри одной группы сумма правок
@@ -119,7 +107,7 @@ constexpr int kEvaporationBase = 100;
 // свойством мира — это форма самого закона размыва, а не то, что имеет
 // смысл настраивать по мирам. kFull-масштаб: 200 — это те же 0.2, что и у
 // остальных долей в проекте.
-constexpr int kErosionHeightFactor = 200;
+constexpr int kErosionHeightFactor = 500;
 
 // Минералы: выравнивание с единственным соседом за тик, а не раздача
 // всем сразу. Клетка A ищет среди соседей, которые "притягивают" минералы
@@ -249,7 +237,8 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // (сотая, как было) на целой шкале почти всегда давала бы ноль, и
     // влажность встала бы, не дойдя до цели. "Не меньше тысячной за тик" —
     // то же самое движение, только выраженное в наличных единицах.
-    std::vector<int> nextMoisture(moisture);
+    //Пока отключаем
+    /*std::vector<int> nextMoisture(moisture);
     for (std::size_t i = 0; i < cellCount; ++i) {
         if (entities[i] == entt::null) {
             continue;
@@ -261,7 +250,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             const int step = gap / kMoistureAdaptDivisor;
             nextMoisture[i] = moisture[i] + (step != 0 ? step : (gap > 0 ? 1 : -1));
         }
-    }
+    }*/
 
     // --- 5. Течение: вода в "луже" встаёт на один уровень.
     //
@@ -487,24 +476,23 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         totalEroded += appliedErosion;
     }
 
-    // Ёмкость углублений: клетку, принявшую воду, разрешено поднять
-    // максимум до дна самого низкого из её соседей — ровно "засыпать
-    // ступеньку вровень", и ни крупицей выше. Нанос не может создать новый
-    // бугор, а значит и новую рябь.
-    for (std::size_t j = 0; j < cellCount; ++j) {
-        if (entities[j] == entt::null || depthDelta[j] <= 0 || lowestNeighborBed[j] == kNoNeighborBed) {
-            continue;
-        }
-        const int capacity = std::max(0, lowestNeighborBed[j] - terrainHeight[j]);
-        depositCapacity[j] = capacity;
-        totalCapacity += capacity;
-    }
-
     if (toggles.erosionDeposition && totalEroded > 0 && totalCapacity > 0) {
         // Выключенное отложение (toggles.erosionDeposition) не трогает
         // саму эрозию выше — вымытое просто не возвращается в углубления
         // и целиком уходит с карты, как и излишек наноса ниже.
         //
+        // Ёмкость углублений: клетку, принявшую воду, разрешено поднять
+        // максимум до дна самого низкого из её соседей — ровно "засыпать
+        // ступеньку вровень", и ни крупицей выше. Нанос не может создать новый
+        // бугор, а значит и новую рябь.
+        for (std::size_t j = 0; j < cellCount; ++j) {
+            if (entities[j] == entt::null || depthDelta[j] <= 0 || lowestNeighborBed[j] == kNoNeighborBed) {
+                continue;
+            }
+            const int capacity = std::max(0, lowestNeighborBed[j] - terrainHeight[j]);
+            depositCapacity[j] = capacity;
+            totalCapacity += capacity;
+        }
         // Наноса больше, чем углублений, — излишку просто некуда осесть, и
         // он уходит с карты, как вода за край: Область — открытый кусок
         // мира, а не замкнутый сосуд, и требовать от неё точного баланса
@@ -523,8 +511,6 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // читают снимок (waterDepth/isWaterSource), а не друг друга и не
     // результат течения, поэтому порядок клеток не важен.
     //
-    // Вместе они образуют баланс воды: сколько приносят источники и дожди,
-    // столько же в равновесии уносят испарение и провал за край (5c ниже). ---
     // Испарение — самая мелкая величина в мире: на целой шкале это доли
     // тысячной глубины за тик, и целой она не становится ни при каком
     // сдвиге запятой, который выдержали бы остальные величины. Считается
@@ -607,38 +593,42 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // бедного из притягивающих) соседа -> аккумулятор — тот же приём, что
     // и течение воды выше, поэтому порядок обхода клеток не влияет на
     // результат. ---
+    // Можно отключать из клиента
     std::vector<int> nextMinerals(minerals);
-    for (std::size_t i = 0; toggles.mineralsSpread && i < cellCount; ++i) {
-        if (entities[i] == entt::null || minerals[i] < kMineralSlopeThreshold) {
-            continue;
-        }
-        const int x = static_cast<int>(i) % width;
-        const int y = static_cast<int>(i) / width;
-
-        int bestNeighbor = -1;
-        int bestMinerals = minerals[i];
-        for (int dir = 0; dir < 8; ++dir) {
-            const int nx = x + kDx8[dir];
-            const int ny = y + kDy8[dir];
-            if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+    /*if (toggles.mineralsSpread)
+    {
+        for (std::size_t i = 0; i < cellCount; ++i) {
+            if (entities[i] == entt::null || minerals[i] < kMineralSlopeThreshold) {
                 continue;
             }
-            const std::size_t j = index(nx, ny);
-            const bool neighborAttractsMinerals = waterDepth[j] > 0 || moisture[j] > kMineralMoistureThreshold;
-            if (!neighborAttractsMinerals || minerals[j] >= bestMinerals) {
+            const int x = static_cast<int>(i) % width;
+            const int y = static_cast<int>(i) / width;
+
+            int bestNeighbor = -1;
+            int bestMinerals = minerals[i];
+            for (int dir = 0; dir < 8; ++dir) {
+                const int nx = x + kDx8[dir];
+                const int ny = y + kDy8[dir];
+                if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+                    continue;
+                }
+                const std::size_t j = index(nx, ny);
+                const bool neighborAttractsMinerals = waterDepth[j] > 0 || moisture[j] > kMineralMoistureThreshold;
+                if (!neighborAttractsMinerals || minerals[j] >= bestMinerals) {
+                    continue;
+                }
+                bestMinerals = minerals[j];
+                bestNeighbor = static_cast<int>(j);
+            }
+
+            if (bestNeighbor < 0 || minerals[i] - bestMinerals < kMineralSlopeThreshold) {
                 continue;
             }
-            bestMinerals = minerals[j];
-            bestNeighbor = static_cast<int>(j);
+            const int amount = (minerals[i] - bestMinerals) / 2;
+            nextMinerals[i] -= amount;
+            nextMinerals[static_cast<std::size_t>(bestNeighbor)] += amount;
         }
-
-        if (bestNeighbor < 0 || minerals[i] - bestMinerals < kMineralSlopeThreshold) {
-            continue;
-        }
-        const int amount = (minerals[i] - bestMinerals) / 2;
-        nextMinerals[i] -= amount;
-        nextMinerals[static_cast<std::size_t>(bestNeighbor)] += amount;
-    }
+    }*/
 
     // --- 7/8. Запись обратно: значения существующих компонентов правятся
     // напрямую, появление/исчезание WaterComponent — через очередь команд

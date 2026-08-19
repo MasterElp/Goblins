@@ -15,33 +15,33 @@
     "plants": {
         "grass_coverage": 305,
         "grass_species": 4,
-        "humus_decay_period": 14,
+        "humus_decay_period": 416,
         "mutation_rate": 207
     },
     "port": 9002,
     "saves_dir": "saves",
-    "seed": 576005,
+    "seed": 969732,
     "snapshot_interval_ms": 100,
     "terrain": {
         "feature_size": 50,
-        "minerals_average": 28,
+        "minerals_average": 18,
         "mountain_hardness": 692,
         "mountain_height": 41995,
         "noise_octaves": 4,
         "pond_depth": 3016,
         "rain_amount": 206,
-        "rain_interval_ticks": 911,
+        "rain_interval_ticks": 399,
         "river_count": 3,
         "river_depth": 3017,
         "river_sinuosity": 777,
         "river_width": 52,
-        "soil_erosion_rate": 492,
+        "soil_erosion_rate": 209,
         "toggles": {
-            "erosion_deposition": true,
-            "minerals_spread": true
+            "erosion_deposition": false,
+            "minerals_spread": false
         },
         "water_evaporation_rate": 109,
-        "water_source_count": 9,
+        "water_source_count": 7,
         "water_source_depth": 2512
     },
     "tick_interval_ms": 200
