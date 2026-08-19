@@ -722,8 +722,12 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             // "teeth" — та же живая добыча, просто уже под зубами.
             const bool huntingPrey =
                 snapshot.watched.roadKind == "prey" || snapshot.watched.roadKind == "teeth";
-            const Color roadColor = huntingPrey                             ? Color{255, 120, 90, 235}
+            // "call" — та же пара, но не увиденная, а услышанная (см.
+            // hearCall): бледнее и синéе настоящей "mate", потому что это
+            // прямая линия на звук, а не путь по клеткам видимости.
+            const Color roadColor = huntingPrey ? Color{255, 120, 90, 235}
                                     : snapshot.watched.roadKind == "mate" ? Color{235, 140, 235, 235}
+                                    : snapshot.watched.roadKind == "call" ? Color{170, 175, 235, 190}
                                                                            : Color{235, 225, 170, 225};
             const float thickness = std::max(1.5f, tileSizeF * 0.14f);
             auto centerOf = [&](int cellX, int cellY) {

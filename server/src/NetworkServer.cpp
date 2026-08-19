@@ -546,6 +546,9 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
     int targetX = 0;
     int targetY = 0;
     const char* kind = "";
+    // Отдельно от kind: зов рисуется прямой линией, а не дорогой (см. ниже,
+    // у reach.roadTo) — bool дешевле и надёжнее сравнения строк.
+    bool isCall = false;
 
     if (predator && desire == Desire::Food) {
         std::vector<HuntPrey> preys;
@@ -584,12 +587,27 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
         }
 
         const Suitor suitor{id, position.x, position.y, sight, genome.species, predator, animal.sex};
-        const MateChoice choice = chooseMate(reach, suitor, mates);
-        if (choice.found) {
-            hasTarget = true;
-            targetX = choice.x;
-            targetY = choice.y;
-            kind = "mate";
+        if (!anyMateInSight(suitor, mates)) {
+            // То же решение, что и в AnimalSystem: рядом никого не видно —
+            // пробуем зов (hearCall). Он не строит дорогу (звук не
+            // спрашивает брода), поэтому и рисуется иначе — прямой линией,
+            // а не ломаной по клеткам Reach, см. ниже.
+            const MateChoice call = hearCall(suitor, mates);
+            if (call.found) {
+                hasTarget = true;
+                targetX = call.x;
+                targetY = call.y;
+                kind = "call";
+                isCall = true;
+            }
+        } else {
+            const MateChoice choice = chooseMate(reach, suitor, mates);
+            if (choice.found) {
+                hasTarget = true;
+                targetX = choice.x;
+                targetY = choice.y;
+                kind = "mate";
+            }
         }
     }
 
@@ -601,7 +619,15 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
     watched["road_x"] = targetX;
     watched["road_y"] = targetY;
 
-    reach.roadTo(targetX, targetY, cells);
+    // Зов — не дорога: цель дальше Reach (звук слышен дальше, чем видно), и
+    // roadTo на ней честно вернул бы пустоту — Reach построен только на
+    // радиус восприятия. Рисуем то, что животное на самом деле знает: не
+    // путь, а прямое направление, одной линией.
+    if (isCall) {
+        cells.assign(1, PathCell{targetX, targetY});
+    } else {
+        reach.roadTo(targetX, targetY, cells);
+    }
     auto roadJson = nlohmann::json::array();
     for (const auto& cell : cells) {
         roadJson.push_back(cell.x);

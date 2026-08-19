@@ -20,7 +20,7 @@
     },
     "port": 9002,
     "saves_dir": "saves",
-    "seed": 54321,
+    "seed": 576005,
     "snapshot_interval_ms": 100,
     "terrain": {
         "feature_size": 50,
@@ -29,18 +29,18 @@
         "mountain_height": 41995,
         "noise_octaves": 4,
         "pond_depth": 3016,
-        "rain_amount": 300,
+        "rain_amount": 206,
         "rain_interval_ticks": 911,
         "river_count": 3,
         "river_depth": 3017,
         "river_sinuosity": 777,
         "river_width": 52,
-        "soil_erosion_rate": 261,
+        "soil_erosion_rate": 492,
         "toggles": {
             "erosion_deposition": true,
             "minerals_spread": true
         },
-        "water_evaporation_rate": 200,
+        "water_evaporation_rate": 109,
         "water_source_count": 9,
         "water_source_depth": 2512
     },

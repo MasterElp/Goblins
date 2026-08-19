@@ -763,8 +763,21 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         // Хромота заживает сама, по тику за тик (см. InjuryComponent). Срок,
         // а не скорость: дробям в состоянии мира места нет.
+        //
+        // lameShare сбрасывается ровно тогда, когда срок истёк, а не
+        // раньше и не сам по себе: пока хищник ещё хромает, тяжесть должна
+        // оставаться той, что назначил укус (min с новым ударом — берём
+        // худшее из двух, см. п.8 "Зубы"). Без сброса тяжесть только
+        // копилась бы: min никогда не отпускает вверх, и однажды
+        // сильно потрёпанный рогами хищник оставался бы почти неподвижным
+        // при КАЖДОЙ следующей хромоте до конца жизни, даже от слабого
+        // укуса, — раненый однажды не должен хромать хуже раненого только
+        // что.
         if (animal.injury->lameTicks > 0) {
             --animal.injury->lameTicks;
+            if (animal.injury->lameTicks == 0) {
+                animal.injury->lameShare = kFull;
+            }
         }
 
         // Навоз выпадает порциями на ту клетку, где животное сейчас стоит.
@@ -1096,6 +1109,22 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 const Suitor suitor{animal.id,      animal.x,        animal.y, reach,
                                     genome.species, animal.predator, state.sex};
                 if (!anyMateInSight(suitor, mates)) {
+                    // Рядом никого не видно — но самка, которой нужна пара,
+                    // слышна дальше, чем видна (core/Mating.hpp, hearCall).
+                    // Цель ставится прямо, без дороги: звук не спрашивает
+                    // брода, и как до зовущей дойти, решит уже сам шаг ниже
+                    // — тем же способом, каким слепое блуждание само огибает
+                    // преграды. Без этого поголовье, разбросанное по
+                    // большой карте, вымирало не от голода и не от зубов, а
+                    // от одиночества: предпоследняя пара уходила каждый в
+                    // свою случайную сторону и расходилась дальше, а не
+                    // ближе.
+                    const MateChoice call = hearCall(suitor, mates);
+                    if (call.found) {
+                        targetX = call.x;
+                        targetY = call.y;
+                        hasTarget = true;
+                    }
                     break;
                 }
                 reachOf.build(world.area(), animal.x, animal.y, reach, standable);
@@ -1689,6 +1718,7 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kBreedingGrowth", kBreedingGrowth});
     out.push_back({g, "kCalmNeed", kCalmNeed});
     out.push_back({g, "kMateDesire", kMateDesire});
+    out.push_back({g, "kCallRange", static_cast<float>(kCallRange)});
     out.push_back({g, "kBirthEnergyShare", kBirthEnergyShare});
     out.push_back({g, "kBirthWaterShare", kBirthWaterShare});
     out.push_back({g, "kNewbornGrowth", kNewbornGrowth});
