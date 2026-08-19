@@ -1,6 +1,7 @@
 #include "WorldScreen.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -158,6 +159,20 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // Диалог сохранения открыт из-за крестика, а не из-за Esc/Back: тогда
     // подтверждение закрывает приложение, а не возвращает в меню.
     static bool exitingApp = false;
+    // "Save & Quit" не закрывает приложение в тот же кадр, что отправляет
+    // save_world: main.cpp следом рвёт TCP-соединение (network.disconnect в
+    // конце main после короткой паузы "на всякий случай"), а send() у
+    // IXWebSocket не гарантирует, что байты успели уйти на провод именно
+    // к этому моменту — эмпирически не успевали, и мир не сохранялся,
+    // хотя диалог честно спрашивал и вызывал sendSaveWorld(). Раз в
+    // протоколе уже есть подтверждение (notice после обработки save_world
+    // на сервере, см. NetworkServer.hpp), ждём настоящего ответа вместо
+    // догадки по времени: экран остаётся открытым до свежего notice (или
+    // до истечения запасного таймаута, если сервер не отвечает вовсе —
+    // приложение не должно виснуть на выходе).
+    static bool waitingToSaveBeforeQuit = false;
+    static std::chrono::steady_clock::time_point waitingSince{};
+    static std::chrono::steady_clock::time_point waitingNoticeBaseline{};
     // Регенерация уничтожает текущий мир безвозвратно — как и выход,
     // спрашивает про сохранение первым делом, тем же диалогом по форме.
     // Спрашивать нечего только пока мира ещё нет вовсе (кнопка "Create
@@ -229,7 +244,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // слоя позади, а буквенные клавиши при вводе имени — с WASD/P/1-6.
     // Оверлей констант — по той же причине: он перекрывает экран целиком,
     // и слои под ним переключались бы вслепую.
-    const bool inputBlocked = confirmingExit || confirmingRegenerate || ConstantsOverlay::visible();
+    const bool inputBlocked =
+        confirmingExit || confirmingRegenerate || waitingToSaveBeforeQuit || ConstantsOverlay::visible();
 
     // Перетаскивание левой кнопкой мыши. Порог сдвига от точки нажатия
     // решает, был ли это клик (выбор клетки, дальше в этом файле) или
@@ -794,7 +810,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     //
     // Пока открыт любой из модальных диалогов, панель под ним не должна
     // ловить клики.
-    const bool modalOpen = confirmingExit || confirmingRegenerate;
+    const bool modalOpen = confirmingExit || confirmingRegenerate || waitingToSaveBeforeQuit;
     if (modalOpen) GuiLock();
 
     // Правая панель. Рисуется после карты и полосы, но до модальных
@@ -928,8 +944,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // Крестик отменяет любой другой открытый вопрос: закрыться в этот
         // момент важнее, чем спросить про уже начатую регенерацию, а
         // задавать оба вопроса сразу (два наложенных диалога) было бы
-        // просто нечитаемо.
+        // просто нечитаемо. Повторный крестик, нажатый уже во время
+        // ожидания подтверждения сохранения, начинает вопрос заново —
+        // мало ли что случилось за это время.
         confirmingRegenerate = false;
+        waitingToSaveBeforeQuit = false;
         confirmingExit = true;
         exitingApp = true;
     }
@@ -1006,10 +1025,24 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         const bool cancelExit = GuiButton(
             Rectangle{static_cast<float>(boxX) + 20, static_cast<float>(boxY) + 94, 340, 26}, "Cancel (Esc)");
 
-        // Мир сохраняет сервер, между тиками, и ответа клиент не ждёт: и
-        // при выходе в меню, и при закрытии окна порядок один и тот же —
-        // попросить сохранить, попросить остановить мир, уйти.
-        if (saveExit || discardExit) {
+        // Мир сохраняет сервер, между тиками, и обычно ответа клиент не
+        // ждёт: экран остаётся тем же World (возврат в меню его просто
+        // сменит), соединение никуда не девается, и запрос спокойно
+        // дойдёт своим чередом. Единственное исключение — "Save & Quit":
+        // следом рвётся само соединение (main.cpp, network.disconnect
+        // после этого экрана), а send() у IXWebSocket не гарантирует, что
+        // байты успели уйти на провод к моменту разрыва. Здесь и только
+        // здесь дожидаемся настоящего подтверждения (notice от сервера),
+        // прежде чем отдать AppScreen::Exit — иначе "Save & Quit" мог
+        // закрыться, ничего не сохранив, хотя и честно спросив.
+        if (saveExit && exitingApp) {
+            waitingNoticeBaseline = snapshot.noticeAt;
+            waitingSince = std::chrono::steady_clock::now();
+            waitingToSaveBeforeQuit = true;
+            network.sendSaveWorld();
+            confirmingExit = false;
+            exitingApp = false;
+        } else if (saveExit || discardExit) {
             if (saveExit) {
                 network.sendSaveWorld();
             }
@@ -1023,6 +1056,41 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             confirmingExit = false;
             exitingApp = false;
         }
+    }
+
+    // Ждём подтверждения от сервера, что "Save & Quit" действительно
+    // сохранил мир (см. комментарий у saveExit && exitingApp выше), прежде
+    // чем отдать AppScreen::Exit и позволить main.cpp разорвать
+    // соединение. Кнопок здесь нет: решение уже принято, отменять нечего
+    // — разве что снова нажать на крестик (см. closeRequested выше).
+    if (waitingToSaveBeforeQuit) {
+        DrawRectangle(0, 0, screenW, screenH, Color{0, 0, 0, 150});
+
+        const int boxW = 380;
+        const int boxH = 90;
+        const int boxX = screenW / 2 - boxW / 2;
+        const int boxY = screenH / 2 - boxH / 2;
+        DrawRectangle(boxX, boxY, boxW, boxH, hudColor);
+        DrawRectangleLines(boxX, boxY, boxW, boxH, textColor);
+        const char* label = "Saving world before quitting...";
+        DrawText(label, boxX + boxW / 2 - MeasureText(label, 18) / 2, boxY + boxH / 2 - 9, 18, textColor);
+
+        // Свежий notice после waitingNoticeBaseline — сервер получил и
+        // обработал save_world (успешно или нет, неважно: важен сам
+        // факт, что запрос пережил дорогу и не потерялся при разрыве
+        // соединения следом). Таймаут — на случай, если сервер не
+        // отвечает вовсе (упал, завис, ушла сеть): дожидаться ответа
+        // бесконечно нельзя, приложение должно закрываться и без сервера.
+        constexpr auto kSaveConfirmTimeout = std::chrono::seconds(3);
+        const bool confirmed = snapshot.noticeAt > waitingNoticeBaseline;
+        const bool timedOut = std::chrono::steady_clock::now() - waitingSince > kSaveConfirmTimeout;
+        if (confirmed || timedOut) {
+            waitingToSaveBeforeQuit = false;
+            network.sendStopSimulation();
+            return AppScreen::Exit;
+        }
+        // Иначе просто ждём дальше — падаем к оверлею констант ниже, как
+        // и диалоги выше: он рисуется поверх всего, включая этот экран.
     }
 
     // Оверлей констант — последним: он перекрывает всё, включая диалог выхода.
