@@ -595,7 +595,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // результат. ---
     // Можно отключать из клиента
     std::vector<int> nextMinerals(minerals);
-    /*if (toggles.mineralsSpread)
+    if (toggles.mineralsSpread)
     {
         for (std::size_t i = 0; i < cellCount; ++i) {
             if (entities[i] == entt::null || minerals[i] < kMineralSlopeThreshold) {
@@ -628,7 +628,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             nextMinerals[i] -= amount;
             nextMinerals[static_cast<std::size_t>(bestNeighbor)] += amount;
         }
-    }*/
+    }
 
     // --- 7/8. Запись обратно: значения существующих компонентов правятся
     // напрямую, появление/исчезание WaterComponent — через очередь команд
