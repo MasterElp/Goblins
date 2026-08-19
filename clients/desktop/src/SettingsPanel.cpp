@@ -38,6 +38,20 @@ bool isPresetArea(int width, int height) {
     return (width == 200 && height == 200) || (width == 400 && height == 400);
 }
 
+// Отключаемые механики мира (goblins::TerrainToggles, зеркало
+// core::WorldToggles) — единственное место, где панель знает их поимённо.
+// Новый переключатель добавляется одной строкой сюда, а не новым вызовом
+// ops.boolRow в layoutParams: одна и та же строка рисуется и меряется по
+// высоте, потому что оба Ops проходят один и тот же массив.
+struct ToggleRow {
+    const char* label;
+    bool goblins::TerrainToggles::*field;
+};
+constexpr ToggleRow kToggleRows[] = {
+    {"Minerals spread by water", &goblins::TerrainToggles::minerals_spread},
+    {"Erosion deposits downstream", &goblins::TerrainToggles::erosion_deposition},
+};
+
 template <typename Ops>
 void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customArea) {
     ops.group("GENERATION -- applied on Regenerate");
@@ -153,10 +167,13 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // исчезает: ровно столько же оседает там, куда пришла вода.
     ops.intRow("Erosion rate (per mille)", edited.terrain.soil_erosion_rate, 0, 500);
 
-    ops.section("Minerals");
-    // Отключает только перенос минералов течением/влагой (HydrologySystem),
-    // не сами крупицы: их по-прежнему добавляет и забирает перегной.
-    ops.boolRow("Spread by water", edited.terrain.minerals_spread_enabled);
+    ops.section("Toggles");
+    // Отключаемые механики мира, все в одном месте (kToggleRows выше) —
+    // новый выключатель не заводит новую секцию, а добавляется строкой
+    // в тот массив.
+    for (const auto& toggle : kToggleRows) {
+        ops.boolRow(toggle.label, edited.terrain.toggles.*(toggle.field));
+    }
 
     ops.section("Plant life");
     // Мутация — доля вложения черты, а не доля значения гена (у всех черт

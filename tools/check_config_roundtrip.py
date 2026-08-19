@@ -42,7 +42,8 @@ PROBE = {
         "feature_size": 37, "noise_octaves": 6, "mountain_height": 21000,
         "mountain_hardness": 430, "river_count": 4, "river_width": 44,
         "river_sinuosity": 310, "river_depth": 1234, "pond_depth": 1700,
-        "minerals_average": 17, "minerals_spread_enabled": False,
+        "minerals_average": 17,
+        "toggles": {"minerals_spread": False, "erosion_deposition": False},
         "water_source_count": 6, "water_source_depth": 3300,
         "water_evaporation_rate": 77, "rain_interval_ticks": 555, "rain_amount": 66,
         "soil_erosion_rate": 88,
@@ -105,16 +106,22 @@ def main():
                 failures.append(f"config.json -> панель: {name} = {arrived_flat.get(name)}, ожидалось {expected}")
 
         # --- 2. панель -> config.json ---
-        # Правим КАЖДОЕ поле: потерянное не изменится в файле.
+        # Правим КАЖДОЕ поле: потерянное не изменится в файле. Рекурсивно —
+        # вложенные объекты вроде terrain.toggles (TerrainToggles) правятся
+        # так же, полем на поле, а не только верхний уровень секции.
+        def bump(value):
+            if isinstance(value, dict):
+                return {name: bump(item) for name, item in value.items()}
+            if isinstance(value, bool):
+                return not value
+            return value + 10
+
         edited = json.loads(json.dumps(generation))
         expected_saved = {}
         for section in ("terrain", "plants", "animals"):
-            for name in edited[section]:
-                if isinstance(edited[section][name], bool):
-                    edited[section][name] = not edited[section][name]
-                else:
-                    edited[section][name] += 10
-                expected_saved[f"{section}.{name}"] = edited[section][name]
+            edited[section] = bump(edited[section])
+        for section, values in flat({s: edited[s] for s in ("terrain", "plants", "animals")}).items():
+            expected_saved[section] = values
         for name, key in (("boulder_count", "boulder_count"), ("seed", "seed")):
             edited[name] += 1 if name == "seed" else 10
             expected_saved[key] = edited[name]

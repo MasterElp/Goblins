@@ -61,7 +61,12 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.rainIntervalTicks = config.rain_interval_ticks;
     params.rainAmount = config.rain_amount;
     params.soilErosionRate = config.soil_erosion_rate;
-    params.mineralsSpreadEnabled = config.minerals_spread_enabled;
+    // Отключаемые механики мира: типы разные (core::WorldToggles не знает
+    // о JSON, shared::TerrainToggles — его JSON-зеркало), поэтому перенос
+    // по-прежнему построчный — но здесь, а не отдельным полем на каждый
+    // переключатель, и новый добавляется одной строкой сюда.
+    params.toggles.mineralsSpread = config.toggles.minerals_spread;
+    params.toggles.erosionDeposition = config.toggles.erosion_deposition;
     return params;
 }
 

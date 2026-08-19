@@ -34,6 +34,21 @@ struct AreaSize {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AreaSize, width, height)
 
+// Зеркало core::WorldToggles (core/WorldToggles.hpp) — JSON-сериализуемая
+// копия, как и TerrainConfig ниже мирится с core::TerrainParams: core не
+// знает о JSON (07_TechStack.md, п.6), поэтому server переносит значения
+// сам (toTerrainParams). Все отключаемые механики мира собраны в одну
+// структуру: добавить новый переключатель — значит дописать поле сюда И
+// в core::WorldToggles, а не заводить отдельное булево поле в
+// TerrainConfig — тогда TerrainConfig::toggles (одно поле!) переносится
+// в RegenerationRequest/ServerConfig той же копией целой секции, что и
+// остальной terrain, без правки toRegenerationRequest/applyGeneration.
+struct TerrainToggles {
+    bool minerals_spread = true;
+    bool erosion_deposition = true;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainToggles, minerals_spread, erosion_deposition)
+
 // Пределы стороны Области. Общие для клиента (ползунки размера на панели
 // генерации) и сервера (проверка присланного запроса): расходись они, и
 // клиент предлагал бы размер, который сервер молча урежет.
@@ -92,10 +107,9 @@ struct TerrainConfig {
     // генерации. Крупицы счётные, шкалы у них нет.
     int minerals_average = 10;
 
-    // Разносит ли течение воды минералы между тайлами (см.
-    // core::WorldPropertiesComponent::mineralsSpreadEnabled) — свойство
-    // мира, читается каждый тик, а не только при генерации.
-    bool minerals_spread_enabled = true;
+    // Отключаемые механики мира (см. TerrainToggles выше) — свойство мира,
+    // читается каждый тик, а не только при генерации.
+    TerrainToggles toggles{};
 
     // Источники воды (WaterSourceComponent): сколько "родников" в
     // случайных точках карты (плюс автоматически — ровно один на исток
@@ -120,7 +134,7 @@ struct TerrainConfig {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, feature_size, noise_octaves, mountain_height,
                                     mountain_hardness, river_count, river_width, river_sinuosity, river_depth, pond_depth,
-                                    minerals_average, minerals_spread_enabled, water_source_count, water_source_depth,
+                                    minerals_average, toggles, water_source_count, water_source_depth,
                                     water_evaporation_rate, rain_interval_ticks, rain_amount,
                                     soil_erosion_rate)
 

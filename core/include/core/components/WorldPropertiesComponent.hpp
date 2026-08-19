@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Scale.hpp"
+#include "core/WorldToggles.hpp"
 
 namespace goblins {
 
@@ -30,13 +31,10 @@ struct WorldPropertiesComponent {
     // В тысячных единицы глубины (kDepthUnit, core/Scale.hpp).
     int waterSourceDepth = 2000;
 
-    // Разносит ли HydrologySystem минералы между тайлами по правилу
-    // песочной кучи (см. одноимённую константу kMineralSlopeThreshold в
-    // HydrologySystem.cpp). Выключенное распространение не трогает сами
-    // крупицы — их по-прежнему добавляет и забирает перегной
-    // (humusDecayPeriod), просто они больше не текут по карте вслед за
-    // водой и влагой.
-    bool mineralsSpreadEnabled = true;
+    // Отключаемые механики мира (WorldToggles.hpp) — выбираются один раз
+    // при генерации (WorldToggles внутри TerrainParams), System-ы читают
+    // их отсюда каждый тик, как и остальные поля этого компонента.
+    WorldToggles toggles;
 
     // Сколько тысячных глубины вода теряет от испарения за сто тиков.
     // Вместе с источниками и провалом за край карты (docs/01_Cosmology.md)

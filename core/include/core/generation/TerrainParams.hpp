@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Scale.hpp"
+#include "core/WorldToggles.hpp"
 
 namespace goblins {
 
@@ -86,11 +87,12 @@ struct TerrainParams {
     // Крупицы — счётные, шкалы у них нет и не было.
     int mineralsAverage = 10;
 
-    // Разносит ли течение воды минералы между тайлами (правило песочной
-    // кучи в HydrologySystem) — свойство мира (WorldPropertiesComponent),
-    // не сама генерация: она только сеет стартовый шум минералов, а
-    // распространение решается здесь и читается системой каждый тик.
-    bool mineralsSpreadEnabled = true;
+    // Отключаемые механики мира (WorldToggles.hpp) — свойство мира, не
+    // сама генерация: она только сеет стартовое состояние, а сами
+    // переключатели читаются системами (HydrologySystem) каждый тик.
+    // Переносится в WorldPropertiesComponent целиком одной строкой
+    // (TerrainGenerator.cpp), а не полем на полe.
+    WorldToggles toggles;
 
     // Источники воды (WaterSourceComponent, см. TerrainGenerator.cpp):
     // РОВНО ОДИН на реку, у самого её истока в горах, плюс

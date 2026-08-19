@@ -186,7 +186,8 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           {"rain_interval_ticks", worldProperties->rainIntervalTicks},
                                           {"rain_amount", worldProperties->rainAmount},
                                           {"soil_erosion_rate", worldProperties->soilErosionRate},
-                                          {"minerals_spread_enabled", worldProperties->mineralsSpreadEnabled},
+                                          {"minerals_spread_enabled", worldProperties->toggles.mineralsSpread},
+                                          {"erosion_deposition_enabled", worldProperties->toggles.erosionDeposition},
                                           {"plant_mutation_rate", worldProperties->plantMutationRate},
                                           {"humus_decay_period", worldProperties->humusDecayPeriod},
                                           {"plant_random_seed", worldProperties->plantRandomSeed},
@@ -344,8 +345,10 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("rain_interval_ticks", 400);
             parsed.worldProperties.rainAmount = record["world_properties"].value("rain_amount", 50);
             parsed.worldProperties.soilErosionRate = record["world_properties"].value("soil_erosion_rate", 50);
-            parsed.worldProperties.mineralsSpreadEnabled =
+            parsed.worldProperties.toggles.mineralsSpread =
                 record["world_properties"].value("minerals_spread_enabled", true);
+            parsed.worldProperties.toggles.erosionDeposition =
+                record["world_properties"].value("erosion_deposition_enabled", true);
             parsed.worldProperties.plantMutationRate = record["world_properties"].value("plant_mutation_rate", 60);
             parsed.worldProperties.humusDecayPeriod =
                 record["world_properties"].value("humus_decay_period", 50);

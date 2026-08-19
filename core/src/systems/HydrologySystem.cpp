@@ -169,7 +169,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const int rainIntervalTicks = worldProperties.rainIntervalTicks;
     const int rainAmount = worldProperties.rainAmount;
     const int soilErosionRate = worldProperties.soilErosionRate;
-    const bool mineralsSpreadEnabled = worldProperties.mineralsSpreadEnabled;
+    const WorldToggles toggles = worldProperties.toggles;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -500,7 +500,11 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         totalCapacity += capacity;
     }
 
-    if (totalEroded > 0 && totalCapacity > 0) {
+    if (toggles.erosionDeposition && totalEroded > 0 && totalCapacity > 0) {
+        // Выключенное отложение (toggles.erosionDeposition) не трогает
+        // саму эрозию выше — вымытое просто не возвращается в углубления
+        // и целиком уходит с карты, как и излишек наноса ниже.
+        //
         // Наноса больше, чем углублений, — излишку просто некуда осесть, и
         // он уходит с карты, как вода за край: Область — открытый кусок
         // мира, а не замкнутый сосуд, и требовать от неё точного баланса
@@ -604,7 +608,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // и течение воды выше, поэтому порядок обхода клеток не влияет на
     // результат. ---
     std::vector<int> nextMinerals(minerals);
-    for (std::size_t i = 0; mineralsSpreadEnabled && i < cellCount; ++i) {
+    for (std::size_t i = 0; toggles.mineralsSpread && i < cellCount; ++i) {
         if (entities[i] == entt::null || minerals[i] < kMineralSlopeThreshold) {
             continue;
         }
