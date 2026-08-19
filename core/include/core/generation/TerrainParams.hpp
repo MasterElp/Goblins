@@ -86,6 +86,12 @@ struct TerrainParams {
     // Крупицы — счётные, шкалы у них нет и не было.
     int mineralsAverage = 10;
 
+    // Разносит ли течение воды минералы между тайлами (правило песочной
+    // кучи в HydrologySystem) — свойство мира (WorldPropertiesComponent),
+    // не сама генерация: она только сеет стартовый шум минералов, а
+    // распространение решается здесь и читается системой каждый тик.
+    bool mineralsSpreadEnabled = true;
+
     // Источники воды (WaterSourceComponent, см. TerrainGenerator.cpp):
     // РОВНО ОДИН на реку, у самого её истока в горах, плюс
     // waterSourceCount "родников" в случайных точках карты.

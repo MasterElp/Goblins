@@ -169,6 +169,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     const int rainIntervalTicks = worldProperties.rainIntervalTicks;
     const int rainAmount = worldProperties.rainAmount;
     const int soilErosionRate = worldProperties.soilErosionRate;
+    const bool mineralsSpreadEnabled = worldProperties.mineralsSpreadEnabled;
 
     // --- 1. Снимок текущего состояния ---
     // entt::null не подставляется вторым аргументом vector(count, value)
@@ -603,7 +604,7 @@ void HydrologySystem(World& world, CommandQueue& commands) {
     // и течение воды выше, поэтому порядок обхода клеток не влияет на
     // результат. ---
     std::vector<int> nextMinerals(minerals);
-    for (std::size_t i = 0; i < cellCount; ++i) {
+    for (std::size_t i = 0; mineralsSpreadEnabled && i < cellCount; ++i) {
         if (entities[i] == entt::null || minerals[i] < kMineralSlopeThreshold) {
             continue;
         }

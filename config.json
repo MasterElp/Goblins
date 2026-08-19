@@ -1,10 +1,10 @@
 {
     "animals": {
         "herbivore_count": 400,
-        "herbivore_species": 3,
-        "mutation_rate": 60,
+        "herbivore_species": 4,
+        "mutation_rate": 263,
         "predator_count": 60,
-        "predator_species": 4
+        "predator_species": 3
     },
     "area": {
         "height": 200,
@@ -25,6 +25,7 @@
     "terrain": {
         "feature_size": 50,
         "minerals_average": 28,
+        "minerals_spread_enabled": true,
         "mountain_hardness": 692,
         "mountain_height": 41995,
         "noise_octaves": 4,

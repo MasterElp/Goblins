@@ -153,6 +153,11 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // исчезает: ровно столько же оседает там, куда пришла вода.
     ops.intRow("Erosion rate (per mille)", edited.terrain.soil_erosion_rate, 0, 500);
 
+    ops.section("Minerals");
+    // Отключает только перенос минералов течением/влагой (HydrologySystem),
+    // не сами крупицы: их по-прежнему добавляет и забирает перегной.
+    ops.boolRow("Spread by water", edited.terrain.minerals_spread_enabled);
+
     ops.section("Plant life");
     // Мутация — доля вложения черты, а не доля значения гена (у всех черт
     // вложение живёт в одном диапазоне, поэтому настройка одна на весь
@@ -177,6 +182,7 @@ struct MeasureOps {
     void group(const char*) { height += kGroupHeight + kSectionGap; }
     void section(const char*) { height += kRowHeight + kSectionGap; }
     void intRow(const char*, int&, int, int) { height += kRowHeight; }
+    void boolRow(const char*, bool&) { height += kRowHeight; }
     void unsignedSeedRow(const char*, unsigned&) { height += kRowHeight; }
     // Строка размера выше остальных на два ползунка, когда размер
     // произвольный. Решение "показывать ли их" одно и то же здесь и в
@@ -222,6 +228,11 @@ struct DrawOps {
         GuiSliderBar(Rectangle{x, y + 20, rowWidth, kRowHeight - 24}, nullptr, nullptr, &f, static_cast<float>(lo),
                      static_cast<float>(hi));
         value = static_cast<int>(f + 0.5f);
+        y += kRowHeight;
+    }
+
+    void boolRow(const char* label, bool& value) {
+        GuiCheckBox(Rectangle{x, y + 2, 20, 20}, label, &value);
         y += kRowHeight;
     }
 

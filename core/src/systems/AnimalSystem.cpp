@@ -144,7 +144,21 @@ constexpr int kRecoveryRate = 2;
 // Радиус — не зоркость (genome.perception), а короткое, одинаковое для всех
 // расстояние: заражаются от соприкосновения, а не от того, что увидели друг
 // друга через полкарты.
+//
+// kDiseaseCrowd — сколько соседей своего вида ещё НЕ теснота. Порог не
+// украшение и не поблажка: заживление упирается в потолок здоровья, болезнь
+// вычитается уже после него, а желание пары копится только у целого зверя
+// (health >= kFull). Без порога хватало одного соседа, чтобы животное
+// никогда больше не захотело потомства, — а сойтись двоим для встречи всё
+// равно надо. Поголовье при этом только убывало, без всяких хищников.
+//
+// Отсюда и вся форма закона: пара — не толпа, мать с телёнком — не толпа, а
+// вот шестеро на тринадцати клетках уже теснота. Стадо, разросшееся сверх
+// порога, сперва перестаёт плодиться и только потом начинает умирать —
+// численность держится тем, что размножение глохнет раньше, чем приходит
+// смерть.
 constexpr int kDiseaseRadius = 2;
+constexpr int kDiseaseCrowd = 3;
 constexpr int kDiseaseHarm = 1;
 
 // Желания. Ниже kDesireFloor желание никуда не гонит — животное считается
@@ -717,7 +731,19 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     ++crowd;
                 }
             }
-            state.health -= kDiseaseHarm * crowd;
+            // Считается только теснота СВЕРХ kDiseaseCrowd: пара — не толпа,
+            // и мать с телёнком тоже. Порог здесь не смягчение, а условие
+            // того, чтобы стадо вообще могло размножаться: заживление
+            // упирается в потолок здоровья, болезнь вычитается уже после
+            // него, а желание пары копится только у целого зверя
+            // (kFull, см. content ниже). Без порога один-единственный сосед
+            // навсегда лишал животное потомства — а сойтись для встречи
+            // двоим всё равно надо, и оба тут же переставали хотеть пары.
+            // Поголовье от этого могло только убывать, без всяких хищников.
+            const int crush = crowd - kDiseaseCrowd;
+            if (crush > 0) {
+                state.health -= kDiseaseHarm * crush;
+            }
         }
 
         // Смерть от старости, от условий или от чужих зубов. Entity
@@ -1675,6 +1701,7 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kAttackReach", static_cast<float>(kAttackReach)});
     out.push_back({g, "kHuntCaution", static_cast<float>(kHuntCaution)});
     out.push_back({g, "kDiseaseRadius", static_cast<float>(kDiseaseRadius)});
+    out.push_back({g, "kDiseaseCrowd", static_cast<float>(kDiseaseCrowd)});
     out.push_back({g, "kDiseaseHarm", kDiseaseHarm});
     out.push_back({g, "kDangerPerAttack", kDangerPerAttack});
     out.push_back({g, "kDangerRot", kDangerRot});

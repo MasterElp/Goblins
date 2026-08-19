@@ -92,6 +92,11 @@ struct TerrainConfig {
     // генерации. Крупицы счётные, шкалы у них нет.
     int minerals_average = 10;
 
+    // Разносит ли течение воды минералы между тайлами (см.
+    // core::WorldPropertiesComponent::mineralsSpreadEnabled) — свойство
+    // мира, читается каждый тик, а не только при генерации.
+    bool minerals_spread_enabled = true;
+
     // Источники воды (WaterSourceComponent): сколько "родников" в
     // случайных точках карты (плюс автоматически — ровно один на исток
     // каждой реки). water_source_depth — глубина СТОЛБА воды источника и
@@ -115,7 +120,7 @@ struct TerrainConfig {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainConfig, feature_size, noise_octaves, mountain_height,
                                     mountain_hardness, river_count, river_width, river_sinuosity, river_depth, pond_depth,
-                                    minerals_average, water_source_count, water_source_depth,
+                                    minerals_average, minerals_spread_enabled, water_source_count, water_source_depth,
                                     water_evaporation_rate, rain_interval_ticks, rain_amount,
                                     soil_erosion_rate)
 

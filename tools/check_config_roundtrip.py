@@ -42,7 +42,8 @@ PROBE = {
         "feature_size": 37, "noise_octaves": 6, "mountain_height": 21000,
         "mountain_hardness": 430, "river_count": 4, "river_width": 44,
         "river_sinuosity": 310, "river_depth": 1234, "pond_depth": 1700,
-        "minerals_average": 17, "water_source_count": 6, "water_source_depth": 3300,
+        "minerals_average": 17, "minerals_spread_enabled": False,
+        "water_source_count": 6, "water_source_depth": 3300,
         "water_evaporation_rate": 77, "rain_interval_ticks": 555, "rain_amount": 66,
         "soil_erosion_rate": 88,
     },
@@ -109,7 +110,10 @@ def main():
         expected_saved = {}
         for section in ("terrain", "plants", "animals"):
             for name in edited[section]:
-                edited[section][name] += 10
+                if isinstance(edited[section][name], bool):
+                    edited[section][name] = not edited[section][name]
+                else:
+                    edited[section][name] += 10
                 expected_saved[f"{section}.{name}"] = edited[section][name]
         for name, key in (("boulder_count", "boulder_count"), ("seed", "seed")):
             edited[name] += 1 if name == "seed" else 10
