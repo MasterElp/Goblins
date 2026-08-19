@@ -153,12 +153,18 @@ inline Color water(float depth) {
     return lerp(shallow, deep, t);
 }
 
-inline Color applyHeightShading(float height) {
+// Чёрно-белый градиент рельефа: t — уже готовая доля 0..1, не сама высота.
+// Абсолютного диапазона высот здесь нет и быть не может — mountain_height
+// у разных миров разный (по умолчанию 16, а не 41995, как в примере
+// конфига), и зашитые в саму функцию границы либо забивали бы карту в
+// сплошной белый на высоких горах, либо не давали никакого контраста на
+// низких. Долю считает вызывающая сторона — по настоящему диапазону ЭТОГО
+// мира (MapTexture.cpp: state.heightMin/heightMax, зафиксированные на
+// world_init).
+inline Color applyHeightShading(float t) {
     static const Color low{ 0, 0, 0, 255 };
     static const Color high{ 255, 255, 255, 255 };
-
-    const float t = std::clamp((height + 20.0f) / 80.0f, 0.0f, 1.0f);
-    return lerp(low, high, t);
+    return lerp(low, high, std::clamp(t, 0.0f, 1.0f));
 }
 
 } // namespace TileColors

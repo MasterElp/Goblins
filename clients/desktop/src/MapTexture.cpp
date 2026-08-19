@@ -1,7 +1,5 @@
 #include "MapTexture.hpp"
 
-#include <algorithm>
-
 #include "TileColors.hpp"
 
 namespace MapTexture {
@@ -10,17 +8,18 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
     const std::size_t cellCount = static_cast<std::size_t>(state.areaWidth) * state.areaHeight;
     pixels_.assign(cellCount, Color{0, 0, 0, 255});
 
-    // Диапазон высот текущей карты — для нормализации в
-    // TileColors::applyHeightShading. У HeightComponent.height нет
-    // фиксированного диапазона (зависит от параметров генерации),
-    // поэтому min/max считаются заново на каждую пересборку, а не
-    // берутся константой.
+    // Диапазон высот — для нормализации в TileColors::applyHeightShading.
+    // Не пересчитывается здесь: state.heightMin/heightMax зафиксированы на
+    // момент последнего world_init (NetworkClient.cpp), а не берутся живым
+    // minmax по текущему массиву — иначе эрозия, подъедающая вершины
+    // каждый тик, сужала бы диапазон и заставляла бы весь остальной рельеф
+    // мерцать светлее вслед за одной проседающей горой, хотя высота
+    // конкретной клетки не менялась вовсе.
     float minHeight = 0.0f;
     float heightRange = 0.0f;
-    if (layers.height && !state.height.empty()) {
-        const auto [minIt, maxIt] = std::minmax_element(state.height.begin(), state.height.end());
-        minHeight = *minIt;
-        heightRange = *maxIt - *minIt;
+    if (layers.height) {
+        minHeight = state.heightMin;
+        heightRange = state.heightMax - state.heightMin;
     }
 
     for (std::size_t i = 0; i < cellCount; ++i) {
@@ -28,7 +27,7 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
                                        layers.rockiness ? state.rockiness[i] : 0.0f,
                                        layers.minerals ? TileColors::mineralsFraction(state.minerals[i]) : 0.0f);
         if (layers.height && heightRange > 0.0f) {
-            color = TileColors::applyHeightShading(color, (state.height[i] - minHeight) / heightRange);
+            color = TileColors::applyHeightShading((state.height[i] - minHeight) / heightRange);
         }
         // Перегной — под травой: на клетке может быть и то, и другое
         // (семя охотно прорастает там, где перегной возвращает минералы в

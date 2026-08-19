@@ -508,6 +508,18 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.moisture = decodeScaled(layers, "moisture", cellCount, kFromHundredths);
         working_.rockiness = decodeScaled(layers, "rockiness", cellCount, kFromHundredths);
         working_.height = decodeScaled(layers, "height", cellCount, kFromHundredths);
+        // Диапазон подсветки рельефа считается один раз здесь, а не на
+        // каждую пересборку текстуры (MapTexture) — иначе эрозия,
+        // подъедающая вершины каждый тик, сужала бы диапазон и заставляла
+        // бы весь остальной рельеф мерцать светлее вслед за одной
+        // проседающей горой (см. heightMin/heightMax в NetworkClient.hpp).
+        if (working_.height.empty()) {
+            working_.heightMin = working_.heightMax = 0.0f;
+        } else {
+            const auto [minIt, maxIt] = std::minmax_element(working_.height.begin(), working_.height.end());
+            working_.heightMin = *minIt;
+            working_.heightMax = *maxIt;
+        }
         working_.waterDepth = decodeScaled(layers, "water", cellCount, kFromHundredths);
         working_.minerals = decodeInts(layers, "minerals", cellCount, 0);
         working_.humus = decodeInts(layers, "humus", cellCount, 0);
