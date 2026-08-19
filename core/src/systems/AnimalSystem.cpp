@@ -251,20 +251,31 @@ constexpr int kDangerRot = 4;
 // намеренно: место, где вчера убили, тревожит, но не гонит так, как гонят
 // зубы, которые видно прямо сейчас.
 constexpr int kDangerFearWeight = 700;
+// Насколько кровь под ногами отпугивает хищника при выборе шага
+// (core/Walk.hpp) — не страх (у него его нет, 09_Animals.md, п.2), а
+// осторожность ниже желаний, в самом шаге. На уровне kBlockedPenalty
+// (500) — не бросит настоящую близкую добычу или тушу ради обхода одной
+// кровавой клетки, но развернёт при поиске вслепую, когда прежняя добыча
+// уже разбежалась с его же настрелянного места.
+constexpr int kPredatorDangerAversion = 400;
 
 // --- Рога и хромота ---
-// Много ли толку от рогов: удаётся ли жертве достать хищника в ответ.
-// Розыгрыш, а не правило — иначе всякий укус рогатого был бы для хищника
-// одинаково наказуем, и охота выродилась бы в арифметику. Восемь раз из
-// десяти.
-constexpr int kGoreChance = 800;
+// Удаётся ли жертве достать хищника в ответ, решает её собственная
+// меткость (genome->goreChance) — не общее для всего мира число: розыгрыш,
+// а не правило, иначе всякий укус рогатого был бы для хищника одинаково
+// наказуем, и охота выродилась бы в арифметику.
+//
 // Насколько долго хромает хищник, получивший рогами в полную силу
 // (defense == kFull, взрослая жертва), и во сколько раз он при этом
-// медленнее. Половина скорости — это заведомо меньше, чем у любого
-// травоядного в мире: хромой не догонит никого, пока не заживёт, и в этом
-// вся защита рогов.
-constexpr int kLameMaxTicks = 300;
-constexpr int kLameShare = 500;
+// медленнее, — края шкалы, по которой едет defense жертвы (см. п.8
+// "Зубы"): слабо вооружённый вид калечит короче и слабее, а не только
+// короче. 70% скорости при максимальном вложении — заведомо меньше, чем у
+// любого травоядного в мире: хромой не догонит никого, пока не заживёт, а
+// не настолько беспомощен, чтобы этот срок стал для него смертным
+// приговором сам по себе — отходной период после охоты и так самый
+// уязвимый момент хищника.
+constexpr int kLameMaxTicks = 150;
+constexpr int kLameShare = 700;
 
 // --- Намерения ---
 // Собираются при обходе животных и исполняются после него. Отдельный шаг
@@ -817,7 +828,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         if (!alive[b] || animals[b].predator) {
             continue;
         }
-        preys.push_back(HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed});
+        preys.push_back(
+            HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed, animals[b].genome->defense});
         preyOwner.push_back(static_cast<int>(b));
     }
 
@@ -879,8 +891,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // пропускает тех, кто не медленнее его (core/Hunting.hpp), и если
         // хромота не войдёт в это сравнение, он побежит за той добычей,
         // догнать которую уже не может, и будет жечь силы впустую.
-        const int effectiveSpeed =
-            animal.injury->lameTicks > 0 ? genome.speed * kLameShare / kFull : genome.speed;
+        const int effectiveSpeed = animal.injury->lameTicks > 0
+                                        ? genome.speed * animal.injury->lameShare / kFull
+                                        : genome.speed;
 
         // Куда животное вообще может встать (core/Hunting.hpp, standableAt):
         // не за границей Области, не на занятый непроходимым объектом тайл и
@@ -1191,7 +1204,16 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // память о своём следе и о преградах, щепоть случайности. На клетку
         // с травой, с падалью и с другим животным идут свободно — заняты
         // для животного только вода и камень (core/Path.hpp).
-        const WalkStep step = chooseStep(*animal.memory, animal.x, animal.y, aim, standable, random);
+        //
+        // Хищник вдобавок обходит встревоженные клетки (kPredatorDangerAversion):
+        // ищет добычу заново там, где ещё не охотился, а не топчется на
+        // своём же настрелянном месте. Травоядное уже уходит от крови
+        // через страх (п.3, ambientDread) — вес 0, чтобы не считать одно и
+        // то же дважды.
+        const int dangerWeight = animal.predator ? kPredatorDangerAversion : 0;
+        const WalkStep step = chooseStep(
+            *animal.memory, animal.x, animal.y, aim, standable,
+            [&](int nx, int ny) { return dangerAt[index(nx, ny)]; }, dangerWeight, random);
         if (!step.moved) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
@@ -1381,9 +1403,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         });
 
         // Рога. Жертва, у которой есть чем бодаться, достаёт укусившего в
-        // ответ — не всегда, а как повезёт (kGoreChance): удар по рогам не
-        // отнимает у хищника здоровья, но оставляет его хромым, и на это
-        // время он перестаёт кого-либо догонять (см. InjuryComponent).
+        // ответ — не всегда, а как повезёт: попадает ли удар вообще, решает
+        // её же меткость (genome->goreChance), а не общее для всего мира
+        // число. Удар по рогам не отнимает у хищника здоровья, но оставляет
+        // его хромым, и на это время он перестаёт кого-либо догонять (см.
+        // InjuryComponent).
         //
         // Розыгрыш собирается из seed мира, тика и имён обоих зверей
         // (core/Random.hpp): системе не нужно ничего помнить, а разные пары
@@ -1393,16 +1417,27 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         if (defense > 0 && alive[attacker]) {
             std::uint64_t gore =
                 mixSeed(animalSeed, mixSeed(tick, mixSeed(animals[prey].id, animals[attacker].id)));
-            if (static_cast<int>(randomBelow(gore, kFull)) < kGoreChance) {
+            if (static_cast<int>(randomBelow(gore, kFull)) < animals[prey].genome->goreChance) {
                 // Мелкий бодает слабее взрослого — тем же размером, каким
                 // считается и всё остальное в теле.
                 const int preySize =
                     kMinSizeShare + (kFull - kMinSizeShare) * animals[prey].state->growth / kFull;
+                // Оба измерения хромоты — из одного и того же defense: срок
+                // (как раньше) и теперь ещё тяжесть. Слабо вооружённый вид
+                // калечит слабее, а не только короче — kLameShare здесь не
+                // плоское значение, а худший край шкалы, к которому лишь
+                // приближается защита неполного вложения.
                 const int lame = kLameMaxTicks * defense / kFull * preySize / kFull;
-                // Не складывается: два укуса подряд не удваивают срок, а
-                // продлевают его до большего. Хромота — состояние, а не
-                // счётчик полученных ударов.
-                animals[attacker].injury->lameTicks = std::max(animals[attacker].injury->lameTicks, lame);
+                const int lameShare = kFull - (kFull - kLameShare) * defense / kFull * preySize / kFull;
+                if (lame > 0) {
+                    auto& injury = *animals[attacker].injury;
+                    // Не складывается: два укуса подряд не удваивают срок и
+                    // не удваивают тяжесть, а оставляют больший срок и
+                    // больший вред. Хромота — состояние, а не счётчик
+                    // полученных ударов.
+                    injury.lameTicks = std::max(injury.lameTicks, lame);
+                    injury.lameShare = std::min(injury.lameShare, lameShare);
+                }
             }
         }
     }
@@ -1638,12 +1673,13 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kHuntHunger", kHuntHunger});
     out.push_back({g, "kCarcassRot", kCarcassRot});
     out.push_back({g, "kAttackReach", static_cast<float>(kAttackReach)});
+    out.push_back({g, "kHuntCaution", static_cast<float>(kHuntCaution)});
     out.push_back({g, "kDiseaseRadius", static_cast<float>(kDiseaseRadius)});
     out.push_back({g, "kDiseaseHarm", kDiseaseHarm});
     out.push_back({g, "kDangerPerAttack", kDangerPerAttack});
     out.push_back({g, "kDangerRot", kDangerRot});
     out.push_back({g, "kDangerFearWeight", kDangerFearWeight});
-    out.push_back({g, "kGoreChance", kGoreChance});
+    out.push_back({g, "kPredatorDangerAversion", kPredatorDangerAversion});
     out.push_back({g, "kLameMaxTicks", static_cast<float>(kLameMaxTicks)});
     out.push_back({g, "kLameShare", kLameShare});
 

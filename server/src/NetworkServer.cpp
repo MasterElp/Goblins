@@ -555,8 +555,8 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
                 continue;
             }
             const auto& preyPosition = registry.get<const PositionComponent>(other);
-            preys.push_back(HuntPrey{preyPosition.x, preyPosition.y,
-                                      registry.get<const AnimalGenomeComponent>(other).speed});
+            const auto& preyGenome = registry.get<const AnimalGenomeComponent>(other);
+            preys.push_back(HuntPrey{preyPosition.x, preyPosition.y, preyGenome.speed, preyGenome.defense});
         }
 
         const HuntChoice choice = chooseHuntTarget(

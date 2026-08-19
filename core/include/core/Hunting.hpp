@@ -8,6 +8,7 @@
 
 #include "core/Path.hpp"
 #include "core/Random.hpp"
+#include "core/Scale.hpp"
 
 namespace goblins {
 
@@ -40,12 +41,25 @@ constexpr int kAttackReach = 1;
 // иначе он сидел бы у обглоданных костей вместо охоты.
 constexpr int kMinBiteMeat = 50;
 
-// Добыча глазами хищника: где стоит и как быстро бежит. Больше он о ней
-// ничего не знает — ни возраста, ни запаса сил (02_CorePrinciples.md, п.6).
+// Насколько рога отпугивают при выборе цели — "виртуальные шаги"
+// непривлекательности за полное вложение в defense. На уровне радиуса
+// видимости: достаточно, чтобы предпочесть безрогую добычу чуть подальше,
+// недостаточно, чтобы голодный хищник вовсе отказался от рогатой, если
+// рядом больше никого нет, — за то, идёт ли охота вообще, по-прежнему
+// отвечает kHuntHunger.
+constexpr int kHuntCaution = 4;
+
+// Добыча глазами хищника: где стоит, как быстро бежит и вооружена ли.
+// Больше он о ней ничего не знает — ни возраста, ни запаса сил
+// (02_CorePrinciples.md, п.6). Рога видны точно так же, как и бег: defense
+// — это то, что торчит на голове, а не то, что жертва умеет ими сделать
+// (см. gore_chance в AnimalGenomeComponent — меткость, в отличие от самих
+// рогов, снаружи не разглядеть).
 struct HuntPrey {
     int x = 0;
     int y = 0;
     int speed = 0;
+    int defense = 0;
 };
 
 // Сам хищник: где стоит, докуда видит, как быстро бежит, насколько голоден.
@@ -81,7 +95,7 @@ HuntChoice chooseHuntTarget(const Reach& reach, const Hunter& hunter, std::span<
     // Ближе всех и первой: гнаться за той, что дальше, когда рядом стоит
     // эта, бессмысленно. Но только если хищник и вправду голоден.
     int preyIndex = -1;
-    int preyDistance = 0;
+    int bestScore = 0;
     for (std::size_t b = 0; hunter.hunger >= kHuntHunger && b < prey.size(); ++b) {
         // За тем, кто быстрее, гнаться незачем: догнать его нельзя, а силы
         // уйдут. Скорость чужого бега — ровно то знание, которое у хищника
@@ -122,11 +136,18 @@ HuntChoice chooseHuntTarget(const Reach& reach, const Hunter& hunter, std::span<
                 continue;
             }
         }
-        if (preyIndex >= 0 && distance >= preyDistance) {
+
+        // Рога тоже видны, и хищник это учитывает — не запретом, а
+        // осторожностью: рогатая добыча становится "как будто дальше" на
+        // несколько шагов. Правило одно на клетку досягаемости зубов и на
+        // клетку в глубине видимости: рогатая соседняя не обязана
+        // автоматически выигрывать у безрогой в двух шагах.
+        const int score = distance + kHuntCaution * prey[b].defense / kFull;
+        if (preyIndex >= 0 && score >= bestScore) {
             continue;
         }
         preyIndex = static_cast<int>(b);
-        preyDistance = distance;
+        bestScore = score;
     }
 
     if (preyIndex >= 0) {
