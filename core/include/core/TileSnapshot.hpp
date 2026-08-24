@@ -1,0 +1,120 @@
+#pragma once
+
+#include <cstddef>
+#include <vector>
+
+#include <entt/entt.hpp>
+
+#include "core/World.hpp"
+#include "core/components/CarcassComponent.hpp"
+#include "core/components/PlantComponent.hpp"
+#include "core/components/PositionComponent.hpp"
+#include "core/components/SoilComponent.hpp"
+#include "core/components/TreeComponent.hpp"
+#include "core/components/WaterComponent.hpp"
+
+namespace goblins {
+
+// Что лежит на клетках прямо сейчас — плотными массивами, по значению на
+// клетку.
+//
+// Плотные массивы здесь уместны в отличие от животных: почвы и травы по
+// одной на клетку, а животных десятки на десятки тысяч клеток (тот же
+// приём, что в HydrologySystem и PlantSystem).
+//
+// Смысл снимка не в скорости, а в законе: он снимается ДО того, как хоть
+// кто-нибудь тронулся с места, поэтому все решения тика принимаются по
+// одному и тому же состоянию мира, и порядок обхода Entity на них не влияет
+// (04_WorldModel.md, п.8).
+//
+// Снимает его КАЖДАЯ система себе и в начале своего прохода, а не один на
+// весь тик: системы идут по очереди, и та, что идёт следом, обязана видеть
+// траву такой, какой её оставила предыдущая (05_Entity.md, п.6 — системы
+// разговаривают только состоянием компонентов). Общий на весь тик снимок
+// показывал бы гоблину траву, которую стадо уже съело.
+//
+// Объект живёт у вызывающей стороны, внутри одного вызова системы, и
+// переиспользуется между её внутренними проходами. Между тиками он не
+// живёт: система не хранит состояние (05_Entity.md, п.3).
+struct TileSnapshot {
+    int width = 0;
+    int height = 0;
+
+    // Терраформирующий Entity тайла: почва, высота, вода, перегной, падаль.
+    // entt::null означает "клетки нет" — за краем Области или там, где земли
+    // не создали.
+    std::vector<entt::entity> terrain;
+    // Глубина воды; 0 — воды нет. Для ноги это стена (см. standableAt в
+    // core/Path.hpp).
+    std::vector<int> waterAt;
+    // Растение на клетке и его развитость — она же съедобная биомасса.
+    std::vector<entt::entity> plantAt;
+    std::vector<int> plantGrowth;
+    // Мясо лежащей туши.
+    std::vector<int> carcassMeat;
+    // Дерево — не еда (объедать крону травоядное не умеет), а укрытие: под
+    // ним добычу не высматривают (kCoverSight, core/Hunting.hpp), и к нему
+    // же бежит испуганный.
+    std::vector<unsigned char> treeAt;
+
+    std::size_t index(int x, int y) const {
+        return static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
+    }
+
+    std::size_t cellCount() const {
+        return static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    }
+
+    void capture(const World& world) {
+        width = world.area().width();
+        height = world.area().height();
+        const std::size_t cells = cellCount();
+
+        // assign, а не resize: массивы переиспользуются, и остатки прошлого
+        // снимка обязаны быть стёрты. Клетка, с которой ушла вода, иначе
+        // осталась бы для ноги стеной.
+        terrain.assign(cells, entt::null);
+        waterAt.assign(cells, 0);
+        plantAt.assign(cells, entt::null);
+        plantGrowth.assign(cells, 0);
+        carcassMeat.assign(cells, 0);
+        treeAt.assign(cells, 0);
+        if (cells == 0) {
+            return;
+        }
+
+        const auto& registry = world.registry();
+
+        auto terrainView = registry.view<const PositionComponent, const SoilComponent>();
+        for (const auto entity : terrainView) {
+            const auto& position = terrainView.get<const PositionComponent>(entity);
+            if (!world.area().inBounds(position.x, position.y)) {
+                continue;
+            }
+            const std::size_t i = index(position.x, position.y);
+            terrain[i] = entity;
+            if (const auto* water = registry.try_get<const WaterComponent>(entity)) {
+                waterAt[i] = water->depth;
+            }
+            if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
+                carcassMeat[i] = carcass->meat;
+            }
+        }
+
+        auto plantView = registry.view<const PlantComponent, const PositionComponent>();
+        for (const auto entity : plantView) {
+            const auto& position = plantView.get<const PositionComponent>(entity);
+            if (!world.area().inBounds(position.x, position.y)) {
+                continue;
+            }
+            const std::size_t i = index(position.x, position.y);
+            plantAt[i] = entity;
+            plantGrowth[i] = plantView.get<const PlantComponent>(entity).growth;
+            if (registry.all_of<TreeComponent>(entity)) {
+                treeAt[i] = 1;
+            }
+        }
+    }
+};
+
+} // namespace goblins

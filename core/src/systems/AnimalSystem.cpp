@@ -16,19 +16,21 @@
 #include "core/components/InjuryComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
-#include "core/components/TreeComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
-#include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
+#include "core/Body.hpp"
+#include "core/Carcass.hpp"
+#include "core/Desires.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Hunting.hpp"
 #include "core/Mating.hpp"
 #include "core/Needs.hpp"
 #include "core/Scale.hpp"
+#include "core/TileSnapshot.hpp"
 #include "core/Walk.hpp"
 
 namespace goblins {
@@ -40,63 +42,17 @@ namespace {
 // уже стоили путаницы — по одной из них считалась разница направлений, где
 // порядок значит всё, по другой просто обходились соседи.
 
-// Насколько маленькое животное "меньше ест": и расход на жизнь, и укус, и
-// цена шага, и скорость пищеварения, и сила удара умножаются на размер (от
-// kMinSizeShare у новорождённого до 1 у взрослого). У растений такой же
-// был и пропал вместе с тем единственным, что он делил (подсушиванием
-// клетки); здесь он делит слишком многое, чтобы пропасть. Без него
-// детёныш объедал бы луг наравне со взрослым и почти никогда не выживал
-// бы на бедной земле.
-constexpr int kMinSizeShare = 300;
-
-// Сколько энергии даёт единица биомассы съеденного. Число связывает две
-// шкалы, которые иначе не сопоставимы: развитость растения живёт в [0, 1],
-// а расход животного — в единицах за тик. Оно же переводит и мясо: биомасса
-// травы и биомасса туши меряются одной шкалой, поэтому травоядное и хищник
-// считают энергию одинаково, а разница между диетами остаётся в том, ГДЕ её
-// взять, а не в том, сколько её в куске.
+// Тела здесь больше нет. Расход на существование, взросление, пищеварение,
+// здоровье и смерть — вместе со своими числами (kMinSizeShare,
+// kEnergyPerBiomass, kWaterPerFood, kStepEnergy, kDrinkRate, kMinBiteGrowth,
+// kDungPeriod, kStarvationHarm, kBirthEnergyShare и прочими) — переехали в
+// core/Body.hpp, а смерть и падаль в core/Carcass.hpp. Причина та же, по
+// которой в core/Needs.hpp живут голод и жажда: у этого закона стало двое
+// вызывающих, и тело у гоблина то же самое, что у животного.
 //
-// Значение меньше прежнего ровно настолько, насколько раньше его в среднем
-// урезало пищеварение генома (digestion, 0.3..1.0). Самой этой черты
-// больше нет: невидимый множитель, за который вид платил бюджетом и о
-// котором в мире нельзя было узнать иначе как по скорости насыщения.
-// Энергии за одну тысячную биомассы (kFull биомассы = взрослый куст).
-constexpr int kEnergyPerBiomass = 26;
-
-// Сколько воды животное получает из самой еды: трава сочная, в туше есть
-// кровь, и наевшийся долго может не искать реку. Одно число на обе диеты, а
-// не по своему на каждую: две величины были равны с самого начала, и разной
-// их никто никогда не делал.
-//
-// Число заметное, а не символическое: хищник уходит за добычей далеко от
-// воды, и если бы поить его могла только река, он гиб бы от жажды посреди
-// охоты — на первых прогонах именно так и выходило, хищники умирали с
-// полным брюхом и пустой флягой.
-constexpr int kWaterPerFood = 6;
-
-// Цена одного шага в энергии (взрослому). Вместе со скоростью из генома это
-// и есть плата за быстроту: быстрое животное делает больше шагов за тик,
-// значит и тратит больше — скорость покупается не только бюджетом
-// преимуществ, но и обменом веществ.
-//
-// Но плата не должна превосходить саму жизнь. При вдвое большем значении
-// шаг стоил дороже, чем существование (energy_upkeep), и поиск еды
-// обходился дороже найденного: хищник, обходящий свой участок, сжигал две
-// своих ёмкости за тысячу тиков и умирал раньше, чем находил добычу. При
-// вдвое меньшем — наоборот, ходьба переставала что-либо стоить, и стадо,
-// которому корм давался даром, за тысячу тиков объедало весь мир.
-constexpr int kStepEnergy = 250;
-
-// Водопой: сколько единиц воды животное выпивает за тик. Сколько глубины
-// это снимало с клетки, было вторым числом, и подобрано оно было так, чтобы
-// след получался неразличимым, — то есть чтобы не значить ничего.
-constexpr int kDrinkRate = 4000;
-
-// Ниже этой развитости куст объедать нечего: животное просто не считает
-// такое едой. Иначе стадо паслось бы на голых проростках, не давая лугу
-// отрасти. Тот же порог для мяса (kMinBiteMeat) живёт вместе с остальным
-// законом охоты в core/Hunting.hpp — его спрашивает и наблюдатель.
-constexpr int kMinBiteGrowth = 50;
+// Здесь осталось то, что относится к животному и только к нему: болезнь от
+// тесноты сородичей, сторонение чужого вида, пороги желаний, размножение,
+// блуждание и охота.
 
 // Стресса за объедание больше нет. Он был второй смертью поверх первой:
 // куст и так теряет ровно ту биомассу, которую с него скусили, и стадо,
@@ -106,28 +62,6 @@ constexpr int kMinBiteGrowth = 50;
 // это трава, которая на выпасе не доживала до размера, с которого сеют,
 // и участок оставался лысым навсегда. Теперь скушенный куст отрастает,
 // как отрастал бы после засухи, и вымирания луга под стадом не случается.
-
-// Пищеварение: раз во сколько тиков одна крупица белка трогается с места и
-// уходит в навоз. Отсюда и необходимость есть постоянно: белок не лежит в
-// теле вечно. Срок, а не скорость — поэтому телу не нужен накопитель доли:
-// дробное "0.004 крупицы за тик" требовало поля dungPending только затем,
-// чтобы дробь дожила до целого. Навоз при этом всё равно выпадает не по
-// крупице, а порциями в kDungDrop крупиц: это навоз, а не равномерная
-// плёнка по всему маршруту.
-constexpr std::uint64_t kDungPeriod = 250;
-constexpr int kDungDrop = 2;
-
-// Здоровье — одно на все беды. Голод убивает примерно за
-// 1/kStarvationHarm тиков, жажда быстрее — без воды живут меньше, чем без
-// еды. Заживление медленнее любого из них: пережитая бескормица не
-// забывается мгновенно, а уйти от хищника раненым — ещё не спастись.
-//
-// Прежде это были две величины: stress копил истощение, health держал раны,
-// и обе убивали при своём краю. Один закон, записанный дважды, — а причина
-// смерти видна и так, в тот тик, когда животное умирает.
-constexpr int kStarvationHarm = 20;
-constexpr int kDehydrationHarm = 30;
-constexpr int kRecoveryRate = 2;
 
 // Болезнь — третья беда того же здоровья, и она единственная приходит не от
 // нехватки, а от избытка: чем теснее стоит стадо, тем быстрее по нему идёт
@@ -212,18 +146,6 @@ constexpr int kBreedingGrowth = 900;
 constexpr int kCalmNeed = 750;
 constexpr int kMateDesire = 600;
 
-// Цена потомства. Мать отдаёт детёнышу долю своих запасов и крупицу белка —
-// ровно как растение отдаёт семени крупицу минералов. Именно эта цена, а не
-// отдельный "лимит поголовья", и сдерживает размножение: после родов матери
-// нужно заново отъедаться.
-//
-// Отец не платит ничего: доля энергии "на ухаживание" (kCourtshipEnergyShare)
-// сгорала в никуда и ни на что не влияла — ни на выбор партнёра, ни на
-// численность, которую держит цена, уплаченная матерью.
-constexpr int kBirthEnergyShare = 450;
-constexpr int kBirthWaterShare = 300;
-constexpr int kNewbornGrowth = 80;
-
 // С какой вероятностью ничего не желающее животное всё-таки делает шаг.
 // Постоянно бродящее стадо выглядит нервным и зря жжёт энергию; полностью
 // неподвижное — мёртвым.
@@ -250,30 +172,6 @@ constexpr int kWanderChance = 250;
 constexpr std::uint64_t kRoamTicks = 40;
 
 // --- Хищничество ---
-
-// Сколько мяса остаётся от взрослого животного. В единицах биомассы, тех
-// же, что развитость растения: туша — это десяток кустов травы разом,
-// поэтому охота и окупается. От детёныша остаётся меньше — мясо считается
-// от размера.
-//
-// Число не косметическое, а решающее: одна добыча должна кормить хищника
-// заметно дольше, чем длится охота на следующую. При втрое меньшем значении
-// хищники вымирали за первую тысячу тиков — они успевали загнать жертву, но
-// не успевали окупить погоню, и весь их род держался на том, чтобы ни разу
-// не промахнуться.
-constexpr int kMeatPerSize = 8000;
-
-// Как быстро падаль пропадает сама. Несъеденная туша не лежит вечно: она
-// гниёт, и накопленный зверем белок доходит до почвы перегноем, просто
-// медленнее, чем через чей-то желудок.
-//
-// Гниёт быстро — тушу целиком за несколько сотен тиков. При медленном
-// гниении мир получал "банк падали": когда стадо, объевшее луг, вымирало
-// разом от голода, сотни туш лежали тысячи тиков и кормили хищников
-// вшестеро против того, что могла прокормить живая добыча. Расплодившись на
-// падали, хищники доедали уцелевшее стадо, и мир пустел совсем. Мясо должно
-// портиться — иначе однажды случившийся мор кормит вечно.
-constexpr int kCarcassRot = 20;
 
 // Голод, с которого выходят на охоту (kHuntHunger), досягаемость зубов
 // (kAttackReach) и порог годного мяса (kMinBiteMeat) лежат в
@@ -390,35 +288,25 @@ bool sortByCellThenId(const ShareIntent& a, const ShareIntent& b) {
     return a.id < b.id;
 }
 
-// Какое желание сейчас гонит животное. Инерция (kDesireSwitch) — часть
-// закона, а не сглаживание: желание, за которым уже пошли, держится, пока
-// другое не перевесит его с заметным запасом. Страх инерции не подчиняется
-// в одну сторону — он и так пересчитывается каждый тик и пропадает вместе
-// с опасностью.
+// Какое желание сейчас гонит животное.
+//
+// Сам выбор — общий закон мира (core/Desires.hpp): порог, ниже которого
+// желание никуда не гонит, и инерция, с которой уже выбранное держится за
+// себя. Здесь остаётся только то, что относится к животному: какие у него
+// желания и чем меряется срочность каждого.
+//
+// Порядок в списке — приоритет при равенстве, побеждает последний. Страх
+// поэтому и стоит последним: сытость подождёт, зубы — нет.
 Desire chooseDesire(const Animal& animal, bool readyToMate) {
     const DesireComponent& desire = *animal.desire;
     const int mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0;
 
-    Desire best = Desire::Idle;
-    int bestUrgency = kDesireFloor;
-    if (animal.hunger >= bestUrgency) {
-        best = Desire::Food;
-        bestUrgency = animal.hunger;
-    }
-    if (animal.thirst >= bestUrgency) {
-        best = Desire::Water;
-        bestUrgency = animal.thirst;
-    }
-    if (mating >= bestUrgency) {
-        best = Desire::Mate;
-        bestUrgency = mating;
-    }
-    // Страх проверяется последним и потому при равенстве побеждает: сытость
-    // подождёт, зубы — нет.
-    if (animal.fear >= bestUrgency) {
-        best = Desire::Flee;
-        bestUrgency = animal.fear;
-    }
+    const Urgency candidates[] = {
+        {static_cast<int>(Desire::Food), animal.hunger},
+        {static_cast<int>(Desire::Water), animal.thirst},
+        {static_cast<int>(Desire::Mate), mating},
+        {static_cast<int>(Desire::Flee), animal.fear},
+    };
 
     int currentUrgency = 0;
     switch (desire.current) {
@@ -428,78 +316,9 @@ Desire chooseDesire(const Animal& animal, bool readyToMate) {
         case Desire::Flee: currentUrgency = animal.fear; break;
         case Desire::Idle: break;
     }
-    if (desire.current != Desire::Idle && currentUrgency >= kDesireFloor &&
-        bestUrgency < currentUrgency + kDesireSwitch) {
-        return desire.current;
-    }
-    return best;
-}
 
-// Падаль ложится на терраформирующий Entity тайла, рядом с почвой, водой и
-// перегноем (см. CarcassComponent). Если туша там уже лежит, мясо и белок
-// просто складываются: две смерти на одной клетке — это одна куча падали,
-// а не две отдельные.
-//
-// Вызывать только из команды очереди (05_Entity.md, п.5): добавление
-// компонента — структурное изменение.
-void depositCarcass(World& world, int x, int y, int meat, int protein) {
-    if ((meat <= 0 && protein <= 0) || !world.area().inBounds(x, y)) {
-        return;
-    }
-    for (const auto tile : world.area().cellAt(x, y).entities) {
-        if (!world.registry().all_of<SoilComponent>(tile)) {
-            continue;
-        }
-        if (auto* carcass = world.registry().try_get<CarcassComponent>(tile)) {
-            carcass->meat += meat;
-            carcass->protein += protein;
-        } else {
-            world.registry().emplace<CarcassComponent>(tile, CarcassComponent{meat, protein});
-        }
-        return;
-    }
-}
-
-// Крупицы белка распределены по туше равномерно, поэтому убыль мяса —
-// съеденного или сгнившего — освобождает их пропорционально. Куда они
-// пойдут дальше (в едока или в перегной), решает вызывающая сторона: для
-// самой туши это одно и то же убывание.
-int releaseCarcassProtein(CarcassComponent& carcass, int meatBefore, int removed) {
-    if (meatBefore <= 0 || removed <= 0 || carcass.protein <= 0) {
-        return 0;
-    }
-    // Целочисленно и без накопителя: сколько крупиц приходится на
-    // унесённую долю мяса, столько и освобождается. Округление вниз ничего
-    // не теряет — неосвобождённое остаётся в туше и уйдёт со следующим
-    // куском или с гниением.
-    const int released = std::min(carcass.protein, carcass.protein * std::min(removed, meatBefore) / meatBefore);
-    carcass.protein -= released;
-    return released;
-}
-
-// Смерть животного — один путь для всех причин: старость, истощение,
-// чужие зубы. Тело ложится падалью на ту клетку, где животное легло, и
-// дальше его либо съедят, либо оно сгниёт в перегной.
-void enqueueDeath(CommandQueue& commands, entt::entity entity, int x, int y) {
-    commands.enqueue([entity, x, y](World& w) {
-        if (!w.registry().valid(entity)) {
-            return;
-        }
-        // Читаем состояние заново, а не полагаемся на снятое при постановке
-        // команды: пока она ждала очереди, тик мог доработать
-        // (05_Entity.md, п.5).
-        int meat = 0;
-        int protein = 0;
-        if (const auto* body = w.registry().try_get<const AnimalComponent>(entity)) {
-            const int size = kMinSizeShare + (kFull - kMinSizeShare) * body->growth / kFull;
-            meat = kMeatPerSize * size / kFull;
-            // И накопленный белок, и не вышедший навоз: из тела в мир
-            // уходит всё, что в нём было.
-            protein = body->protein + body->dung;
-        }
-        depositCarcass(w, x, y, meat, protein);
-        w.despawn(entity);
-    });
+    return static_cast<Desire>(chooseUrgent(candidates, static_cast<int>(desire.current), currentUrgency,
+                                            kDesireFloor, kDesireSwitch, static_cast<int>(Desire::Idle)));
 }
 
 } // namespace
@@ -555,51 +374,23 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     }
 
     // --- 2. Снимок тайлов ---
-    // А вот это — данные тайла, по одному значению на клетку, поэтому здесь
-    // плотные массивы уместны (тот же приём, что в HydrologySystem и
-    // PlantSystem). Снимок снимается ДО того, как хоть одно животное
+    // Что лежит на клетках — общий закон снятия (core/TileSnapshot.hpp):
+    // им пользуется уже не одна система, и показывать двум системам разный
+    // мир нельзя. Снимок снимается ДО того, как хоть одно животное
     // тронулось с места: все решения этого тика принимаются по одному и
     // тому же состоянию мира, и порядок обхода на них не влияет.
-    const entt::entity kNullEntity = entt::null;
-    std::vector<entt::entity> terrain(cellCount, kNullEntity);
-    std::vector<int> waterAt(cellCount, 0);
-    std::vector<entt::entity> plantAt(cellCount, kNullEntity);
-    std::vector<int> plantGrowth(cellCount, 0);
-    std::vector<int> carcassMeat(cellCount, 0);
+    TileSnapshot tiles;
+    tiles.capture(world);
 
-    auto terrainView = registry.view<PositionComponent, SoilComponent>();
-    for (const auto entity : terrainView) {
-        const auto& position = terrainView.get<PositionComponent>(entity);
-        if (!world.area().inBounds(position.x, position.y)) {
-            continue;
-        }
-        const std::size_t i = index(position.x, position.y);
-        terrain[i] = entity;
-        if (const auto* water = registry.try_get<const WaterComponent>(entity)) {
-            waterAt[i] = water->depth;
-        }
-        if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
-            carcassMeat[i] = carcass->meat;
-        }
-    }
-
-    std::vector<unsigned char> treeAt(cellCount, 0);
-    auto plantView = registry.view<PlantComponent, PositionComponent>();
-    for (const auto entity : plantView) {
-        const auto& position = plantView.get<PositionComponent>(entity);
-        if (!world.area().inBounds(position.x, position.y)) {
-            continue;
-        }
-        const std::size_t i = index(position.x, position.y);
-        plantAt[i] = entity;
-        plantGrowth[i] = plantView.get<PlantComponent>(entity).growth;
-        // Дерево — не еда (объедать крону травоядное не умеет), а укрытие:
-        // под ним добычу не высматривают (kCoverSight, core/Hunting.hpp), и
-        // к нему же бежит испуганный.
-        if (registry.all_of<TreeComponent>(entity)) {
-            treeAt[i] = 1;
-        }
-    }
+    // Дальше по тексту снимок читается по именам его массивов. Ссылки, а не
+    // копии, и const — после снятия снимок только читают: изменить в нём
+    // клетку значило бы решать этот тик по миру, которого нет.
+    const std::vector<entt::entity>& terrain = tiles.terrain;
+    const std::vector<int>& waterAt = tiles.waterAt;
+    const std::vector<entt::entity>& plantAt = tiles.plantAt;
+    const std::vector<int>& plantGrowth = tiles.plantGrowth;
+    const std::vector<int>& carcassMeat = tiles.carcassMeat;
+    const std::vector<unsigned char>& treeAt = tiles.treeAt;
 
     std::vector<ShareIntent> bites;    // трава
     std::vector<ShareIntent> meals;    // падаль
@@ -662,61 +453,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const auto& genome = *animal.genome;
         auto& desire = *animal.desire;
 
-        const int size = kMinSizeShare + (kFull - kMinSizeShare) * state.growth / kFull;
+        const int size = bodySize(state.growth);
 
-        // Цена существования. Тратится всегда — стоящее на месте животное
-        // тоже живёт.
-        state.energy -= genome.energyUpkeep * size / kFull;
-        state.water -= genome.waterUpkeep * size / kFull;
-        const int ageBefore = state.age;
-        state.age += 1;
-
-        // Пищеварение: белок не лежит в теле вечно, часть уходит навозом.
-        // Отсюда и постоянная нужда есть, а не только "когда кончилась
-        // энергия". Крупица трогается с места раз в kDungPeriod тиков —
-        // это срок, а не скорость, поэтому никакого накопителя доли телу не
-        // нужно. Отсчёт сдвинут на постоянный идентификатор животного:
-        // иначе всё поголовье испражнялось бы одним и тем же тиком.
-        if (state.protein > 0 && (tick + animal.id) % kDungPeriod == 0) {
-            --state.protein;
-            ++state.dung;
-        }
-
-        // Взросление: детёныш дорастает до взрослого примерно к
-        // maturityAge, но не выше того, что позволяет накопленный белок —
-        // ровно как размер растения ограничен его минералами. Голодное
-        // животное не растёт вовсе.
-        // Прирост за тик — разность двух целых делений: сколько развитости
-        // положено в этом возрасте минус сколько было положено в прошлом.
-        // Так дробная скорость (kFull / maturityAge) выражается целыми
-        // числами, и телу нечего помнить между тиками — возраст оно и так
-        // хранит.
-        if (state.growth < kFull && state.energy > 0) {
-            const int proteinCeiling = genome.proteinNeed > 0 ? state.protein * kFull / genome.proteinNeed : kFull;
-            const int ceiling = std::min(kFull, std::max(state.growth, proteinCeiling));
-            const int maturity = std::max(1, genome.maturityAge);
-            const int gain = state.age * kFull / maturity - ageBefore * kFull / maturity;
-            state.growth = std::clamp(state.growth + gain, 0, ceiling);
-        }
-
-        // Здоровье — одно на все беды. Голод, жажда и чужие зубы отнимают
-        // его, сытость возвращает. Отдельного счётчика истощения (stress)
-        // рядом со здоровьем больше нет: две величины, обе от нуля до
-        // единицы, обе убивающие при своём краю, — это один закон,
-        // записанный дважды. Отчего именно животное умерло, по-прежнему
-        // видно в тот момент, когда оно умирает: пустой желудок, пустая
-        // фляга или рана.
-        if (state.energy <= 0) {
-            state.energy = 0;
-            state.health -= kStarvationHarm;
-        }
-        if (state.water <= 0) {
-            state.water = 0;
-            state.health -= kDehydrationHarm;
-        }
-        if (state.energy > 0 && state.water > 0) {
-            state.health = std::min(kFull, state.health + kRecoveryRate);
-        }
+        // Что время сделало с телом: расход на существование, взросление,
+        // пищеварение, здоровье. Закон общий для всего живого и живёт в
+        // core/Body.hpp — тело у гоблина то же самое.
+        advanceBody(state, genome, tick, animal.id);
 
         // Болезнь: чем теснее вокруг стоят свои, тем быстрее по стаду идёт
         // зараза (см. kDiseaseHarm). Не решение животного и не желание, а
@@ -756,11 +498,15 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             }
         }
 
-        // Смерть от старости, от условий или от чужих зубов. Entity
-        // исчезает не сейчас, а при разрешении очереди команд
+        // Смерть от старости, от условий или от чужих зубов. Проверяется
+        // здесь, а не внутри advanceBody, и это не мелочь: болезнь отнимает
+        // здоровье уже после общего закона тела, и умереть от неё животное
+        // обязано в тот же тик, а не в следующий.
+        //
+        // Entity исчезает не сейчас, а при разрешении очереди команд
         // (05_Entity.md, п.5), и тело ложится падалью — одинаково, от чего
         // бы животное ни умерло.
-        if (state.age >= genome.maxAge || state.health <= 0) {
+        if (bodyDied(state, genome)) {
             enqueueDeath(commands, animal.entity, animal.x, animal.y);
             alive[a] = false;
             continue;
@@ -952,7 +698,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const auto& genome = *animal.genome;
         auto& desire = *animal.desire;
         const std::size_t here = index(animal.x, animal.y);
-        const int size = kMinSizeShare + (kFull - kMinSizeShare) * state.growth / kFull;
+        const int size = bodySize(state.growth);
 
         // Случайность собирается из seed мира, номера тика и постоянного
         // идентификатора животного (core/Random.hpp). Не из координат, как
@@ -1556,8 +1302,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             if (static_cast<int>(randomBelow(gore, kFull)) < animals[prey].genome->goreChance) {
                 // Мелкий бодает слабее взрослого — тем же размером, каким
                 // считается и всё остальное в теле.
-                const int preySize =
-                    kMinSizeShare + (kFull - kMinSizeShare) * animals[prey].state->growth / kFull;
+                const int preySize = bodySize(animals[prey].state->growth);
                 // Оба измерения хромоты — из одного и того же defense: срок
                 // (как раньше) и теперь ещё тяжесть. Слабо вооружённый вид
                 // калечит слабее, а не только короче — kLameShare здесь не
