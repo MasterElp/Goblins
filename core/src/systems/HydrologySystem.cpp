@@ -640,7 +640,10 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         }
 
         auto& soil = registry.get<SoilComponent>(entity);
-        soil.moisture = std::clamp(nextMoisture[i], 0, kFull);
+        // Влажность не переписываем, пока отключена релаксация к цели
+        // (п.3 выше): взять новое значение негде, а прежнее и означает
+        // "не менялась". Снять оба комментария разом.
+        //soil.moisture = std::clamp(nextMoisture[i], 0, kFull);
         soil.minerals = std::max(0, nextMinerals[i]);
         registry.get<HeightComponent>(entity).height = nextTerrainHeight[i];
 

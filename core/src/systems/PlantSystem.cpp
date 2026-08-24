@@ -296,8 +296,11 @@ void PlantSystem(World& world, CommandQueue& commands) {
         }
 
         // --- Размножение ---
-        if (plant.age < genome.maturityAge || plant.growth < kSeedMinGrowth || plant.stress > kSeedMaxStress ||
-            plant.minerals < 1) {
+        // Минералы здесь не проверяются: они решают только предел роста
+        // (mineralCeiling выше), а не право размножаться. Бедная минералами
+        // клетка растит медленнее и мельче, но не бесплодную траву — иначе
+        // минералы значили бы для жизни растения больше, чем для его роста.
+        if (plant.age < genome.maturityAge || plant.growth < kSeedMinGrowth || plant.stress > kSeedMaxStress) {
             continue;
         }
 
@@ -353,10 +356,13 @@ void PlantSystem(World& world, CommandQueue& commands) {
             // Почва соседа — из снимка начала тика (см. soilAt выше), а
             // не живая: иначе увиденное зависело бы от того, кого EnTT
             // хранит раньше.
+            //
+            // Минералы клетки здесь не смотрим: безминеральная земля не
+            // мешает прорасти, только расти дальше некуда, пока минералы не
+            // появятся (течением или перегноем). Отказ по минералам тут был
+            // бы ровно той путаницей, которую § "Размножение" выше уже
+            // разрешил в другую сторону.
             const auto& targetSoil = soilAt[j];
-            if (targetSoil.minerals <= 0) {
-                continue; // расти не на чем: своей крупицы семечку хватит лишь на первые проценты роста
-            }
             // Пригодность клетки для потомка — та же обеспеченность
             // влагой, по которой живёт и сам родитель (см. supply выше).
             // Отдельной функции пригодности почвы больше нет, и порогов
@@ -388,12 +394,12 @@ void PlantSystem(World& world, CommandQueue& commands) {
             seeded[i] = 1;
 
             // Цена та же, что и у семени, брошенного в соседнюю клетку:
-            // семя есть семя, и растению всё равно, куда оно упало.
+            // семя есть семя, и растению всё равно, куда оно упало. Минералы
+            // в эту цену не входят — семя их не несёт, оно наберёт свои сам,
+            // прорастая (см. §"Размножение" выше).
             plant.growth = std::max(0, plant.growth - kSeedGrowthCost);
-            --plant.minerals;
 
             SeedComponent seed;
-            seed.minerals = 1; // та самая крупица родителя: минералы не появляются из ниоткуда
 
             commands.enqueue([child, seed, x = position.x, y = position.y](World& w) {
                 const auto entity = w.registry().create();
@@ -444,14 +450,13 @@ void PlantSystem(World& world, CommandQueue& commands) {
         const int targetX = static_cast<int>(intent.targetCell % static_cast<std::size_t>(width));
         const int targetY = static_cast<int>(intent.targetCell / static_cast<std::size_t>(width));
 
-        // Цена семени для родителя.
+        // Цена семени для родителя — только рост; минералы семя не несёт
+        // (см. §"Размножение" выше).
         auto& parent = registry.get<PlantComponent>(intent.parent);
         parent.growth = std::max(0, parent.growth - kSeedGrowthCost);
-        --parent.minerals;
 
         PlantComponent seedling;
         seedling.growth = kSeedlingGrowth;
-        seedling.minerals = 1; // та самая крупица, отданная родителем: минералы не появляются из ниоткуда
 
         commands.enqueue([child, seedling, targetX, targetY](World& w) {
             // Пока команда ждала своей очереди, тик успел доработать:
@@ -467,18 +472,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
                 }
             }
             if (blocked) {
-                // Семя не проросло — крупица минералов, которую отдал
-                // ему родитель, остаётся в почве той клетки, куда семя
-                // упало. Не потому, что вещество обязано сохраняться (мир
-                // открыт, 02_CorePrinciples.md, п.12b), а потому, что
-                // упавшему семени просто некуда деться, кроме земли.
-                for (const auto tile : w.area().cellAt(targetX, targetY).entities) {
-                    if (auto* soilComponent = w.registry().try_get<SoilComponent>(tile)) {
-                        soilComponent->minerals += seedling.minerals;
-                        break;
-                    }
-                }
-                return;
+                return; // семя не проросло — ронять было нечего, кроме места
             }
 
             const auto entity = w.registry().create();
@@ -504,19 +498,14 @@ void PlantSystem(World& world, CommandQueue& commands) {
 
         seed.age += 1;
 
-        // Не дождалось. Крупица минералов уходит в перегной той же
-        // клетки — туда же, куда её вернуло бы и проросшее из этого семени
-        // растение, только без промежуточной жизни.
+        // Не дождалось — семя просто исчезает. Ему нечего вернуть почве:
+        // оно не несёт минералов (см. SeedComponent), а из перегноя они
+        // возвращаются только тем, чем растение при жизни успело обрасти.
         if (seed.age >= genome.seedDormancy + kSeedWaitTicks) {
-            commands.enqueue([entity, x = position.x, y = position.y](World& w) {
+            commands.enqueue([entity](World& w) {
                 if (!w.registry().valid(entity)) {
                     return;
                 }
-                int minerals = 0;
-                if (const auto* rotting = w.registry().try_get<const SeedComponent>(entity)) {
-                    minerals = rotting->minerals;
-                }
-                depositHumus(w, x, y, minerals);
                 w.despawn(entity);
             });
             continue;
@@ -538,7 +527,6 @@ void PlantSystem(World& world, CommandQueue& commands) {
 
         PlantComponent seedling;
         seedling.growth = kSeedlingGrowth;
-        seedling.minerals = seed.minerals;
 
         commands.enqueue([entity, genome, seedling, x = position.x, y = position.y](World& w) {
             if (!w.registry().valid(entity)) {
