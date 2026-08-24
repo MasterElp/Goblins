@@ -120,7 +120,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     static bool showHeight = true;
     static bool showPlants = true;
     static bool showAnimals = true;
-    static bool showDanger = true;
     static Tab tab = Tab::Hidden;
     // За кем следим: выбранное кликом живёт, пока не выберут другое, — в
     // этом и смысл слежения. Наведение мышью его не сбивает.
@@ -144,7 +143,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         showHeight = config.show_height;
         showPlants = config.show_plants;
         showAnimals = config.show_animals;
-        showDanger = config.show_danger;
         tab = tabFromName(config.panel_tab);
         initialized = true;
     }
@@ -390,14 +388,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             config.show_animals = showAnimals;
             goblins::saveClientConfig(configPath, config);
         }
-        // Встревоженность земли — отдельно от животных: она их след, но
-        // след долгий и лежащий на почве, и смотрят на него тогда, когда
-        // самих зверей на этом месте уже нет (09_Animals.md, п.10a).
-        if (IsKeyPressed(KEY_SEVEN)) {
-            showDanger = !showDanger;
-            config.show_danger = showDanger;
-            goblins::saveClientConfig(configPath, config);
-        }
 
         // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
         // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
@@ -600,7 +590,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     layers.height = showHeight;
     layers.plants = showPlants;
     layers.animals = showAnimals;
-    layers.danger = showDanger;
 
     if (!snapshot.connected || snapshot.areaWidth == 0) {
         const std::string waiting = "Connecting to " + config.host + ":" + std::to_string(config.port) + "...";

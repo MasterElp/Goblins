@@ -10,7 +10,6 @@
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
-#include "core/components/DangerComponent.hpp"
 #include "core/components/DesireComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
@@ -166,25 +165,28 @@ constexpr int kDiseaseRadius = 2;
 constexpr int kDiseaseCrowd = 3;
 constexpr int kDiseaseHarm = 1;
 
-// Насколько пугает чужой вид травоядных — тот, кто ест ту же траву. Второй
-// закон про "чужие рядом", парный болезни: та разводит по местности своих
-// (теснота одного вида), этот — чужих.
+// Насколько травоядное сторонится чужого вида — того, кто ест ту же траву.
+// Второй закон про "чужие рядом", парный болезни: та разводит по местности
+// своих (теснота одного вида), этот — чужих.
 //
-// Число заметно меньше полного страха, и в этом весь смысл. У хищника страх
-// на самом краю видимости уже выше порога желаний (kDesireFloor): зубы —
-// всегда повод уходить. Чужой вид — не зубы, а соперник за корм, поэтому
-// его страх:
-//   - не дотягивает до порога, пока сосед далеко (уходить из-за того, кого
-//     видно на другом конце луга, незачем);
-//   - проигрывает сильному голоду (kRivalFear меньше, чем голод у
-//     бедствующего): сытый уступает поляну, голодный стоит на своём;
-//   - проигрывает созревшему желанию пары (kMateDesire и выше): идущего к
-//     паре чужак с дороги не сгонит, иначе на тесной карте два вида
-//     заперли бы размножение друг другу — та же ловушка, в которую уже
-//     попадала болезнь.
-// Ровно из этих трёх условий и получается расхождение видов по карте, а не
-// вечное бегство.
-constexpr int kRivalFear = 500;
+// Это НЕ страх, и разница здесь несущая. Страх — желание (Flee), и чтобы
+// победить, ему надо перебить и голод, и желание пары, а перебив — оставить
+// зверя голодным и без потомства; на тесной карте два вида так заперли бы
+// размножение друг другу (та же ловушка, в которую уже попадала болезнь).
+// Сторонение живёт этажом ниже желаний — в выборе ноги (core/Walk.hpp,
+// WalkShy): зверь не бросает еды и никуда не бежит, он лишь предпочитает ту
+// сторону поляны, где чужого нет.
+//
+// Пробовалось и страхом: kRivalFear = 500 против порога желаний 350 и
+// инерции 150. Считать это было незачем — закон не сработал ни разу:
+// пасущемуся зверю пришлось бы иметь голод не выше 350 (страх ≥ голод +
+// инерция), а голод у травоядного почти всегда выше, потому что в него
+// входит и нехватка белка на рост. Виды так и паслись вперемешку.
+//
+// Вес заведомо меньше kAimPull (1000): животное по-прежнему доходит до
+// своей травы, просто подходит к ней с другой стороны. Больше половины
+// kAimPull ставить нельзя — тогда чужак начнёт уводить от самой еды.
+constexpr int kRivalShyness = 300;
 
 // Желания. Ниже kDesireFloor желание никуда не гонит — животное считается
 // довольным и просто бродит. kDesireSwitch — насколько сильнее должно быть
@@ -278,25 +280,21 @@ constexpr int kCarcassRot = 20;
 // core/Hunting.hpp вместе с самим выбором добычи: этот закон спрашивает не
 // только система, но и наблюдатель — он рисует найденную дорогу на карте.
 
-// --- Встревоженная земля ---
-// Сколько тревоги оставляет на клетке один удар и как быстро она тает (см.
-// DangerComponent). Осыпается медленнее, чем гниёт падаль: место, где
-// охотились, должно оставаться страшным дольше, чем лежит туша, — иначе
-// добыча вернётся туда раньше, чем хищник успеет уйти, и никакого
-// расползания не выйдет.
-constexpr int kDangerPerAttack = 400;
-constexpr int kDangerRot = 4;
-// Во сколько тревога под ногами превращается в страх. Меньше единицы
-// намеренно: место, где вчера убили, тревожит, но не гонит так, как гонят
-// зубы, которые видно прямо сейчас.
-constexpr int kDangerFearWeight = 700;
-// Насколько кровь под ногами отпугивает хищника при выборе шага
-// (core/Walk.hpp) — не страх (у него его нет, 09_Animals.md, п.2), а
-// осторожность ниже желаний, в самом шаге. На уровне kBlockedPenalty
-// (500) — не бросит настоящую близкую добычу или тушу ради обхода одной
-// кровавой клетки, но развернёт при поиске вслепую, когда прежняя добыча
-// уже разбежалась с его же настрелянного места.
-constexpr int kPredatorDangerAversion = 400;
+// --- Падаль пугает ---
+// Во что превращается лежащая на клетке туша для травоядного, которое на
+// неё набрело. Отсчёт от kMeatPerSize — мяса взрослой туши: целая туша
+// пугает в полную силу этого веса, обглоданная и подгнившая — слабее, и
+// вместе с мясом страх сходит на нет сам, без отдельного закона забывания.
+//
+// Меньше единицы намеренно: место, где вчера убили, тревожит, но не гонит
+// так, как гонят зубы, которые видно прямо сейчас.
+//
+// Отдельного невидимого слоя "встревоженности" (DangerComponent) для этого
+// больше нет и не нужно: удар зубами и так оставляет на той же клетке
+// падаль, и она — тот самый след охоты, только видимый. Два следа одного
+// события, ложащиеся на одну клетку и тающие каждый по-своему, — это один
+// закон, записанный дважды.
+constexpr int kCarcassFearWeight = 700;
 
 // --- Рога и хромота ---
 // Удаётся ли жертве достать хищника в ответ, решает её собственная
@@ -462,30 +460,6 @@ void depositCarcass(World& world, int x, int y, int meat, int protein) {
     }
 }
 
-// Тревога ложится на тот же терраформирующий Entity тайла, что и падаль
-// (см. DangerComponent): здесь охотились. Тем же приёмом, что перегной и
-// туша, — если тревога на клетке уже есть, новая к ней прибавляется, но
-// выше полной клетка не встревожится: страшнее, чем страшно, не бывает.
-//
-// Вызывать только из команды очереди (05_Entity.md, п.5): добавление
-// компонента — структурное изменение.
-void depositDanger(World& world, int x, int y, int level) {
-    if (level <= 0 || !world.area().inBounds(x, y)) {
-        return;
-    }
-    for (const auto tile : world.area().cellAt(x, y).entities) {
-        if (!world.registry().all_of<SoilComponent>(tile)) {
-            continue;
-        }
-        if (auto* danger = world.registry().try_get<DangerComponent>(tile)) {
-            danger->level = std::min(kFull, danger->level + level);
-        } else {
-            world.registry().emplace<DangerComponent>(tile, DangerComponent{std::min(kFull, level)});
-        }
-        return;
-    }
-}
-
 // Крупицы белка распределены по туше равномерно, поэтому убыль мяса —
 // съеденного или сгнившего — освобождает их пропорционально. Куда они
 // пойдут дальше (в едока или в перегной), решает вызывающая сторона: для
@@ -592,7 +566,6 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<entt::entity> plantAt(cellCount, kNullEntity);
     std::vector<int> plantGrowth(cellCount, 0);
     std::vector<int> carcassMeat(cellCount, 0);
-    std::vector<int> dangerAt(cellCount, 0);
 
     auto terrainView = registry.view<PositionComponent, SoilComponent>();
     for (const auto entity : terrainView) {
@@ -607,9 +580,6 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         }
         if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
             carcassMeat[i] = carcass->meat;
-        }
-        if (const auto* danger = registry.try_get<const DangerComponent>(entity)) {
-            dangerAt[i] = danger->level;
         }
     }
 
@@ -644,11 +614,19 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // хищника, которого больше не видит.
     std::vector<int> threatX(animals.size(), 0);
     std::vector<int> threatY(animals.size(), 0);
-    // Есть ли у страха видимый источник. Страх бывает и беспредметным —
-    // от встревоженной земли под ногами (DangerComponent), — и тогда
-    // бежать НЕ ОТ ЧЕГО: конкретных координат у такого страха нет, а
-    // читать их всё равно значило бы бежать в сторону клетки (0, 0).
+    // Есть ли у страха видимый источник. Страх бывает и беспредметным — от
+    // падали под ногами (kCarcassFearWeight), — и тогда бежать НЕ ОТ ЧЕГО:
+    // конкретных координат у такого страха нет, а читать их всё равно
+    // значило бы бежать в сторону клетки (0, 0).
     std::vector<bool> hasThreat(animals.size(), false);
+    // Где ближайший чужой вид травоядных — считается в проходе 3 вместе со
+    // страхом, а используется в проходе 4, при выборе шага (kRivalShyness).
+    // Живёт здесь по той же причине, что и threatX/threatY: система не
+    // хранит состояние между тиками, а животное не помнит того, кого больше
+    // не видит.
+    std::vector<int> rivalX(animals.size(), 0);
+    std::vector<int> rivalY(animals.size(), 0);
+    std::vector<bool> hasRival(animals.size(), false);
 
     // Где стоят хищники — отдельным коротким списком, собранным один раз
     // за тик. Страх ищется перебором, и перебирать весь мир ради горстки
@@ -831,7 +809,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // бегает — на него в этом мире не охотятся (09_Animals.md, п.2).
         animal.fear = 0;
         if (!animal.predator) {
-            const float sight = static_cast<float>(std::max(1, genome.perception));
+            const int sightCells = std::max(1, genome.perception);
+            const float sight = static_cast<float>(sightCells);
             for (std::size_t b = 0; b < predatorX.size(); ++b) {
                 const int dx = predatorX[b] - animal.x;
                 const int dy = predatorY[b] - animal.y;
@@ -864,47 +843,53 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             }
 
             // Чужой вид травоядных: не зубы, но и не сородич — он ест ту
-            // же траву. Страх перед ним слабее хищничьего (kRivalFear
-            // против полного kFull) и оттого работает иначе: он не гонит
-            // прочь от всякого, кого видно, а только раздвигает тех, кто
-            // сошёлся вплотную, и уступает и голоду, и созревшему желанию
-            // пары (см. kRivalFear).
+            // же траву. Убегать от него незачем (и незачем ради этого
+            // бросать еду), а вот стоять с ним нос к носу не за чем:
+            // запоминаем, с какой стороны ближайший, и сторонимся уже на
+            // ходу — см. "Шаг" ниже и kRivalShyness.
             //
-            // Свой вид сюда не попадает намеренно: бояться своих значило бы
-            // разогнать собственное стадо и запереть себе размножение. Что
-            // делает с чужими СВОЙ вид, сказано отдельно и по-другому — это
-            // болезнь от тесноты (kDiseaseCrowd выше), а не страх.
+            // Свой вид сюда не попадает намеренно: сторониться своих значило
+            // бы разогнать собственное стадо и остаться без пары. Что делает
+            // с чужими СВОЙ вид, сказано отдельно и по-другому — это болезнь
+            // от тесноты (kDiseaseCrowd выше), то есть тело, а не походка.
             //
             // Перебор по всем животным, а не по короткому списку, как у
             // хищников: чужой вид — это почти всё поголовье травоядных, и
             // выигрывать тут нечего.
+            int rivalDistance = 0;
             for (std::size_t b = 0; b < animals.size(); ++b) {
                 if (b == a || animals[b].predator || animals[b].genome->species == genome.species) {
                     continue;
                 }
                 const int dx = animals[b].x - animal.x;
                 const int dy = animals[b].y - animal.y;
-                const float distance = std::sqrt(static_cast<float>(dx * dx + dy * dy));
-                if (distance > sight) {
+                const int distance = dx * dx + dy * dy;
+                if (distance > sightCells * sightCells) {
                     continue;
                 }
-                const int scare = static_cast<int>(kRivalFear * (1.0f - distance / sight));
-                if (scare > animal.fear) {
-                    animal.fear = scare;
-                    threatX[a] = animals[b].x;
-                    threatY[a] = animals[b].y;
-                    hasThreat[a] = true;
+                if (hasRival[a] && distance >= rivalDistance) {
+                    continue;
                 }
+                rivalX[a] = animals[b].x;
+                rivalY[a] = animals[b].y;
+                hasRival[a] = true;
+                rivalDistance = distance;
             }
 
-            // Встревоженная земля под ногами (DangerComponent): здесь
-            // недавно охотились, и это тоже страшно — пусть слабее, чем
-            // видимые зубы. У такого страха нет источника, от которого
-            // убегать: животное не знает, где хищник, оно знает только,
-            // что тут плохое место. Поэтому threatX/threatY не трогаем —
-            // бегущий без цели просто уходит куда глаза глядят (см. "Шаг"),
-            // и уже этим освобождает участок.
-            const int dread = dangerAt[index(animal.x, animal.y)] * kDangerFearWeight / kFull;
+            // Падаль под ногами: здесь кого-то убили и съели, и это тоже
+            // страшно — пусть слабее, чем видимые зубы. Туша и есть след
+            // охоты, только видимый: отдельного невидимого слоя
+            // "встревоженности" для того же самого больше нет (см.
+            // kCarcassFearWeight).
+            //
+            // У такого страха нет источника, от которого убегать: животное
+            // не знает, где хищник, оно знает только, что тут плохое место.
+            // Поэтому threatX/threatY не трогаем — бегущий без цели просто
+            // уходит куда глаза глядят (см. "Шаг"), и уже этим освобождает
+            // участок, а хищнику приходится искать добычу заново в другом
+            // месте.
+            const int dread =
+                std::min(kFull, carcassMeat[index(animal.x, animal.y)] * kCarcassFearWeight / kMeatPerSize);
             if (dread > animal.fear) {
                 animal.fear = dread;
             }
@@ -1367,15 +1352,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // с травой, с падалью и с другим животным идут свободно — заняты
         // для животного только вода и камень (core/Path.hpp).
         //
-        // Хищник вдобавок обходит встревоженные клетки (kPredatorDangerAversion):
-        // ищет добычу заново там, где ещё не охотился, а не топчется на
-        // своём же настрелянном месте. Травоядное уже уходит от крови
-        // через страх (п.3, ambientDread) — вес 0, чтобы не считать одно и
-        // то же дважды.
-        const int dangerWeight = animal.predator ? kPredatorDangerAversion : 0;
-        const WalkStep step = chooseStep(
-            *animal.memory, animal.x, animal.y, aim, standable,
-            [&](int nx, int ny) { return dangerAt[index(nx, ny)]; }, dangerWeight, random);
+        // Кого сторониться: травоядное — ближайшего чужого вида (п.3 выше).
+        // Не бросая при этом ни еды, ни пути к паре: сторонение только
+        // выбирает, с какой стороны подойти (core/Walk.hpp, WalkShy).
+        const WalkShy shy =
+            hasRival[a] ? WalkShy{walkDirectionTo(animal.x, animal.y, rivalX[a], rivalY[a]), kRivalShyness}
+                        : WalkShy{};
+        const WalkStep step = chooseStep(*animal.memory, animal.x, animal.y, aim, shy, standable, random);
         if (!step.moved) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
@@ -1554,13 +1537,6 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue;
         }
         animals[prey].state->health -= attack.damage;
-
-        // Место, где сомкнулись зубы, надолго перестаёт быть спокойным
-        // (см. DangerComponent). Кладётся на клетку жертвы, а не хищника:
-        // страшно там, где рвали, — и рвали, пока оба стояли на ней.
-        commands.enqueue([x = animals[prey].x, y = animals[prey].y](World& w) {
-            depositDanger(w, x, y, kDangerPerAttack);
-        });
 
         // Рога. Жертва, у которой есть чем бодаться, достаёт укусившего в
         // ответ — не всегда, а как повезёт: попадает ли удар вообще, решает
@@ -1778,28 +1754,6 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         }
     }
 
-    // --- 12. Тревога остывает ---
-    // Место, где охотились, со временем снова становится обычным (см.
-    // DangerComponent) — тем же порядком, каким гниёт падаль. Пока тревога
-    // держится, добыча обходит этот участок стороной, и хищнику приходится
-    // уходить за ней: так из голода и страха получается территория, которой
-    // никто никому не назначал.
-    auto dangerView = registry.view<DangerComponent>();
-    for (const auto entity : dangerView) {
-        auto& danger = dangerView.get<DangerComponent>(entity);
-        danger.level = std::max(0, danger.level - kDangerRot);
-        if (danger.level <= 0) {
-            commands.enqueue([entity](World& w) {
-                // Проверяем заново: пока команда ждала очереди, на этой
-                // клетке могли снова подраться (02_CorePrinciples.md, п.3 —
-                // нет тревоги, нет и компонента).
-                auto* left = w.registry().try_get<DangerComponent>(entity);
-                if (left != nullptr && left->level <= 0) {
-                    w.registry().remove<DangerComponent>(entity);
-                }
-            });
-        }
-    }
 }
 
 
@@ -1837,11 +1791,8 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kDiseaseRadius", static_cast<float>(kDiseaseRadius)});
     out.push_back({g, "kDiseaseCrowd", static_cast<float>(kDiseaseCrowd)});
     out.push_back({g, "kDiseaseHarm", kDiseaseHarm});
-    out.push_back({g, "kRivalFear", kRivalFear});
-    out.push_back({g, "kDangerPerAttack", kDangerPerAttack});
-    out.push_back({g, "kDangerRot", kDangerRot});
-    out.push_back({g, "kDangerFearWeight", kDangerFearWeight});
-    out.push_back({g, "kPredatorDangerAversion", kPredatorDangerAversion});
+    out.push_back({g, "kRivalShyness", kRivalShyness});
+    out.push_back({g, "kCarcassFearWeight", kCarcassFearWeight});
     out.push_back({g, "kLameMaxTicks", static_cast<float>(kLameMaxTicks)});
     out.push_back({g, "kLameShare", kLameShare});
 

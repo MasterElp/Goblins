@@ -541,7 +541,6 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // Деревья — тем же способом: -1 значит "дерева в клетке нет".
         working_.treeSpeciesAt = decodeInts(layers, "trees", cellCount, -1);
         working_.carcass = decodeScaled(layers, "carcass", cellCount, kFromHundredths);
-        working_.danger = decodeScaled(layers, "danger", cellCount, kFromHundredths);
 
         // Виды растений: два списка, у травы и у деревьев своя нумерация.
         // Состав генома клиент не знает и не должен (07_TechStack.md, п.6) —
@@ -649,7 +648,6 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "minerals", working_.minerals, [](int raw) { return raw; });
         applyChangedCells(json, "humus", working_.humus, [](int raw) { return raw; });
         applyChangedCells(json, "carcass", working_.carcass, toFraction);
-        applyChangedCells(json, "danger", working_.danger, toFraction);
         applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
         applyChangedCells(json, "seeds", working_.seedSpeciesAt, [](int raw) { return raw; });
         applyChangedCells(json, "trees", working_.treeSpeciesAt, [](int raw) { return raw; });
