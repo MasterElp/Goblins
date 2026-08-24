@@ -1,12 +1,17 @@
 #include "server/WorldSave.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -247,7 +252,7 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // такой же, и пишется он общей веткой ниже: "genome" есть и у
         // растения, и у семени.
         if (const auto* seed = registry.try_get<SeedComponent>(entity)) {
-            record["seed"] = {{"age", seed->age}, {"minerals", seed->minerals}};
+            record["seed"] = {{"age", seed->age}};
         }
         if (const auto* genome = registry.try_get<PlantGenomeComponent>(entity)) {
             record["genome"] = genomeToJson(*genome, kGrassTraits);
@@ -455,7 +460,6 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         if (record.contains("seed")) {
             parsed.hasSeed = true;
             parsed.seed.age = record["seed"].value("age", 0.0f);
-            parsed.seed.minerals = record["seed"].value("minerals", 0);
             // Геном обязателен по той же причине, что и у растения: из
             // семени без генома нечему было бы прорасти, а "средний геном"
             // втихую изменил бы состояние мира при загрузке.
@@ -540,21 +544,315 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
     return true;
 }
 
-std::optional<std::string> readCreatedAt(const std::filesystem::path& path) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        return std::nullopt;
+// Чтение заголовка сохранения, когда файл всё же приходится читать
+// целиком (заголовка не оказалось ни в начале, ни в конце — см.
+// readSaveHeader ниже).
+//
+// Разбор событиями, а не nlohmann::json::parse: parse строит дерево на
+// весь файл, а файл мира — это десятки мегабайт, и список миров, читая
+// их все, укладывал три сотни мегабайт текста в гигабайты узлов ради
+// семи полей заголовка. Здесь не строится ничего, а сам разбор
+// обрывается, как только "info" прочитан целиком.
+class SaveHeaderSax : public nlohmann::json_sax<nlohmann::json> {
+public:
+    // Прочитан ли заголовок. Всё, что случится с файлом дальше, списку
+    // миров уже безразлично: дальше только состояние мира.
+    bool headerRead() const { return infoRead_; }
+    const std::string& formatTag() const { return formatTag_; }
+    const nlohmann::json& info() const { return info_; }
+
+    bool null() override { return field(nullptr); }
+    bool boolean(bool value) override { return field(value); }
+    bool number_integer(number_integer_t value) override { return field(value); }
+    bool number_unsigned(number_unsigned_t value) override { return field(value); }
+    bool number_float(number_float_t value, const string_t& /*raw*/) override { return field(value); }
+    bool binary(binary_t& /*value*/) override { return field(nullptr); }
+
+    bool string(string_t& value) override {
+        if (depth_ == 1 && keys_[1] == "format") {
+            formatTag_ = value;
+            if (done()) {
+                return false;
+            }
+        }
+        return field(value);
     }
-    const auto json = nlohmann::json::parse(file, nullptr, /*allow_exceptions=*/false);
-    if (json.is_discarded() || !json.contains("info")) {
-        return std::nullopt;
+
+    bool key(string_t& value) override {
+        if (depth_ <= kTrackedDepth) {
+            keys_[depth_] = value;
+        }
+        return true;
     }
-    const auto created = json["info"].value("created_at", std::string{});
-    if (created.empty()) {
-        return std::nullopt;
+
+    bool start_object(std::size_t /*elements*/) override {
+        const bool isInfo = depth_ == 1 && keys_[1] == "info";
+        enter();
+        if (isInfo) {
+            infoDepth_ = depth_;
+        }
+        return true;
     }
-    return created;
+
+    bool end_object() override {
+        const bool closesInfo = infoDepth_ != 0 && infoDepth_ == depth_;
+        leave();
+        if (closesInfo) {
+            infoDepth_ = 0;
+            infoRead_ = true;
+            // Ради этой строки всё и написано: дальше в файле мир, а он
+            // здесь не нужен.
+            return !done();
+        }
+        return true;
+    }
+
+    bool start_array(std::size_t /*elements*/) override {
+        enter();
+        return true;
+    }
+
+    bool end_array() override {
+        leave();
+        return true;
+    }
+
+    // Интерфейс требует остановки; годность прочитанного показывает
+    // headerRead(), а не это.
+    bool parse_error(std::size_t /*position*/, const std::string& /*token*/,
+                      const nlohmann::json::exception& /*error*/) override {
+        return false;
+    }
+
+private:
+    // Глубже второго уровня в заголовке ничего нет: WorldSaveInfo —
+    // плоская запись из чисел и строк, и таков её договор в протоколе
+    // (shared/world/WorldSaveInfo.hpp). Вложенное глубже пропускается, а
+    // не собирается.
+    static constexpr int kTrackedDepth = 2;
+
+    template <typename Value>
+    bool field(Value&& value) {
+        if (infoDepth_ != 0 && depth_ == infoDepth_ && !keys_[depth_].empty()) {
+            info_[keys_[depth_]] = std::forward<Value>(value);
+        }
+        return true;
+    }
+
+    bool done() const { return infoRead_ && !formatTag_.empty(); }
+
+    void enter() {
+        ++depth_;
+        if (depth_ <= kTrackedDepth) {
+            keys_[depth_].clear();
+        }
+    }
+
+    void leave() {
+        if (depth_ <= kTrackedDepth) {
+            keys_[depth_].clear();
+        }
+        --depth_;
+    }
+
+    int depth_ = 0;
+    int infoDepth_ = 0;
+    bool infoRead_ = false;
+    std::string formatTag_;
+    nlohmann::json info_ = nlohmann::json::object();
+    std::string keys_[kTrackedDepth + 1];
+};
+
+// Заголовок ищется сначала по краям файла и только потом — чтением
+// файла целиком.
+//
+// Разбор событиями дерева не строит, но лексер nlohmann по пути всё
+// равно разбирает каждое число и каждую строку: три сотни мегабайт
+// сохранений проходятся за девять секунд — ровно то занятое ядро,
+// которое было слышно вентилятором при открытии списка миров. Поэтому
+// сначала два куска по 64 КиБ:
+//
+//   начало файла — там заголовок у всего, что пишет нынешний saveWorld
+//                  (порядок ключей выбран там руками);
+//   конец файла  — там он у файлов прежней записи, где порядок ключей
+//                  задавал алфавит nlohmann и "info" оказывался
+//                  предпоследним, перед "version".
+//
+// Край файла — это оборванный JSON, целиком он не разберётся; поэтому
+// объект под ключом "info" вырезается по балансу скобок и разбирается
+// отдельно. Принимается он, только если это и вправду заголовок мира
+// (размеры Области на месте, время записи на месте) — иначе читается
+// весь файл, как раньше. Ошибиться проба может, стало быть, лишь в
+// сторону лишней работы.
+constexpr std::size_t kHeaderProbeWindow = 64 * 1024;
+
+// Похож ли кусок на сохранение мира: метка формата стоит в начале у
+// новой записи, номер версии — в конце у прежней.
+bool windowLooksLikeSave(const std::string& window) {
+    const std::string formatMark = std::string("\"format\":\"") + kFormatTag + "\"";
+    const std::string versionMark = std::string("\"version\":") + std::to_string(kWorldSaveFormatVersion);
+    return window.find(formatMark) != std::string::npos || window.find(versionMark) != std::string::npos;
 }
+
+bool headerFromWindow(const std::string& window, WorldSaveInfo& outInfo) {
+    const std::string key = "\"info\":";
+    for (std::size_t at = window.find(key); at != std::string::npos; at = window.find(key, at + key.size())) {
+        const std::size_t open = window.find('{', at + key.size());
+        if (open == std::string::npos) {
+            break;
+        }
+
+        // Скобки считаем вне строк: в самом заголовке фигурных скобок
+        // нет, но кусок мог прийти и из чужого файла.
+        std::size_t depth = 0;
+        bool inString = false;
+        bool escaped = false;
+        std::size_t close = std::string::npos;
+        for (std::size_t i = open; i < window.size(); ++i) {
+            const char c = window[i];
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                ++depth;
+            } else if (c == '}' && --depth == 0) {
+                close = i;
+                break;
+            }
+        }
+        if (close == std::string::npos) {
+            continue;
+        }
+
+        const auto json = nlohmann::json::parse(window.begin() + static_cast<std::ptrdiff_t>(open),
+                                                 window.begin() + static_cast<std::ptrdiff_t>(close) + 1, nullptr,
+                                                 /*allow_exceptions=*/false);
+        if (json.is_discarded() || !json.is_object()) {
+            continue;
+        }
+
+        WorldSaveInfo info;
+        try {
+            info = json.get<WorldSaveInfo>();
+        } catch (const nlohmann::json::exception&) {
+            continue;
+        }
+
+        // Заголовок мира узнаётся по себе самому: у настоящего есть и
+        // размеры Области, и время записи.
+        if (info.area_width <= 0 || info.area_height <= 0 || info.saved_at.empty()) {
+            continue;
+        }
+
+        outInfo = info;
+        return true;
+    }
+    return false;
+}
+
+// Заголовок одного файла. false — файл не открылся, не разобрался или
+// сохранением мира не является; причина в outError.
+bool readSaveHeader(const std::filesystem::path& path, WorldSaveInfo& outInfo, std::string& outError) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        outError = "could not open the file";
+        return false;
+    }
+
+    file.seekg(0, std::ios::end);
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        outError = "empty file";
+        return false;
+    }
+
+    const auto windowSize = static_cast<std::size_t>(std::min<std::streamoff>(size, kHeaderProbeWindow));
+    std::string window(windowSize, '\0');
+
+    file.seekg(0);
+    file.read(&window[0], static_cast<std::streamsize>(windowSize));
+    if (windowLooksLikeSave(window) && headerFromWindow(window, outInfo)) {
+        return true;
+    }
+
+    if (static_cast<std::streamoff>(windowSize) < size) {
+        file.clear();
+        file.seekg(size - static_cast<std::streamoff>(windowSize));
+        file.read(&window[0], static_cast<std::streamsize>(windowSize));
+        if (windowLooksLikeSave(window) && headerFromWindow(window, outInfo)) {
+            return true;
+        }
+    }
+
+    // Заголовка на краях нет — придётся читать файл. Разбор событиями
+    // хотя бы не строит дерева на весь мир: прежний nlohmann::json::parse
+    // укладывал сорок мегабайт текста в гигабайты узлов ради семи полей.
+    file.clear();
+    file.seekg(0);
+    SaveHeaderSax sax;
+    // Ответ sax_parse ничего не говорит: разбор обрывается намеренно, и
+    // для sax_parse это такая же неудача, как битый файл. Различает их
+    // headerRead(). По той же причине strict=false — до конца файла мы
+    // не доходим.
+    nlohmann::json::sax_parse(file, &sax, nlohmann::json::input_format_t::json, /*strict=*/false);
+
+    if (!sax.headerRead() || sax.formatTag() != kFormatTag) {
+        outError = "not a world save";
+        return false;
+    }
+
+    try {
+        outInfo = sax.info().get<WorldSaveInfo>();
+    } catch (const nlohmann::json::exception& e) {
+        outError = std::string("broken header (") + e.what() + ")";
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::string> readCreatedAt(const std::filesystem::path& path) {
+    WorldSaveInfo info;
+    std::string error;
+    if (!readSaveHeader(path, info, error) || info.created_at.empty()) {
+        return std::nullopt;
+    }
+    return info.created_at;
+}
+
+// Заголовки уже прочитанных файлов, чтобы список миров не перечитывал
+// одно и то же. Годность записи — размер файла и время его записи: мир
+// сохранили заново — заголовок перечитается, файл удалили — он просто
+// не встретится при обходе каталога. Это не индекс на диске (тот
+// неизбежно разъезжается с файлами и переживает их), а память процесса:
+// сервер перезапустили — помнить нечего.
+//
+// Нужно ради тех файлов, у которых заголовок пробой по краям не нашёлся
+// (см. readSaveHeader): такой файл читается целиком, а это секунды на
+// каждые сорок мегабайт — при том что world_list рассылается далеко не
+// только по запросу меню: ещё и при каждом подключении клиента, после
+// каждого сохранения мира и после каждой регенерации.
+struct CachedHeader {
+    std::uintmax_t size = 0;
+    std::filesystem::file_time_type writeTime{};
+    // Файл, сохранением мира не являющийся, помним тоже: иначе чужой
+    // большой .json перечитывался бы при каждом обходе каталога.
+    bool isWorldSave = false;
+    WorldSaveInfo info;
+};
+
+// Каталог сохранений обходят два потока: сетевой (list_worlds,
+// delete_world) и GameLoop (после сохранения мира и после регенерации).
+std::mutex headerCacheMutex;
+std::map<std::filesystem::path, CachedHeader> headerCache;
 
 } // namespace
 
@@ -604,43 +902,69 @@ std::vector<WorldSaveInfo> listWorldSaves(const std::filesystem::path& directory
         return worlds;
     }
 
+    // Кэш общий на процесс, а обходов каталога может идти два сразу
+    // (сетевой поток и GameLoop) — замок на весь обход, благо он теперь
+    // короткий.
+    std::lock_guard<std::mutex> lock(headerCacheMutex);
+    std::set<std::filesystem::path> present;
+
     for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
         if (!entry.is_regular_file() || entry.path().extension() != kExtension) {
             continue;
         }
 
-        std::ifstream file(entry.path());
-        if (!file.is_open()) {
-            std::cerr << "WorldSave: could not open '" << entry.path().string() << "'.\n";
+        // Размер и время записи берутся из уже прочитанной записи
+        // каталога — отдельного обращения к файлу здесь нет.
+        std::error_code statEc;
+        const auto size = entry.file_size(statEc);
+        if (statEc) {
+            continue;
+        }
+        const auto writeTime = entry.last_write_time(statEc);
+        if (statEc) {
             continue;
         }
 
-        // Файл читается целиком: заголовок лежит внутри того же
-        // JSON-объекта, что и состояние мира. Отдельный индекс миров был
-        // бы дешевле, но он неизбежно разъезжается с реальными файлами
-        // (удалили файл вручную — индекс врёт), а список запрашивается
-        // редко: при подключении клиента и при открытии экрана выбора
-        // мира.
-        const auto json = nlohmann::json::parse(file, nullptr, /*allow_exceptions=*/false);
-        if (json.is_discarded() || json.value("format", std::string{}) != kFormatTag) {
-            std::cerr << "WorldSave: '" << entry.path().string() << "' is not a world save, skipping.\n";
+        const auto& path = entry.path();
+        present.insert(path);
+
+        const auto cached = headerCache.find(path);
+        if (cached == headerCache.end() || cached->second.size != size || cached->second.writeTime != writeTime) {
+            CachedHeader header;
+            header.size = size;
+            header.writeTime = writeTime;
+            std::string error;
+            header.isWorldSave = readSaveHeader(path, header.info, error);
+            if (!header.isWorldSave) {
+                // Про один и тот же негодный файл говорим один раз, а не
+                // при каждом открытии меню: он же не меняется.
+                std::cerr << "WorldSave: '" << path.string() << "' skipped (" << error << ").\n";
+            }
+            headerCache[path] = std::move(header);
+        }
+
+        const CachedHeader& header = headerCache[path];
+        if (!header.isWorldSave) {
             continue;
         }
 
-        WorldSaveInfo info;
-        try {
-            info = json.at("info").get<WorldSaveInfo>();
-        } catch (const nlohmann::json::exception& e) {
-            std::cerr << "WorldSave: '" << entry.path().string() << "' has a broken header (" << e.what()
-                       << "), skipping.\n";
-            continue;
-        }
-
+        WorldSaveInfo info = header.info;
         // Источник истины для имени — имя файла, а не поле в нём: файл
         // могли переименовать, и именно по имени файла мир потом
         // загружается.
-        info.name = entry.path().stem().string();
+        info.name = path.stem().string();
         worlds.push_back(std::move(info));
+    }
+
+    // Заголовки исчезнувших файлов забываем — иначе кэш хранил бы
+    // удалённые миры до перезапуска сервера. Файлы других каталогов (у
+    // кэша ключ — полный путь) при этом не трогаем.
+    for (auto it = headerCache.begin(); it != headerCache.end();) {
+        if (it->first.parent_path() == directory && present.count(it->first) == 0) {
+            it = headerCache.erase(it);
+        } else {
+            ++it;
+        }
     }
 
     // Свежие сверху — это порядок, в котором миры показываются в меню.
@@ -683,16 +1007,21 @@ bool saveWorld(const World& world, const RegenerationRequest& generation, const 
     info.created_at = readCreatedAt(path).value_or(now);
     info.saved_at = now;
 
-    nlohmann::json json;
-    json["format"] = kFormatTag;
-    json["version"] = kWorldSaveFormatVersion;
-    json["info"] = info;
-    json["generation"] = generation;
-    // Летопись численности — рядом с миром, а не в отдельном файле: она
-    // описывает жизнь именно этого мира, и разъехаться с ним (удалили мир,
-    // осталась летопись) не должна.
-    json["history"] = history.toJson();
-    json["entities"] = buildEntitiesJson(world);
+    // Порядок ключей в файле выбран здесь, а не отдан nlohmann: у
+    // nlohmann::json объект — это std::map, и ключи ложатся по алфавиту,
+    // то есть "entities" (десятки мегабайт) впереди, а "info" (семь полей
+    // заголовка) — в самом хвосте. Список миров в меню читает только
+    // заголовок, и ради него был вынужден пройти весь файл до конца.
+    // Заголовок впереди превращает чтение списка в чтение первых двух
+    // сотен байт (см. readSaveHeader). Тот же порядок через
+    // nlohmann::ordered_json обошёлся бы дороже самой записи: перенос уже
+    // собранного "entities" в объект другого типа — поэлементное
+    // копирование всего дерева.
+    //
+    // Летопись численности пишется рядом с миром, а не в отдельный файл:
+    // она описывает жизнь именно этого мира, и разъехаться с ним (удалили
+    // мир, осталась летопись) не должна.
+    const nlohmann::json entities = buildEntitiesJson(world);
 
     // Пишем во временный файл и переименовываем поверх: прерванное на
     // середине сохранение (упал процесс, кончилось место) не должно
@@ -704,7 +1033,15 @@ bool saveWorld(const World& world, const RegenerationRequest& generation, const 
             outError = "could not write '" + tempPath.string() + "'";
             return false;
         }
-        file << json.dump();
+        // Значения выводятся прямо в поток, а не через dump() в строку:
+        // строка на весь мир — это вторая копия тех же сорока мегабайт.
+        file << "{\"format\":" << nlohmann::json(kFormatTag)
+             << ",\"version\":" << kWorldSaveFormatVersion
+             << ",\"info\":" << nlohmann::json(info)
+             << ",\"generation\":" << nlohmann::json(generation)
+             << ",\"history\":" << history.toJson()
+             << ",\"entities\":" << entities
+             << "}";
         file.flush();
         if (!file) {
             outError = "failed while writing '" + tempPath.string() + "'";
