@@ -117,6 +117,8 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // Стартовая заселённость, а не итоговая: дальше трава расселяется
     // сама и занимает всё, что ей подходит.
     ops.intRow("Initial coverage (per mille)", edited.plants.grass_coverage, 0, 400);
+    ops.intRow("Tree species", edited.plants.tree_species, 1, 5);
+    ops.intRow("Tree coverage (per mille)", edited.plants.tree_coverage, 0, 60);
 
     ops.section("Herbivores");
     // Число видов — 1..8 (ядро обрежет к этим границам): один вид — вполне

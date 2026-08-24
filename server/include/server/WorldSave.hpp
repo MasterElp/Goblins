@@ -53,6 +53,7 @@ namespace goblins {
 //                   "water_source": true,
 //                   "humus": {"minerals"},
 //                   "impassable": true,
+//                   "tree": true,
 //                   "plant": {"age","growth","minerals","stress"},
 //                   "genome": {"species": N, "<черта>": V, ...},
 //                   "animal": {"age","growth","sex","energy","water",
@@ -74,6 +75,7 @@ namespace goblins {
 //                                         "animal_mutation_rate": AM,
 //                                         "animal_random_seed": AS},
 //                   "plant_species": [ {"species": 0, "<черта>": V, ...}, ... ],
+//                   "tree_species": [ {"species": 0, "<черта>": V, ...}, ... ],
 //                   "animal_species": {"herbivores": [...], "predators": [...]}}, ... ]}
 //
 // Голода, жажды и страха в "desire" нет: они пересчитываются из тела на
@@ -103,6 +105,12 @@ namespace goblins {
 // "height" (HeightComponent) добавлено без смены версии формата: старые
 // файлы без этого поля читаются как есть (высота считается 0 — плоский
 // рельеф), HydrologySystem корректно работает и без начального градиента.
+//
+// "tree" (TreeComponent) — тег, как "impassable": лежит и на растении, и
+// на семени, и означает, что это дерево, а не трава (core/Trees.hpp). Его
+// геном читается по древесной таблице черт, а вид ищется в
+// "tree_species" — своём списке со своей нумерацией. У файлов без этого
+// тега весь растительный мир читается травой, каким он и был.
 //
 // "plant"/"genome" (живое растение), "humus" (HumusComponent — лежит на
 // том же Entity тайла, что почва и вода) и "plant_species" (виды травы

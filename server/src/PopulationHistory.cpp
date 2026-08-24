@@ -10,6 +10,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/TimeComponent.hpp"
+#include "core/components/TreeComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 
@@ -23,14 +24,22 @@ namespace {
 // бы не отличить от "такого вида в мире и не было".
 std::vector<int> countPlants(const World& world) {
     const auto& registry = world.registry();
-    const auto& archetypes = registry.get<const PlantSpeciesComponent>(world.worldEntity()).archetypes;
+    const auto& archetypes = registry.get<const PlantSpeciesComponent>(world.worldEntity()).grasses;
     std::vector<int> counts(archetypes.size(), 0);
     // Именно живые растения: геном есть и у лежащего в клетке семени
     // (SeedComponent), но семя — ещё не растение, и считать его в
     // численности вида значило бы рисовать на графике то, чего на лугу
     // не видно.
+    //
+    // И именно трава: у дерева свой список видов и своя нумерация
+    // (PlantSpeciesComponent), поэтому сложить их в один вектор значило бы
+    // смешать два разных нумерования — ровно та же причина, по которой
+    // травоядные и хищники считаются порознь.
     registry.view<const PlantComponent, const PlantGenomeComponent>().each(
-        [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) {
+        [&](const entt::entity entity, const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) {
+            if (registry.all_of<TreeComponent>(entity)) {
+                return;
+            }
             if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
                 ++counts[static_cast<std::size_t>(genome.species)];
             }

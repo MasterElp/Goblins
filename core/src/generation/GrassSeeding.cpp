@@ -18,9 +18,11 @@ namespace goblins {
 
 namespace {
 
-// Суше этого семя не сажаем даже при генерации: клетка виду не подходит,
-// растение всё равно погибло бы от стресса за сотню тиков (PlantSystem).
-// Тот же порог использует и расселение — см. kSeedMinSupply там.
+// Суше этого семя не сажаем даже при генерации: на такой клетке вид рос бы
+// медленнее половины своих сил, то есть почти наверняка не дорос бы до
+// размера, с которого можно сеять (kSeedMinGrowth в PlantSystem), и линия
+// оборвалась бы на первом же поколении. Тот же порог использует и
+// расселение — см. kSeedMinSupply там.
 constexpr int kSeedingMinSupply = 500;
 
 // Ограничение попыток, как в BoulderScatter: на карте, где почти всё —
@@ -74,7 +76,7 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
     // --- Виды: архетипы на World Entity (см. PlantSpeciesComponent) ---
     auto species = makeGrassSpecies(params.grassSpecies, static_cast<std::uint64_t>(seed));
     auto& speciesComponent = world.registry().get<PlantSpeciesComponent>(world.worldEntity());
-    speciesComponent.archetypes = species;
+    speciesComponent.grasses = species;
     if (species.empty()) {
         return;
     }
@@ -146,16 +148,15 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         PlantComponent plant;
         plant.age = static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maturityAge))));
 
-        const int grownTo = std::min(kFull, plant.age * genome.growthRate);
-        const int wanted = (grownTo * genome.mineralNeed + kFull - 1) / kFull;
-        // Минералы стартовых растений — не из воздуха: ровно столько,
-        // сколько есть в клетке, и ровно столько же вернётся в неё
-        // перегноем после смерти.
-        plant.minerals = std::min(soil.minerals, std::max(0, wanted));
+        plant.growth = std::min(kFull, plant.age * genome.growthRate);
+
+        // Минералы стартовых растений — не из воздуха: сколько выросло,
+        // столько крупиц и взяло из своей клетки, но не больше, чем в ней
+        // есть. Рост от их нехватки не страдает (kPlantMinerals в
+        // PlantGenetics.hpp) — просто вернуть перегноем такому растению
+        // будет нечего.
+        plant.minerals = std::min(soil.minerals, kPlantMinerals * plant.growth / kFull);
         soil.minerals -= plant.minerals;
-        plant.growth = genome.mineralNeed > 0
-                            ? std::min(grownTo, plant.minerals * kFull / genome.mineralNeed)
-                            : grownTo;
 
         const auto entity = world.registry().create();
         world.registry().emplace<PlantComponent>(entity, plant);

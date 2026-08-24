@@ -27,6 +27,7 @@
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
+#include "core/components/TreeComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -76,6 +77,8 @@ goblins::PlantParams toPlantParams(const goblins::PlantConfig& config) {
     goblins::PlantParams params;
     params.grassSpecies = config.grass_species;
     params.grassCoverage = config.grass_coverage;
+    params.treeSpecies = config.tree_species;
+    params.treeCoverage = config.tree_coverage;
     params.mutationRate = config.mutation_rate;
     params.humusDecayPeriod = config.humus_decay_period;
     return params;
@@ -154,7 +157,7 @@ void printWorldStats(const goblins::World& world, int boulderCount) {
 // черта появится в выводе сама, как и в сохранении и в снапшоте.
 void printPlantStats(const goblins::World& world) {
     const auto& archetypes =
-        world.registry().get<const goblins::PlantSpeciesComponent>(world.worldEntity()).archetypes;
+        world.registry().get<const goblins::PlantSpeciesComponent>(world.worldEntity()).grasses;
     if (archetypes.empty()) {
         std::cout << "Grass species: none (plants disabled for this world)\n\n";
         return;
@@ -167,7 +170,13 @@ void printPlantStats(const goblins::World& world) {
     std::vector<int> population(archetypes.size(), 0);
     std::size_t plants = 0;
     world.registry().view<const goblins::PlantComponent, const goblins::PlantGenomeComponent>().each(
-        [&](const goblins::PlantComponent& /*plant*/, const goblins::PlantGenomeComponent& genome) {
+        [&](const entt::entity entity, const goblins::PlantComponent& /*plant*/,
+            const goblins::PlantGenomeComponent& genome) {
+            // Деревья считаются отдельно (printTreeStats): нумерация видов у
+            // них своя, и складывать её с травяной нельзя.
+            if (world.registry().all_of<goblins::TreeComponent>(entity)) {
+                return;
+            }
             ++plants;
             if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < population.size()) {
                 ++population[static_cast<std::size_t>(genome.species)];
@@ -190,6 +199,47 @@ void printPlantStats(const goblins::World& world) {
     for (const auto& archetype : archetypes) {
         std::cout << "  sp" << archetype.species << " n=" << population[static_cast<std::size_t>(archetype.species)];
         for (const auto& trait : goblins::kGrassTraits) {
+            std::cout << " " << trait.name << "=" << std::setprecision(4) << archetype.*trait.gene;
+        }
+        std::cout << "\n";
+    }
+    std::cout << std::defaultfloat << "\n";
+}
+
+// Деревья этого мира: сколько их и сколько вещества они держат в себе.
+// Последнее число — то самое, которым рощи и ограничены (core/Trees.hpp):
+// пока крупицы стоят в стволах, новым деревьям взяться неоткуда.
+void printTreeStats(const goblins::World& world) {
+    const auto& archetypes =
+        world.registry().get<const goblins::PlantSpeciesComponent>(world.worldEntity()).trees;
+    if (archetypes.empty()) {
+        std::cout << "Tree species: none (no trees in this world)\n\n";
+        return;
+    }
+
+    std::vector<int> population(archetypes.size(), 0);
+    std::size_t trees = 0;
+    long long held = 0;
+    world.registry()
+        .view<const goblins::TreeComponent, const goblins::PlantComponent, const goblins::PlantGenomeComponent>()
+        .each([&](const goblins::PlantComponent& plant, const goblins::PlantGenomeComponent& genome) {
+            ++trees;
+            held += plant.minerals;
+            if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < population.size()) {
+                ++population[static_cast<std::size_t>(genome.species)];
+            }
+        });
+
+    std::size_t waiting = 0;
+    world.registry().view<const goblins::SeedComponent, const goblins::TreeComponent>().each(
+        [&](const goblins::SeedComponent&) { ++waiting; });
+
+    std::cout << "Tree species: " << archetypes.size() << ", trees: " << trees << ", seeds waiting: " << waiting
+               << ", minerals standing in trunks: " << held << "\n";
+    std::cout << std::fixed;
+    for (const auto& archetype : archetypes) {
+        std::cout << "  tr" << archetype.species << " n=" << population[static_cast<std::size_t>(archetype.species)];
+        for (const auto& trait : goblins::kTreeTraits) {
             std::cout << " " << trait.name << "=" << std::setprecision(4) << archetype.*trait.gene;
         }
         std::cout << "\n";
@@ -464,6 +514,7 @@ int main(int argc, char** argv) {
                 printGenerationStats(genStats);
                 printWorldStats(world, request.boulder_count);
                 printPlantStats(world);
+                printTreeStats(world);
                 printAnimalStats(world);
 
                 // У нового мира летопись своя и начинается с нулевого
@@ -501,6 +552,7 @@ int main(int argc, char** argv) {
                                << info.area_width << "x" << info.area_height << ").\n";
                     printWorldStats(world, generation.boulder_count);
                     printPlantStats(world);
+                    printTreeStats(world);
                     printAnimalStats(world);
                     network.broadcastNotice("info", "World '" + info.name + "' loaded.");
                     worldReady = true;
@@ -596,6 +648,7 @@ int main(int argc, char** argv) {
             printGenerationStats(genStats);
             printWorldStats(world, request.boulder_count);
             printPlantStats(world);
+            printTreeStats(world);
             printAnimalStats(world);
         }
 

@@ -3,6 +3,7 @@
 #include "core/generation/AnimalSeeding.hpp"
 #include "core/generation/BoulderScatter.hpp"
 #include "core/generation/GrassSeeding.hpp"
+#include "core/generation/TreeSeeding.hpp"
 #include "core/systems/AnimalSystem.hpp"
 #include "core/systems/HydrologySystem.hpp"
 #include "core/systems/PlantSystem.hpp"
@@ -17,6 +18,7 @@ namespace {
 // seed+4, seed+10, seed+20), чтобы стадии не столкнулись на одном числе.
 constexpr unsigned kBoulderSeedOffset = 1000;
 constexpr unsigned kPlantSeedOffset = 2000;
+constexpr unsigned kTreeSeedOffset = 2500;
 constexpr unsigned kAnimalSeedOffset = 3000;
 
 } // namespace
@@ -31,9 +33,14 @@ GenerationStats generateWorld(World& world, int width, int height, const WorldGe
     //    воду булыжник не ложится.
     scatterBoulders(world, params.boulderCount, params.seed + kBoulderSeedOffset);
 
-    // 3. Заселение растительностью: трава должна видеть и водоёмы, и
-    //    занятые тайлы, чтобы не сесть на воду и не занять чужой
+    // 3. Заселение растительностью: она должна видеть и водоёмы, и занятые
+    //    тайлы, чтобы не сесть на воду и не занять чужой
     //    (02_CorePrinciples.md, п.5).
+    //
+    //    Деревья — первыми: кто занимает место раньше, тот его и получает, а
+    //    луг зарастает всюду, где ему хватает влаги, и дереву после него не
+    //    осталось бы ни одной свободной клетки (см. TreeSeeding.hpp).
+    seedTrees(world, params.plants, params.seed + kTreeSeedOffset);
     seedGrass(world, params.plants, params.seed + kPlantSeedOffset);
 
     // 4. Появление животных — последним: травоядное выпускается туда, где

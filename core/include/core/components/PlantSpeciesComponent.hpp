@@ -6,7 +6,7 @@
 
 namespace goblins {
 
-// Виды травы, существующие в этом мире, — свойство мира (06_GameLoop.md,
+// Виды растений, существующие в этом мире, — свойство мира (06_GameLoop.md,
 // п.1a) из числа "зафиксированных при генерации": набор видов выбирается
 // один раз, при создании мира, и System-ами не меняется. Поэтому компонент
 // живёт на World Entity, рядом с TimeComponent и
@@ -20,9 +20,15 @@ namespace goblins {
 // (PlantGenetics), иначе за сотни поколений виды слились бы в один и
 // разница стратегий исчезла.
 //
-// Индекс в archetypes — это PlantGenomeComponent::species.
+// Два списка, а не один, ровно по той же причине, что и у животных
+// (AnimalSpeciesComponent): у травы и у деревьев свои таблицы черт и свои
+// бюджеты преимуществ (PlantGenetics.hpp), и сравнивать вложения одного с
+// вложениями другого незачем — они играют в разные игры.
+// PlantGenomeComponent::species — индекс в СВОЁМ списке, в том, который
+// соответствует наличию или отсутствию TreeComponent.
 struct PlantSpeciesComponent {
-    std::vector<PlantGenomeComponent> archetypes;
+    std::vector<PlantGenomeComponent> grasses;
+    std::vector<PlantGenomeComponent> trees;
 };
 
 } // namespace goblins

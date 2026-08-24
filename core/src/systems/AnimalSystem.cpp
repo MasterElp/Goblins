@@ -17,6 +17,7 @@
 #include "core/components/InjuryComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
+#include "core/components/TreeComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -42,9 +43,11 @@ namespace {
 
 // Насколько маленькое животное "меньше ест": и расход на жизнь, и укус, и
 // цена шага, и скорость пищеварения, и сила удара умножаются на размер (от
-// kMinSizeShare у новорождённого до 1 у взрослого) — тот же приём, что у
-// растений. Без него детёныш объедал бы луг наравне со взрослым и почти
-// никогда не выживал бы на бедной земле.
+// kMinSizeShare у новорождённого до 1 у взрослого). У растений такой же
+// был и пропал вместе с тем единственным, что он делил (подсушиванием
+// клетки); здесь он делит слишком многое, чтобы пропасть. Без него
+// детёныш объедал бы луг наравне со взрослым и почти никогда не выживал
+// бы на бедной земле.
 constexpr int kMinSizeShare = 300;
 
 // Сколько энергии даёт единица биомассы съеденного. Число связывает две
@@ -96,12 +99,14 @@ constexpr int kDrinkRate = 4000;
 // законом охоты в core/Hunting.hpp — его спрашивает и наблюдатель.
 constexpr int kMinBiteGrowth = 50;
 
-// Сколько стресса получает растение за единицу съеденной развитости. Именно
-// так объедание убивает траву — не напрямую, а через её собственный закон
-// смерти от условий (PlantSystem): куст, который скусывают снова и снова,
-// не успевает отрасти и в конце концов погибает, а редко потревоженный
-// отходит.
-constexpr int kGrazeStress = 400;
+// Стресса за объедание больше нет. Он был второй смертью поверх первой:
+// куст и так теряет ровно ту биомассу, которую с него скусили, и стадо,
+// пасущееся на месте, и без того держит луг на нуле развитости
+// (kMinBiteGrowth ниже не пускает его глубже). Добивать куст ещё и
+// смертью от условий значило считать одно и то же дважды — а платила за
+// это трава, которая на выпасе не доживала до размера, с которого сеют,
+// и участок оставался лысым навсегда. Теперь скушенный куст отрастает,
+// как отрастал бы после засухи, и вымирания луга под стадом не случается.
 
 // Пищеварение: раз во сколько тиков одна крупица белка трогается с места и
 // уходит в навоз. Отсюда и необходимость есть постоянно: белок не лежит в
@@ -588,6 +593,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         }
     }
 
+    std::vector<unsigned char> treeAt(cellCount, 0);
     auto plantView = registry.view<PlantComponent, PositionComponent>();
     for (const auto entity : plantView) {
         const auto& position = plantView.get<PositionComponent>(entity);
@@ -597,6 +603,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const std::size_t i = index(position.x, position.y);
         plantAt[i] = entity;
         plantGrowth[i] = plantView.get<PlantComponent>(entity).growth;
+        // Дерево — не еда (объедать крону травоядное не умеет), а укрытие:
+        // под ним добычу не высматривают (kCoverSight, core/Hunting.hpp), и
+        // к нему же бежит испуганный.
+        if (registry.all_of<TreeComponent>(entity)) {
+            treeAt[i] = 1;
+        }
     }
 
     std::vector<ShareIntent> bites;    // трава
@@ -867,8 +879,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         if (!alive[b] || animals[b].predator) {
             continue;
         }
-        preys.push_back(
-            HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed, animals[b].genome->defense});
+        preys.push_back(HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed,
+                                  animals[b].genome->defense,
+                                  treeAt[index(animals[b].x, animals[b].y)] != 0});
         preyOwner.push_back(static_cast<int>(b));
     }
 
@@ -1228,8 +1241,46 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // память ног не даёт вернуться назад тем же путём.
         int aim = -1;
         if (fleeing) {
-            // От опасности не идут к цели — от неё уходят: направление
-            // берётся от неё к себе и ведёт прочь.
+            // Бежать есть куда: под деревом добычу не высматривают
+            // (kCoverSight, core/Hunting.hpp). Испуганный ищет глазами
+            // ближайшую крону в пределах своей зоркости и правит туда — а
+            // не просто прочь. Именно это и делает рощу убежищем: не тем,
+            // что она защищает того, кто там оказался, а тем, что к ней
+            // бегут.
+            //
+            // Уже стоящему под кроной бежать некуда и незачем: он на месте
+            // и есть.
+            const int sight = std::max(1, genome.perception);
+            int coverX = 0;
+            int coverY = 0;
+            int coverSteps = -1;
+            if (treeAt[index(animal.x, animal.y)] == 0) {
+                for (int dy = -sight; dy <= sight; ++dy) {
+                    for (int dx = -sight; dx <= sight; ++dx) {
+                        const int nx = animal.x + dx;
+                        const int ny = animal.y + dy;
+                        if (!world.area().inBounds(nx, ny) || treeAt[index(nx, ny)] == 0) {
+                            continue;
+                        }
+                        if (dx * dx + dy * dy > sight * sight) {
+                            continue;
+                        }
+                        const int steps = std::max(std::abs(dx), std::abs(dy));
+                        if (coverSteps < 0 || steps < coverSteps) {
+                            coverSteps = steps;
+                            coverX = nx;
+                            coverY = ny;
+                        }
+                    }
+                }
+            }
+
+            if (coverSteps >= 0) {
+                aim = walkDirectionTo(animal.x, animal.y, coverX, coverY);
+            }
+
+            // Кроны рядом нет — тогда как и прежде: от опасности не идут к
+            // цели, от неё уходят, и направление берётся от неё к себе.
             //
             // Но опасность бывает и беспредметной: встревоженная земля
             // пугает, не показывая, откуда ждать зубов (см. п.3). Убегать
@@ -1237,7 +1288,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             // же отрезком поиска, каким ищут невидимое. Не будь этого,
             // животное бежало бы от клетки (0, 0), то есть всегда в один и
             // тот же угол мира.
-            aim = hasThreat[a] ? walkDirectionTo(threatX[a], threatY[a], animal.x, animal.y) : -1;
+            if (aim < 0) {
+                aim = hasThreat[a] ? walkDirectionTo(threatX[a], threatY[a], animal.x, animal.y) : -1;
+            }
             if (aim < 0) {
                 // Либо страх беспредметен, либо хищник стоит ровно на той
                 // же клетке: и там, и там — куда угодно, лишь бы не стоять.
@@ -1346,11 +1399,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             releasedTotal = std::max(releasedTotal, owed);
         }
 
+        // Объедание отнимает биомассу, и только её: погибнуть от зубов куст
+        // не может, отрастёт он или нет — решит PlantSystem по своим
+        // законам на следующем тике.
         plant->growth = std::max(0, plant->growth - eatenTotal);
-        // Само по себе объедание растение не убивает: оно теряет биомассу и
-        // получает стресс, а погибнуть или отрасти — решит PlantSystem по
-        // своим законам на следующем тике.
-        plant->stress = std::min(kFull, plant->stress + eatenTotal * kGrazeStress / kFull);
         n = m;
     }
 
@@ -1518,8 +1570,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // Вытаптывания под ногами больше нет: утоптанность ушла из почвы
     // вместе с пригодностью, которую она кормила (см. SoilComponent).
     // Обратная связь стада на луг осталась одна, зато прямая — поедание:
-    // скушенный куст копит стресс и в конце концов гибнет, и тропа к
-    // водопою вытравливается зубами, а не ногами.
+    // скушенный куст стоит объеденным, пока стадо рядом, и тропа к водопою
+    // вытаптывается зубами, а не ногами.
 
     // --- 10. Встречи: кто с кем сошёлся ---
     // Пары складываются внутри клетки, в порядке постоянных
@@ -1707,7 +1759,6 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kDrinkRate", kDrinkRate});
     out.push_back({g, "kMinBiteGrowth", kMinBiteGrowth});
     out.push_back({g, "kMinBiteMeat", kMinBiteMeat});
-    out.push_back({g, "kGrazeStress", kGrazeStress});
     out.push_back({g, "kDungPeriod", static_cast<float>(kDungPeriod)});
     out.push_back({g, "kDungDrop", static_cast<float>(kDungDrop)});
     out.push_back({g, "kStarvationHarm", kStarvationHarm});

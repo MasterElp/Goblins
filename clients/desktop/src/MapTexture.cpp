@@ -55,6 +55,11 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
         if (layers.plants && state.plantSpeciesAt[i] >= 0) {
             color = TileColors::plant(color, state.plantSpeciesAt[i], state.plantGrowth[i]);
         }
+        // Дерево — вместо травы, а не поверх: растение на клетке одно, и
+        // где стоит дерево, травы там нет (см. treeSpeciesAt).
+        if (layers.plants && !state.treeSpeciesAt.empty() && state.treeSpeciesAt[i] >= 0) {
+            color = TileColors::tree(color, state.treeSpeciesAt[i], state.plantGrowth[i]);
+        }
         // Вода — не полупрозрачный слой поверх, а готовый цвет тайла
         // (TileColors::water непрозрачен), поэтому просто заменяет
         // предыдущий.

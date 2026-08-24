@@ -521,7 +521,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             }
         }
         const std::size_t index = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
-        if (index < snapshot.plantSpeciesAt.size() && snapshot.plantSpeciesAt[index] >= 0) {
+        // Дерево выбирается тем же кликом и тем же видом цели, что и трава:
+        // растение на клетке одно, а какое именно — разбирается InfoPanel.
+        if ((index < snapshot.plantSpeciesAt.size() && snapshot.plantSpeciesAt[index] >= 0) ||
+            (index < snapshot.treeSpeciesAt.size() && snapshot.treeSpeciesAt[index] >= 0)) {
             targets.push_back(InfoPanel::Target{InfoPanel::Target::Kind::Plant, 0, x, y, true});
         }
         targets.push_back(InfoPanel::Target{InfoPanel::Target::Kind::Soil, 0, x, y, true});

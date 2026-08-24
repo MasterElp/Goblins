@@ -165,9 +165,19 @@ struct PlantConfig {
     // минералов — срок, а не дробная скорость (см.
     // core::PlantParams::humusDecayPeriod).
     int humus_decay_period = 50;
+
+    // Сколько видов деревьев в мире. Ядро обрежет значение до 1..5
+    // (core::kMinTreeSpecies/kMaxTreeSpecies).
+    int tree_species = 2;
+
+    // Какую долю карты занять деревьями при генерации, в тысячных. На
+    // порядок меньше травяной, и это не потолок: сколько деревьев мир
+    // прокормит, решают минералы в земле (core/Trees.hpp), а не эта
+    // настройка.
+    int tree_coverage = 10;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PlantConfig, grass_species, grass_coverage, mutation_rate,
-                                    humus_decay_period)
+                                    humus_decay_period, tree_species, tree_coverage)
 
 // Зеркало core::AnimalParams (core/generation/AnimalParams.hpp) — по той же
 // причине, что TerrainConfig и PlantConfig выше. Имена и значения по

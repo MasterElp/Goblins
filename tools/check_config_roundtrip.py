@@ -49,6 +49,7 @@ PROBE = {
         "soil_erosion_rate": 88,
     },
     "plants": {"grass_species": 9, "grass_coverage": 133, "mutation_rate": 202,
+                "tree_species": 4, "tree_coverage": 27,
                "humus_decay_period": 27},
     "animals": {"herbivore_species": 5, "predator_species": 4,
                 "herbivore_count": 211, "predator_count": 31, "mutation_rate": 175},

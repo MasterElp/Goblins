@@ -9,6 +9,7 @@ std::vector<ConstantInfo> coreConstants() {
     appendTerrainConstants(all);
     appendHydrologyConstants(all);
     appendGrassSeedingConstants(all);
+    appendTreeSeedingConstants(all);
     appendPlantGeneticsConstants(all);
     appendPlantSystemConstants(all);
     appendAnimalSeedingConstants(all);

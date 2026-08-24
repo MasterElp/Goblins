@@ -163,6 +163,11 @@ void drawTileGroup(const WorldState& state, ColumnWriter& writer, int x, int y) 
     if (state.plantSpeciesAt[index] >= 0) {
         writer.line("grass", TextFormat("sp%d  %.0f%%", state.plantSpeciesAt[index], state.plantGrowth[index] * 100.0f));
     }
+    // Дерево — своей строкой и со своей нумерацией видов ("tr", а не "sp"):
+    // список видов у него отдельный, и спутать их было бы легко.
+    if (index < state.treeSpeciesAt.size() && state.treeSpeciesAt[index] >= 0) {
+        writer.line("tree", TextFormat("tr%d  %.0f%%", state.treeSpeciesAt[index], state.plantGrowth[index] * 100.0f));
+    }
     // Сколько ещё зверей стоит на этой клетке — по ним и щёлкают, перебирая
     // выбор: без этого числа непонятно, почему клик по той же точке
     // показывает то одного, то другого.
@@ -213,11 +218,19 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
             break;
         case Target::Kind::Plant:
             if (state.areaWidth > 0 && target.x >= 0 && target.y >= 0 && target.x < state.areaWidth &&
-                target.y < state.areaHeight &&
-                state.plantSpeciesAt[static_cast<std::size_t>(target.y) * state.areaWidth + target.x] >= 0) {
-                const int species = state.plantSpeciesAt[static_cast<std::size_t>(target.y) * state.areaWidth + target.x];
-                title = TextFormat("Grass sp%d", species);
-                swatch = TileColors::plantSpecies(species);
+                target.y < state.areaHeight) {
+                const std::size_t cell = static_cast<std::size_t>(target.y) * state.areaWidth + target.x;
+                // Где стоит дерево, травы нет: растение на клетке одно,
+                // поэтому и заголовок берётся из того слоя, который занят.
+                if (cell < state.treeSpeciesAt.size() && state.treeSpeciesAt[cell] >= 0) {
+                    title = TextFormat("Tree tr%d", state.treeSpeciesAt[cell]);
+                    swatch = TileColors::treeSpecies(state.treeSpeciesAt[cell]);
+                } else if (state.plantSpeciesAt[cell] >= 0) {
+                    title = TextFormat("Grass sp%d", state.plantSpeciesAt[cell]);
+                    swatch = TileColors::plantSpecies(state.plantSpeciesAt[cell]);
+                } else {
+                    title = "Plant is gone";
+                }
             } else {
                 title = "Plant is gone";
             }

@@ -530,12 +530,17 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // Семена — тем же способом, что и растения: -1 значит "семени в
         // клетке нет".
         working_.seedSpeciesAt = decodeInts(layers, "seeds", cellCount, -1);
+        // Деревья — тем же способом: -1 значит "дерева в клетке нет".
+        working_.treeSpeciesAt = decodeInts(layers, "trees", cellCount, -1);
         working_.carcass = decodeScaled(layers, "carcass", cellCount, kFromHundredths);
         working_.danger = decodeScaled(layers, "danger", cellCount, kFromHundredths);
 
-        if (json.contains("plant_species")) {
-            working_.plantSpecies.clear();
-            for (const auto& archetype : json["plant_species"]) {
+        // Виды растений: два списка, у травы и у деревьев своя нумерация.
+        // Состав генома клиент не знает и не должен (07_TechStack.md, п.6) —
+        // читается всё, что прислали, парами "имя -> значение".
+        auto readPlantSpecies = [](const nlohmann::json& list) {
+            std::vector<std::vector<std::pair<std::string, int>>> species;
+            for (const auto& archetype : list) {
                 if (!archetype.is_object()) {
                     continue;
                 }
@@ -545,8 +550,15 @@ void NetworkClient::handleMessage(const std::string& payload) {
                         traits.emplace_back(name, value.get<int>());
                     }
                 }
-                working_.plantSpecies.push_back(std::move(traits));
+                species.push_back(std::move(traits));
             }
+            return species;
+        };
+        if (json.contains("plant_species")) {
+            working_.plantSpecies = readPlantSpecies(json["plant_species"]);
+        }
+        if (json.contains("tree_species")) {
+            working_.treeSpecies = readPlantSpecies(json["tree_species"]);
         }
 
         // Виды животных и само поголовье — тем же способом, что и трава
@@ -632,6 +644,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "danger", working_.danger, toFraction);
         applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
         applyChangedCells(json, "seeds", working_.seedSpeciesAt, [](int raw) { return raw; });
+        applyChangedCells(json, "trees", working_.treeSpeciesAt, [](int raw) { return raw; });
         // Поголовье — изменениями, как и слои, только правится не клетка,
         // а животное (см. протокол в server/NetworkServer.hpp).
         applyAnimalChanges(json);

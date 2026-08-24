@@ -9,6 +9,7 @@ add_library(core STATIC
     src/generation/TerrainGenerator.cpp
     src/generation/PlantGenetics.cpp
     src/generation/GrassSeeding.cpp
+    src/generation/TreeSeeding.cpp
     src/generation/AnimalGenetics.cpp
     src/generation/AnimalSeeding.cpp
 )

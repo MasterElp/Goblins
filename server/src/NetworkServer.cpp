@@ -30,6 +30,7 @@
 #include "core/components/PositionComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
+#include "core/components/TreeComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -95,6 +96,7 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     // выразить нельзя.
     species.assign(count, -1);
     seeds.assign(count, -1);
+    trees.assign(count, -1);
     // Животные — список, а не слой (см. NetworkServer.hpp): он собирается
     // заново на каждый снимок, поэтому здесь только очищается.
     animals.clear();
@@ -297,10 +299,15 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
         });
 
     registry.view<const PositionComponent, const PlantComponent, const PlantGenomeComponent>().each(
-        [&](const PositionComponent& pos, const PlantComponent& plant, const PlantGenomeComponent& genome) {
+        [&](const entt::entity entity, const PositionComponent& pos, const PlantComponent& plant,
+            const PlantGenomeComponent& genome) {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
-            out.species[i] = genome.species;
             out.growth[i] = toWire(plant.growth);
+            if (registry.all_of<TreeComponent>(entity)) {
+                out.trees[i] = genome.species;
+            } else {
+                out.species[i] = genome.species;
+            }
         });
 
     // Семена (SeedComponent) — вид того, что из семени вырастет, или -1.
@@ -559,7 +566,18 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
             }
             const auto& preyPosition = registry.get<const PositionComponent>(other);
             const auto& preyGenome = registry.get<const AnimalGenomeComponent>(other);
-            preys.push_back(HuntPrey{preyPosition.x, preyPosition.y, preyGenome.speed, preyGenome.defense});
+            // Под кроной добычу не высматривают (kCoverSight,
+            // core/Hunting.hpp). Наблюдатель обязан видеть ровно то же, что
+            // и хищник, иначе нарисованная дорога разойдётся с настоящей.
+            bool underTree = false;
+            for (const auto tile : world.area().cellAt(preyPosition.x, preyPosition.y).entities) {
+                if (registry.all_of<PlantComponent, TreeComponent>(tile)) {
+                    underTree = true;
+                    break;
+                }
+            }
+            preys.push_back(
+                HuntPrey{preyPosition.x, preyPosition.y, preyGenome.speed, preyGenome.defense, underTree});
         }
 
         const HuntChoice choice = chooseHuntTarget(
@@ -820,8 +838,8 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     // влаги за тик) живёт в тысячных долях и от округления превратилась
     // бы в ноль.
     auto speciesJson = nlohmann::json::array();
-    for (const auto& archetype :
-         world_.registry().get<const PlantSpeciesComponent>(world_.worldEntity()).archetypes) {
+    const auto& plantSpecies = world_.registry().get<const PlantSpeciesComponent>(world_.worldEntity());
+    for (const auto& archetype : plantSpecies.grasses) {
         nlohmann::json record;
         record["species"] = archetype.species;
         for (const auto& trait : kGrassTraits) {
@@ -830,6 +848,19 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
         speciesJson.push_back(std::move(record));
     }
     message["plant_species"] = speciesJson;
+
+    // Виды деревьев — отдельным списком по той же причине, что и слой:
+    // нумерация у них своя, и таблица черт своя (kTreeTraits).
+    auto treeSpeciesJson = nlohmann::json::array();
+    for (const auto& archetype : plantSpecies.trees) {
+        nlohmann::json record;
+        record["species"] = archetype.species;
+        for (const auto& trait : kTreeTraits) {
+            record[trait.name] = archetype.*trait.gene;
+        }
+        treeSpeciesJson.push_back(std::move(record));
+    }
+    message["tree_species"] = treeSpeciesJson;
 
     // Виды животных — по тем же правилам, что и виды травы: клиенту нужны
     // и цвет по индексу, и сами числа, а перечисляет их таблица черт, а не
@@ -913,6 +944,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["layers"]["species"] = layers.species;
     message["layers"]["growth"] = layers.growth;
     message["layers"]["seeds"] = layers.seeds;
+    message["layers"]["trees"] = layers.trees;
 
     return message.dump();
 }
@@ -943,6 +975,7 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
         {"species", {&previous.species, &current.species}},
         {"growth", {&previous.growth, &current.growth}},
         {"seeds", {&previous.seeds, &current.seeds}},
+        {"trees", {&previous.trees, &current.trees}},
     };
     for (const auto& [name, arrays] : layers) {
         auto pairs = changedCells(*arrays.first, *arrays.second);

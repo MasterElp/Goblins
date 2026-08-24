@@ -34,6 +34,7 @@ void appendHydrologyConstants(std::vector<ConstantInfo>& out);
 void appendPlantSystemConstants(std::vector<ConstantInfo>& out);
 void appendPlantGeneticsConstants(std::vector<ConstantInfo>& out);
 void appendGrassSeedingConstants(std::vector<ConstantInfo>& out);
+void appendTreeSeedingConstants(std::vector<ConstantInfo>& out);
 void appendAnimalSystemConstants(std::vector<ConstantInfo>& out);
 void appendAnimalGeneticsConstants(std::vector<ConstantInfo>& out);
 void appendAnimalSeedingConstants(std::vector<ConstantInfo>& out);
