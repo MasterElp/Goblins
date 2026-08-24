@@ -27,6 +27,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/GoblinComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/TreeComponent.hpp"
@@ -550,8 +551,11 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
 
     if (predator && desire == Desire::Food) {
         std::vector<HuntPrey> preys;
-        for (const auto other :
-             registry.view<const AnimalComponent, const AnimalGenomeComponent, const PositionComponent>()) {
+        // Гоблины из списка добычи исключены, и это не украшение: их не
+        // видит сама AnimalSystem (см. её список preys), а нарисованная
+        // наблюдателю дорога обязана вести туда же, куда пойдёт хищник.
+        for (const auto other : registry.view<const AnimalComponent, const AnimalGenomeComponent,
+                                              const PositionComponent>(entt::exclude<GoblinComponent>)) {
             if (other == entity || registry.all_of<PredatorComponent>(other)) {
                 continue;
             }
@@ -679,7 +683,12 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
         // Ищем по идентификатору, а не по клетке: животное ходит, и к
         // моменту сборки сообщения оно уже не там, где по нему кликнули, —
         // в этом и смысл слежения.
-        for (const auto entity : registry.view<const IdentityComponent, const AnimalComponent>()) {
+        // Гоблина по этому пути искать нельзя: карточка ниже читает
+        // DesireComponent, которого у него нет вовсе (см.
+        // GoblinDesireComponent). Смотреть за гоблином — своя ветка, и она
+        // появится вместе с его протоколом.
+        for (const auto entity :
+             registry.view<const IdentityComponent, const AnimalComponent>(entt::exclude<GoblinComponent>)) {
             if (registry.get<const IdentityComponent>(entity).id != target.id) {
                 continue;
             }

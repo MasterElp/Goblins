@@ -44,6 +44,11 @@ public:
         std::vector<int> trees;
         std::vector<int> herbivores;
         std::vector<int> predators;
+        // И третий вектор — гоблины по племенам. Отдельный по той же
+        // причине, по которой раздельны два звериных: нумерование у племён
+        // своё (GoblinTribesComponent), и сложить их с видами зверя значило
+        // бы смешать два разных счёта.
+        std::vector<int> goblins;
 
         // Средний геном всего живого этой диеты: по одному числу на черту
         // из её таблицы (kGrassTraits / herbivoreTraits / predatorTraits),
@@ -63,6 +68,7 @@ public:
         std::vector<int> treeGenome;
         std::vector<int> herbivoreGenome;
         std::vector<int> predatorGenome;
+        std::vector<int> goblinGenome;
     };
 
     // Шаг между точками в тиках у только что заведённой летописи. Не

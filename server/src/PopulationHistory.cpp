@@ -5,7 +5,10 @@
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
+#include "core/components/GoblinComponent.hpp"
+#include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
+#include "core/generation/GoblinGenetics.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
@@ -72,7 +75,11 @@ std::vector<int> countAnimals(const World& world, bool wantPredators) {
     const auto& species = registry.get<const AnimalSpeciesComponent>(world.worldEntity());
     const auto& archetypes = wantPredators ? species.predators : species.herbivores;
     std::vector<int> counts(archetypes.size(), 0);
-    registry.view<const AnimalComponent, const AnimalGenomeComponent>().each(
+    // Гоблин носит то же тело и тот же тип генома (core/Body.hpp), поэтому
+    // перебор "по телу" его захватывает — а species у него означает племя, и
+    // без исключения он приписывался бы к виду травоядных с тем же номером.
+    registry.view<const AnimalComponent, const AnimalGenomeComponent>(entt::exclude<GoblinComponent>)
+        .each(
         [&](const entt::entity entity, const AnimalComponent& /*animal*/, const AnimalGenomeComponent& genome) {
             if (registry.all_of<PredatorComponent>(entity) != wantPredators) {
                 return;
@@ -138,12 +145,41 @@ std::vector<int> averageTreeGenome(const World& world) {
     });
 }
 
+// Гоблины — по племенам. Своя функция, а не третий случай в countAnimals:
+// племена живут в своём компоненте и своей таблице черт, и общий параметр
+// "кого считать" пришлось бы делать перечислением из трёх значений ради
+// одной ветки.
+std::vector<int> countGoblins(const World& world) {
+    const auto& registry = world.registry();
+    const auto& tribes = registry.get<const GoblinTribesComponent>(world.worldEntity());
+    std::vector<int> counts(tribes.tribes.size(), 0);
+    registry.view<const AnimalComponent, const AnimalGenomeComponent, const GoblinComponent>().each(
+        // GoblinComponent в списке параметров нет: пустой тег EnTT не
+        // хранит и в each не передаёт.
+        [&](const AnimalComponent& /*body*/, const AnimalGenomeComponent& genome) {
+            if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
+                ++counts[static_cast<std::size_t>(genome.species)];
+            }
+        });
+    return counts;
+}
+
+std::vector<int> averageGoblinGenome(const World& world) {
+    const auto& registry = world.registry();
+    const auto traits = goblinTraits();
+    return averageGenome(traits, traits.size(), [&](auto&& visit) {
+        registry.view<const AnimalComponent, const AnimalGenomeComponent, const GoblinComponent>().each(
+            [&](const AnimalComponent& /*body*/, const AnimalGenomeComponent& genome) { visit(genome); });
+    });
+}
+
 std::vector<int> averageAnimalGenome(const World& world, bool wantPredators) {
     const auto& registry = world.registry();
     const auto traits = wantPredators ? predatorTraits() : herbivoreTraits();
     return averageGenome(traits, traits.size(), [&](auto&& visit) {
-        registry.view<const AnimalComponent, const AnimalGenomeComponent>().each(
-            [&](const entt::entity entity, const AnimalComponent& /*animal*/, const AnimalGenomeComponent& genome) {
+        registry.view<const AnimalComponent, const AnimalGenomeComponent>(entt::exclude<GoblinComponent>)
+            .each([&](const entt::entity entity, const AnimalComponent& /*animal*/,
+                      const AnimalGenomeComponent& genome) {
                 if (registry.all_of<PredatorComponent>(entity) == wantPredators) {
                     visit(genome);
                 }
@@ -178,6 +214,10 @@ nlohmann::json encodePoint(const PopulationHistory::Point& point) {
     // два элемента, и читающая сторона обязана это пережить (см. fromJson).
     entry.push_back(point.trees);
     entry.push_back(point.treeGenome);
+    // Гоблины — тем же способом и по той же причине: элемент в конец.
+    // Летописи миров, прожитых до них, короче на эти два элемента.
+    entry.push_back(point.goblins);
+    entry.push_back(point.goblinGenome);
     return entry;
 }
 
@@ -223,6 +263,8 @@ void PopulationHistory::record(const World& world) {
     point.treeGenome = averageTreeGenome(world);
     point.herbivoreGenome = averageAnimalGenome(world, /*wantPredators=*/false);
     point.predatorGenome = averageAnimalGenome(world, /*wantPredators=*/true);
+    point.goblins = countGoblins(world);
+    point.goblinGenome = averageGoblinGenome(world);
     points_.push_back(std::move(point));
 
     if (points_.size() > kMaxPoints) {

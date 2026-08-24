@@ -15,6 +15,9 @@ std::vector<ConstantInfo> coreConstants() {
     appendAnimalSeedingConstants(all);
     appendAnimalGeneticsConstants(all);
     appendAnimalSystemConstants(all);
+    appendGoblinSeedingConstants(all);
+    appendGoblinGeneticsConstants(all);
+    appendGoblinSystemConstants(all);
     return all;
 }
 

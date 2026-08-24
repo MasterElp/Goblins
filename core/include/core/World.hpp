@@ -4,6 +4,7 @@
 
 #include "core/Area.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
+#include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
@@ -39,6 +40,7 @@ public:
         registry_.emplace<WorldPropertiesComponent>(worldEntity_);
         registry_.emplace<PlantSpeciesComponent>(worldEntity_);
         registry_.emplace<AnimalSpeciesComponent>(worldEntity_);
+        registry_.emplace<GoblinTribesComponent>(worldEntity_);
     }
 
     // Полный сброс мира на месте: все Entity удаляются, Область
@@ -56,6 +58,7 @@ public:
         registry_.emplace<WorldPropertiesComponent>(worldEntity_);
         registry_.emplace<PlantSpeciesComponent>(worldEntity_);
         registry_.emplace<AnimalSpeciesComponent>(worldEntity_);
+        registry_.emplace<GoblinTribesComponent>(worldEntity_);
     }
 
     entt::registry& registry() { return registry_; }

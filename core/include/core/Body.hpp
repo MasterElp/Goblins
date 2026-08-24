@@ -205,4 +205,34 @@ inline bool bodyDied(const AnimalComponent& state, const AnimalGenomeComponent& 
     return state.age >= genome.maxAge || state.health <= 0;
 }
 
+// Что делает с телом съеденная биомасса — одинаково для травы и для мяса.
+//
+// Одинаково не по недосмотру: биомасса куста и биомасса туши меряются одной
+// шкалой (см. kEnergyPerBiomass), и разница между диетами остаётся в том,
+// ГДЕ взять кусок, а не в том, сколько в нём проку. Воду еда даёт по той же
+// причине: трава сочная, в туше есть кровь, и наевшийся долго может не
+// искать реку.
+inline void feedBody(AnimalComponent& state, const AnimalGenomeComponent& genome, int eaten) {
+    if (eaten <= 0) {
+        return;
+    }
+    state.energy = std::min(genome.energyCapacity, state.energy + eaten * kEnergyPerBiomass);
+    state.water = std::min(genome.waterCapacity, state.water + eaten * kWaterPerFood);
+}
+
+// Куда девается крупица белка, попавшая в тело: в запас, а если тело больше
+// не удержит — насквозь, и ляжет навозом там, где существо окажется. Потолок
+// — собственная потребность на полный рост: больше своего размера в себе не
+// унесёшь.
+inline void takeProtein(AnimalComponent& state, const AnimalGenomeComponent& genome, int grains) {
+    const int cap = std::max(1, genome.proteinNeed);
+    for (int grain = 0; grain < grains; ++grain) {
+        if (state.protein < cap) {
+            ++state.protein;
+        } else {
+            ++state.dung;
+        }
+    }
+}
+
 } // namespace goblins

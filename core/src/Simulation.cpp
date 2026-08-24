@@ -2,9 +2,11 @@
 
 #include "core/generation/AnimalSeeding.hpp"
 #include "core/generation/BoulderScatter.hpp"
+#include "core/generation/GoblinSeeding.hpp"
 #include "core/generation/GrassSeeding.hpp"
 #include "core/generation/TreeSeeding.hpp"
 #include "core/systems/AnimalSystem.hpp"
+#include "core/systems/GoblinSystem.hpp"
 #include "core/systems/HydrologySystem.hpp"
 #include "core/systems/PlantSystem.hpp"
 #include "core/systems/TimeSystem.hpp"
@@ -20,6 +22,7 @@ constexpr unsigned kBoulderSeedOffset = 1000;
 constexpr unsigned kPlantSeedOffset = 2000;
 constexpr unsigned kTreeSeedOffset = 2500;
 constexpr unsigned kAnimalSeedOffset = 3000;
+constexpr unsigned kGoblinSeedOffset = 3500;
 
 } // namespace
 
@@ -49,6 +52,12 @@ GenerationStats generateWorld(World& world, int width, int height, const WorldGe
     //    карте (02_CorePrinciples.md, п.5).
     seedAnimals(world, params.animals, params.seed + kAnimalSeedOffset);
 
+    // 5. Появление разумных существ — последним (02_CorePrinciples.md, п.5):
+    //    разум возникает в уже сложившемся мире, а не вместе с ним. Гоблин
+    //    выпускается туда, где растёт трава, а падаль к этому моменту ещё не
+    //    появилась — умирать было некому.
+    seedGoblins(world, params.goblins, params.seed + kGoblinSeedOffset);
+
     return stats;
 }
 
@@ -69,6 +78,12 @@ void addDefaultSystems(GameLoop& loop) {
     // Травоядные и хищники — одна система: животное у них одно, разная
     // только диета (см. AnimalSystem.hpp).
     loop.addSystem(AnimalSystem);
+    // И самыми последними — гоблины: они ходят по миру, уже прожившему тик
+    // целиком, и видят траву такой, какой её оставило стадо, а падаль —
+    // такой, какой её оставили хищники. Отдельная система, потому что
+    // отличает гоблина от зверя не тело, а то, откуда берутся решения
+    // (см. GoblinSystem.hpp).
+    loop.addSystem(GoblinSystem);
 }
 
 } // namespace goblins

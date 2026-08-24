@@ -32,6 +32,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/GoblinComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -276,6 +277,14 @@ nlohmann::json buildEntitiesJson(const World& world) {
             // не доехала бы до файла.
             record["genome"] = registry.all_of<TreeComponent>(entity) ? genomeToJson(*genome, kTreeTraits)
                                                                        : genomeToJson(*genome, kGrassTraits);
+        }
+        // Гоблин носит то же тело, но записан как животное он быть не
+        // может: при чтении ему достался бы тег диеты, и в мир вернулся бы
+        // травоядный зверь с гоблинским геномом. Своя запись у гоблина
+        // появится вместе с его протоколом; пока сохранённый мир его теряет,
+        // и это честнее порчи.
+        if (registry.all_of<GoblinComponent>(entity)) {
+            continue;
         }
         if (const auto* animal = registry.try_get<AnimalComponent>(entity)) {
             record["animal"] = {{"age", animal->age},

@@ -3,6 +3,7 @@
 #include "core/GameLoop.hpp"
 #include "core/World.hpp"
 #include "core/generation/AnimalParams.hpp"
+#include "core/generation/GoblinParams.hpp"
 #include "core/generation/PlantParams.hpp"
 #include "core/generation/TerrainGenerator.hpp"
 
@@ -34,6 +35,7 @@ struct WorldGenParams {
     int boulderCount = 40;
     PlantParams plants{};
     AnimalParams animals{};
+    GoblinParams goblins{};
 };
 
 // Рождение мира: полный сброс (пустой registry, свежая Область заданного

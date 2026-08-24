@@ -28,6 +28,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/TreeComponent.hpp"
+#include "core/components/GoblinComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -265,8 +266,13 @@ void printAnimalStats(const goblins::World& world) {
     std::vector<int> predatorPopulation(species.predators.size(), 0);
     std::vector<int> predatorFemales(species.predators.size(), 0);
     std::size_t animals = 0;
+    // Гоблин носит то же тело и тот же тип генома, что зверь (core/Body.hpp),
+    // поэтому всякий перебор "по телу" его теперь захватывает. Здесь считают
+    // поголовье по видам животных, и гоблин в этих списках был бы чужим
+    // номером вида.
     world.registry()
-        .view<const goblins::AnimalComponent, const goblins::AnimalGenomeComponent>()
+        .view<const goblins::AnimalComponent, const goblins::AnimalGenomeComponent>(
+            entt::exclude<goblins::GoblinComponent>)
         .each([&](const auto entity, const goblins::AnimalComponent& animal,
                    const goblins::AnimalGenomeComponent& genome) {
             ++animals;

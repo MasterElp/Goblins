@@ -5,6 +5,7 @@ add_library(core STATIC
     src/systems/HydrologySystem.cpp
     src/systems/PlantSystem.cpp
     src/systems/AnimalSystem.cpp
+    src/systems/GoblinSystem.cpp
     src/generation/BoulderScatter.cpp
     src/generation/TerrainGenerator.cpp
     src/generation/PlantGenetics.cpp
@@ -12,6 +13,8 @@ add_library(core STATIC
     src/generation/TreeSeeding.cpp
     src/generation/AnimalGenetics.cpp
     src/generation/AnimalSeeding.cpp
+    src/generation/GoblinGenetics.cpp
+    src/generation/GoblinSeeding.cpp
 )
 
 target_include_directories(core PUBLIC include)

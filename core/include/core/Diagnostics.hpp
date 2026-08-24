@@ -38,6 +38,9 @@ void appendTreeSeedingConstants(std::vector<ConstantInfo>& out);
 void appendAnimalSystemConstants(std::vector<ConstantInfo>& out);
 void appendAnimalGeneticsConstants(std::vector<ConstantInfo>& out);
 void appendAnimalSeedingConstants(std::vector<ConstantInfo>& out);
+void appendGoblinSystemConstants(std::vector<ConstantInfo>& out);
+void appendGoblinGeneticsConstants(std::vector<ConstantInfo>& out);
+void appendGoblinSeedingConstants(std::vector<ConstantInfo>& out);
 
 // Все константы ядра разом, в порядке стадий игрового цикла
 // (06_GameLoop.md, п.3): генерация террейна, затем гидрология, затем

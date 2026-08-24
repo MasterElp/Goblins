@@ -30,6 +30,7 @@
 #include "core/Mating.hpp"
 #include "core/Needs.hpp"
 #include "core/Scale.hpp"
+#include "core/Share.hpp"
 #include "core/TileSnapshot.hpp"
 #include "core/Walk.hpp"
 
@@ -216,16 +217,10 @@ constexpr int kLameShare = 700;
 // Собираются при обходе животных и исполняются после него. Отдельный шаг
 // нужен там же, где и в PlantSystem: на один куст, одну тушу и один
 // водопой могут претендовать сразу несколько животных, и решать спор
-// порядком обхода Entity нельзя (04_WorldModel.md, п.8). Спор делится
-// долями: если желаемого меньше, чем просят, каждый получает свою часть —
-// исход не зависит ни от порядка обхода, ни от того, кого EnTT хранит
-// раньше.
-struct ShareIntent {
-    std::size_t cell = 0;      // клетка с кустом, тушей или водой
-    int animal = 0;            // индекс в снимке животных
-    std::uint64_t id = 0;      // постоянный идентификатор — им сортируем
-    int want = 0;
-};
+// порядком обхода Entity нельзя (04_WorldModel.md, п.8).
+//
+// Само намерение поделиться клеткой и закон дележа живут теперь в
+// core/Share.hpp: за один и тот же куст приходят уже не только звери.
 
 struct StepIntent {
     int animal = 0;
@@ -280,13 +275,6 @@ struct Animal {
     int thirst = 0;
     int fear = 0;
 };
-
-bool sortByCellThenId(const ShareIntent& a, const ShareIntent& b) {
-    if (a.cell != b.cell) {
-        return a.cell < b.cell;
-    }
-    return a.id < b.id;
-}
 
 // Какое желание сейчас гонит животное.
 //
@@ -1145,40 +1133,29 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         int eatenTotal = 0;
         int releasedTotal = 0;
         for (std::size_t k = n; k < m; ++k) {
-            // Доля просящего от того, что есть: целочисленно, поэтому
-            // делится ровно столько, сколько на кусте выросло, и ни
-            // тысячной больше.
-            const int eaten = std::min(bites[k].want, static_cast<int>(static_cast<long long>(bites[k].want) *
-                                                                       growthBefore / demand));
+            const int eaten = shareOf(bites[k].want, growthBefore, demand);
             if (eaten <= 0) {
                 continue;
             }
-            auto& state = *animals[static_cast<std::size_t>(bites[k].animal)].state;
-            const auto& genome = *animals[static_cast<std::size_t>(bites[k].animal)].genome;
+            auto& state = *animals[static_cast<std::size_t>(bites[k].claimant)].state;
+            const auto& genome = *animals[static_cast<std::size_t>(bites[k].claimant)].genome;
 
-            state.energy = std::min(genome.energyCapacity, state.energy + eaten * kEnergyPerBiomass);
-
-            // Трава сочная (2): часть жажды утоляется самой кормёжкой. Вода
-            // считается прямо от съеденной биомассы — тем же числом, что и
-            // у мяса (kWaterPerFood): отдельный множитель на каждую еду был
-            // невидимой величиной, которая ни разу ни на что не повлияла.
-            state.water = std::min(genome.waterCapacity, state.water + eaten * kWaterPerFood);
-
+            feedBody(state, genome, eaten);
             eatenTotal += eaten;
 
-            const int proteinCap = std::max(1, genome.proteinNeed);
+            // Крупицы белка достаются едоку целыми: сколько причитается на
+            // всё съеденное им И теми, кто был до него, минус уже
+            // розданное. Накопителя доли (proteinPending) при этом не нужно
+            // ни одному из них — куст отдаёт свои крупицы здесь и сейчас,
+            // ровно по разу каждую.
             const int owed =
                 growthBefore > 0 ? std::min(mineralsBefore, mineralsBefore * eatenTotal / growthBefore) : 0;
+            int taken = 0;
             for (int grain = releasedTotal; grain < owed && plant->minerals > 0; ++grain) {
                 --plant->minerals;
-                if (state.protein < proteinCap) {
-                    ++state.protein;
-                } else {
-                    // Тело больше не удержит — крупица проходит насквозь и
-                    // ляжет навозом там, где животное окажется.
-                    ++state.dung;
-                }
+                ++taken;
             }
+            takeProtein(state, genome, taken);
             releasedTotal = std::max(releasedTotal, owed);
         }
 
@@ -1212,31 +1189,18 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const int meatBefore = carcass->meat;
 
         for (std::size_t k = n; k < m; ++k) {
-            const int eaten = std::min(meals[k].want, static_cast<int>(static_cast<long long>(meals[k].want) *
-                                                                       meatBefore / demand));
+            const int eaten = shareOf(meals[k].want, meatBefore, demand);
             if (eaten <= 0) {
                 continue;
             }
-            auto& state = *animals[static_cast<std::size_t>(meals[k].animal)].state;
-            const auto& genome = *animals[static_cast<std::size_t>(meals[k].animal)].genome;
+            auto& state = *animals[static_cast<std::size_t>(meals[k].claimant)].state;
+            const auto& genome = *animals[static_cast<std::size_t>(meals[k].claimant)].genome;
 
-            state.energy = std::min(genome.energyCapacity, state.energy + eaten * kEnergyPerBiomass);
-            // В мясе есть кровь: наевшийся хищник какое-то время может не
-            // искать воду.
-            state.water = std::min(genome.waterCapacity, state.water + eaten * kWaterPerFood);
+            feedBody(state, genome, eaten);
 
             const int meatNow = carcass->meat;
             carcass->meat = std::max(0, carcass->meat - eaten);
-            const int grains = releaseCarcassProtein(*carcass, meatNow, meatNow - carcass->meat);
-
-            const int proteinCap = std::max(1, genome.proteinNeed);
-            for (int g = 0; g < grains; ++g) {
-                if (state.protein < proteinCap) {
-                    ++state.protein;
-                } else {
-                    ++state.dung;
-                }
-            }
+            takeProtein(state, genome, releaseCarcassProtein(*carcass, meatNow, meatNow - carcass->meat));
         }
         n = m;
     }
@@ -1265,8 +1229,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // спор за один водопой решается тем, что все пьющие делят одну
         // клетку, а не тем, насколько она от этого просела.
         for (std::size_t k = n; k < m; ++k) {
-            auto& state = *animals[static_cast<std::size_t>(drinks[k].animal)].state;
-            const auto& genome = *animals[static_cast<std::size_t>(drinks[k].animal)].genome;
+            auto& state = *animals[static_cast<std::size_t>(drinks[k].claimant)].state;
+            const auto& genome = *animals[static_cast<std::size_t>(drinks[k].claimant)].genome;
             state.water = std::min(genome.waterCapacity, state.water + drinks[k].want);
         }
         n = m;
