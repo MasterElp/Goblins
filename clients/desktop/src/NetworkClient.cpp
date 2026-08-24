@@ -363,6 +363,13 @@ void NetworkClient::applyPopulationHistory(const nlohmann::json& message, bool r
             point.herbivoreGenome = decodeIntArray(entry[5]);
             point.predatorGenome = decodeIntArray(entry[6]);
         }
+        // Деревья дописаны ещё позже — восьмым и девятым. У точек из мира,
+        // прожитого без них, их нет, и это не повод потерять точку: график
+        // рощ такую часть кривой просто не начинает.
+        if (entry.size() > 8) {
+            point.trees = decodeIntArray(entry[7]);
+            point.treeGenome = decodeIntArray(entry[8]);
+        }
         working_.populationHistory.push_back(std::move(point));
     }
 }
@@ -393,6 +400,7 @@ void NetworkClient::applyPopulationTraits(const nlohmann::json& history) {
     };
     const auto& traits = history["traits"];
     working_.plantTraits = read(traits.contains("plants") ? traits["plants"] : nlohmann::json{});
+    working_.treeTraits = read(traits.contains("trees") ? traits["trees"] : nlohmann::json{});
     working_.herbivoreTraits = read(traits.contains("herbivores") ? traits["herbivores"] : nlohmann::json{});
     working_.predatorTraits = read(traits.contains("predators") ? traits["predators"] : nlohmann::json{});
 }

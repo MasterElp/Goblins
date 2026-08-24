@@ -47,6 +47,23 @@ std::vector<int> countPlants(const World& world) {
     return counts;
 }
 
+// Деревья — своим вектором, а не вместе с травой: нумерация видов у них
+// своя (PlantSpeciesComponent), и вид 0 на общем графике оказался бы то
+// травой, то рощей. Та же причина, по которой порознь считаются травоядные
+// и хищники.
+std::vector<int> countTrees(const World& world) {
+    const auto& registry = world.registry();
+    const auto& archetypes = registry.get<const PlantSpeciesComponent>(world.worldEntity()).trees;
+    std::vector<int> counts(archetypes.size(), 0);
+    registry.view<const TreeComponent, const PlantComponent, const PlantGenomeComponent>().each(
+        [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) {
+            if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
+                ++counts[static_cast<std::size_t>(genome.species)];
+            }
+        });
+    return counts;
+}
+
 // Животные — по одному вектору на диету: индекс вида у травоядных и у
 // хищников свой, и сложить их в один вектор значило бы смешать два разных
 // нумерования. wantPredators выбирает, чьё поголовье считается.
@@ -113,6 +130,14 @@ std::vector<int> averagePlantGenome(const World& world) {
     });
 }
 
+std::vector<int> averageTreeGenome(const World& world) {
+    const auto& registry = world.registry();
+    return averageGenome(kTreeTraits, kTreeTraitCount, [&](auto&& visit) {
+        registry.view<const TreeComponent, const PlantComponent, const PlantGenomeComponent>().each(
+            [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) { visit(genome); });
+    });
+}
+
 std::vector<int> averageAnimalGenome(const World& world, bool wantPredators) {
     const auto& registry = world.registry();
     const auto traits = wantPredators ? predatorTraits() : herbivoreTraits();
@@ -147,6 +172,12 @@ nlohmann::json encodePoint(const PopulationHistory::Point& point) {
     entry.push_back(point.plantGenome);
     entry.push_back(point.herbivoreGenome);
     entry.push_back(point.predatorGenome);
+    // Деревья дописаны последними, как в своё время хищники и средние
+    // геномы: элемент в конец — единственный способ растить эту запись без
+    // смены формата. Летописи миров, прожитых до деревьев, короче на эти
+    // два элемента, и читающая сторона обязана это пережить (см. fromJson).
+    entry.push_back(point.trees);
+    entry.push_back(point.treeGenome);
     return entry;
 }
 
@@ -185,9 +216,11 @@ void PopulationHistory::record(const World& world) {
     Point point;
     point.tick = tick;
     point.plants = countPlants(world);
+    point.trees = countTrees(world);
     point.herbivores = countAnimals(world, /*wantPredators=*/false);
     point.predators = countAnimals(world, /*wantPredators=*/true);
     point.plantGenome = averagePlantGenome(world);
+    point.treeGenome = averageTreeGenome(world);
     point.herbivoreGenome = averageAnimalGenome(world, /*wantPredators=*/false);
     point.predatorGenome = averageAnimalGenome(world, /*wantPredators=*/true);
     points_.push_back(std::move(point));
@@ -274,6 +307,13 @@ void PopulationHistory::fromJson(const nlohmann::json& json) {
             point.plantGenome = readInts(entry[4]);
             point.herbivoreGenome = readInts(entry[5]);
             point.predatorGenome = readInts(entry[6]);
+        }
+        // Деревья дописаны позже средних геномов — тем же способом и с той
+        // же оговоркой: у точек постарше их нет, и это не битый файл, а
+        // другое прошлое, в котором деревьев не было вовсе.
+        if (entry.size() > 8) {
+            point.trees = readInts(entry[7]);
+            point.treeGenome = readInts(entry[8]);
         }
         points_.push_back(std::move(point));
     }

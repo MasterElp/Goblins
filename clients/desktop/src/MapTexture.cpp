@@ -55,17 +55,17 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
         if (layers.plants && state.plantSpeciesAt[i] >= 0) {
             color = TileColors::plant(color, state.plantSpeciesAt[i], state.plantGrowth[i]);
         }
-        // Дерево — вместо травы, а не поверх: растение на клетке одно, и
-        // где стоит дерево, травы там нет (см. treeSpeciesAt).
-        if (layers.plants && !state.treeSpeciesAt.empty() && state.treeSpeciesAt[i] >= 0) {
-            color = TileColors::tree(color, state.treeSpeciesAt[i], state.plantGrowth[i]);
-        }
         // Вода — не полупрозрачный слой поверх, а готовый цвет тайла
         // (TileColors::water непрозрачен), поэтому просто заменяет
         // предыдущий.
         if (layers.moisture && state.waterDepth[i] > 0.0f) {
             color = TileColors::water(state.waterDepth[i]);
         }
+        // Дерева здесь нет намеренно. Тексель карты — это клетка, а дерево
+        // клеткой не выражается: оно из неё торчит вверх, на клетку выше
+        // (см. WorldScreen, где оно и рисуется фигурой поверх карты). В
+        // текстуре под ним остаётся голая земля — та, в которую оно
+        // воткнуто.
         pixels_[i] = color;
     }
 }

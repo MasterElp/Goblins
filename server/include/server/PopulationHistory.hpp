@@ -41,6 +41,7 @@ public:
         // нумерования — вид 0 на графике оказался бы то травой в поле, то
         // тем, кто её ест.
         std::vector<int> plants;
+        std::vector<int> trees;
         std::vector<int> herbivores;
         std::vector<int> predators;
 
@@ -59,6 +60,7 @@ public:
         // сервера. Клиенту имена уходят отдельно, вместе с world_init
         // (см. протокол в NetworkServer.hpp).
         std::vector<int> plantGenome;
+        std::vector<int> treeGenome;
         std::vector<int> herbivoreGenome;
         std::vector<int> predatorGenome;
     };

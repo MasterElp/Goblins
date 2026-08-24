@@ -929,6 +929,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
         return array;
     };
     history["traits"] = {{"plants", traitsToJson(kGrassTraits)},
+                          {"trees", traitsToJson(kTreeTraits)},
                           {"herbivores", traitsToJson(herbivoreTraits())},
                           {"predators", traitsToJson(predatorTraits())}};
     message["history"] = std::move(history);

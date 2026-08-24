@@ -178,6 +178,10 @@ struct WorldState {
     struct PopulationPoint {
         std::uint64_t tick = 0;
         std::vector<int> plants;
+        // Деревья — своим вектором, а не вместе с травой: нумерация видов у
+        // них своя, и вид 0 на общем графике оказался бы то травой, то
+        // рощей. Пусто у точек из мира, прожитого до появления деревьев.
+        std::vector<int> trees;
         std::vector<int> herbivores;
         // У точек из мира, прожитого до появления хищников, этого поля в
         // файле нет — оно остаётся пустым, и на графике такая часть кривой
@@ -192,6 +196,7 @@ struct WorldState {
         // геном вообще стали записывать): у среднего генома вымерших нет
         // смысла, и нулём его рисовать нельзя.
         std::vector<int> plantGenome;
+        std::vector<int> treeGenome;
         std::vector<int> herbivoreGenome;
         std::vector<int> predatorGenome;
     };
@@ -209,6 +214,7 @@ struct WorldState {
         int hi = 0;
     };
     std::vector<PopulationTrait> plantTraits;
+    std::vector<PopulationTrait> treeTraits;
     std::vector<PopulationTrait> herbivoreTraits;
     std::vector<PopulationTrait> predatorTraits;
     // Шаг между точками в тиках: сервер удваивает его, когда прореживает

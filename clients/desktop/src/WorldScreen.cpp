@@ -653,6 +653,44 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                           std::max(1, tileSize - 2 * inset), std::max(1, tileSize - 2 * inset), boulderColor);
         }
 
+        // Деревья — не тексель карты, а фигура поверх неё: тонкий
+        // вертикальный прямоугольник, воткнутый в свою клетку и выходящий
+        // на клетку выше. Клеткой дерево не выражается — оно из неё торчит,
+        // и в этом вся разница между ним и травой: трава есть свойство
+        // земли, дерево на земле стоит.
+        //
+        // Обход по строкам сверху вниз, и это не всё равно: дерево из
+        // нижней строки заходит на верхнюю, и рисоваться оно должно ПОВЕРХ
+        // тамошнего — иначе роща на склоне выглядела бы вывернутой
+        // наизнанку. Нижняя граница обхода на строку больше видимой ровно
+        // поэтому же.
+        if (showPlants && !snapshot.treeSpeciesAt.empty()) {
+            const int firstX = std::max(0, static_cast<int>(std::floor(viewX / tileSizeF)));
+            const int lastX = std::min(snapshot.areaWidth - 1,
+                                        static_cast<int>(std::floor((viewX + viewportW) / tileSizeF)));
+            const int firstY = std::max(0, static_cast<int>(std::floor(viewY / tileSizeF)));
+            const int lastY = std::min(snapshot.areaHeight - 1,
+                                        static_cast<int>(std::floor((viewY + viewportH) / tileSizeF)) + 1);
+            // Тонкий — треть клетки, но не тоньше пикселя: на вписанной в
+            // окно карте тайл сам в считанные пиксели, и треть от него
+            // округлилась бы в ничто.
+            const int trunkWidth = std::max(1, tileSize / 3);
+            const int trunkHeight = std::max(1, tileSize * 2);
+            for (int y = firstY; y <= lastY; ++y) {
+                for (int x = firstX; x <= lastX; ++x) {
+                    const std::size_t cell = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
+                    if (cell >= snapshot.treeSpeciesAt.size() || snapshot.treeSpeciesAt[cell] < 0) {
+                        continue;
+                    }
+                    const float screenX = static_cast<float>(x) * tileSizeF - viewX;
+                    const float screenY = static_cast<float>(y) * tileSizeF - viewY + kHudHeight;
+                    DrawRectangle(static_cast<int>(screenX) + (tileSize - trunkWidth) / 2,
+                                  static_cast<int>(screenY) - tileSize, trunkWidth, trunkHeight,
+                                  TileColors::tree(snapshot.treeSpeciesAt[cell], snapshot.plantGrowth[cell]));
+                }
+            }
+        }
+
         // Источники воды — тег без данных (истоки рек + "родники"),
         // отмечены кольцом поверх воды, как булыжники отмечены заливкой:
         // это не переключаемый слой почвы, а факт наличия/отсутствия.
