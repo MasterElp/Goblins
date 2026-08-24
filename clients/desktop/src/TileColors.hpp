@@ -93,14 +93,19 @@ inline Color seed(Color soilColor, int species) {
 // вся тёмно-зелёная: роща на карте должна читаться пятном с первого
 // взгляда, иначе весь смысл островков теряется. Пять — верхний предел
 // числа видов деревьев (core::kMaxTreeSpecies).
+// Сколько всего цветов у деревьев — оно же верхний предел числа их видов
+// (core::kMaxTreeSpecies). Наружу нужно тому, кто печёт спрайты сразу на
+// все виды (TreeSprites).
+constexpr int kTreeSpeciesCount = 5;
+
 inline Color treeSpecies(int species) {
-    static const Color palette[5] = {
+    static const Color palette[kTreeSpeciesCount] = {
         {24, 66, 32, 255}, {40, 78, 30, 255}, {18, 58, 48, 255}, {52, 74, 24, 255}, {30, 52, 34, 255},
     };
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 5];
+    return palette[species % kTreeSpeciesCount];
 }
 
 // Цвет ствола. Сплошной и тёмно-зелёный: дерево рисуется не текселем

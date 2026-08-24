@@ -17,6 +17,7 @@ add_executable(client
     src/main.cpp
     src/NetworkClient.cpp
     src/MapTexture.cpp
+    src/TreeSprites.cpp
     src/ConstantsOverlay.cpp
     src/PopulationGraph.cpp
     src/GenomeGraph.cpp

@@ -17,6 +17,7 @@
 #include "InfoPanel.hpp"
 #include "KeysPanel.hpp"
 #include "MapTexture.hpp"
+#include "TreeSprites.hpp"
 #include "PopulationGraph.hpp"
 #include "TileColors.hpp"
 
@@ -671,22 +672,40 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             const int firstY = std::max(0, static_cast<int>(std::floor(viewY / tileSizeF)));
             const int lastY = std::min(snapshot.areaHeight - 1,
                                         static_cast<int>(std::floor((viewY + viewportH) / tileSizeF)) + 1);
-            // Тонкий — треть клетки, но не тоньше пикселя: на вписанной в
-            // окно карте тайл сам в считанные пиксели, и треть от него
-            // округлилась бы в ничто.
+            // Рисунок дерева — шестнадцать пикселей на клетку (TreeSprites).
+            // Когда клетка сама меньше шести пикселей (карта, вписанная в
+            // окно), от него остаётся каша: рисуем тогда тем, чем рисовали
+            // до спрайтов — тонким стволом в треть клетки. Это не запасной
+            // путь на случай беды, а тот же предмет, изображённый настолько
+            // подробно, насколько его видно.
+            const bool drawSprites = tileSize >= 6;
             const int trunkWidth = std::max(1, tileSize / 3);
             const int trunkHeight = std::max(1, tileSize * 2);
+            // Время берётся раз на всю рощу: качание считается от него и от
+            // клетки, и один и тот же миг для всех деревьев кадра —
+            // единственное, что тут обязано совпадать.
+            const double now = GetTime();
             for (int y = firstY; y <= lastY; ++y) {
                 for (int x = firstX; x <= lastX; ++x) {
                     const std::size_t cell = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
                     if (cell >= snapshot.treeSpeciesAt.size() || snapshot.treeSpeciesAt[cell] < 0) {
                         continue;
                     }
+                    const int species = snapshot.treeSpeciesAt[cell];
+                    const float growth = snapshot.plantGrowth[cell];
                     const float screenX = static_cast<float>(x) * tileSizeF - viewX;
                     const float screenY = static_cast<float>(y) * tileSizeF - viewY + kHudHeight;
-                    DrawRectangle(static_cast<int>(screenX) + (tileSize - trunkWidth) / 2,
-                                  static_cast<int>(screenY) - tileSize, trunkWidth, trunkHeight,
-                                  TileColors::tree(snapshot.treeSpeciesAt[cell], snapshot.plantGrowth[cell]));
+                    if (drawSprites) {
+                        DrawTexturePro(TreeSprites::atlas(),
+                                       TreeSprites::source(species, TreeSprites::stageOf(growth),
+                                                            TreeSprites::frameOf(x, y, now)),
+                                       Rectangle{screenX, screenY - tileSizeF, tileSizeF, tileSizeF * 2.0f},
+                                       Vector2{0, 0}, 0.0f, WHITE);
+                    } else {
+                        DrawRectangle(static_cast<int>(screenX) + (tileSize - trunkWidth) / 2,
+                                      static_cast<int>(screenY) - tileSize, trunkWidth, trunkHeight,
+                                      TileColors::tree(species, growth));
+                    }
                 }
             }
         }
