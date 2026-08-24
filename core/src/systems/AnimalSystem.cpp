@@ -166,6 +166,26 @@ constexpr int kDiseaseRadius = 2;
 constexpr int kDiseaseCrowd = 3;
 constexpr int kDiseaseHarm = 1;
 
+// Насколько пугает чужой вид травоядных — тот, кто ест ту же траву. Второй
+// закон про "чужие рядом", парный болезни: та разводит по местности своих
+// (теснота одного вида), этот — чужих.
+//
+// Число заметно меньше полного страха, и в этом весь смысл. У хищника страх
+// на самом краю видимости уже выше порога желаний (kDesireFloor): зубы —
+// всегда повод уходить. Чужой вид — не зубы, а соперник за корм, поэтому
+// его страх:
+//   - не дотягивает до порога, пока сосед далеко (уходить из-за того, кого
+//     видно на другом конце луга, незачем);
+//   - проигрывает сильному голоду (kRivalFear меньше, чем голод у
+//     бедствующего): сытый уступает поляну, голодный стоит на своём;
+//   - проигрывает созревшему желанию пары (kMateDesire и выше): идущего к
+//     паре чужак с дороги не сгонит, иначе на тесной карте два вида
+//     заперли бы размножение друг другу — та же ловушка, в которую уже
+//     попадала болезнь.
+// Ровно из этих трёх условий и получается расхождение видов по карте, а не
+// вечное бегство.
+constexpr int kRivalFear = 500;
+
 // Желания. Ниже kDesireFloor желание никуда не гонит — животное считается
 // довольным и просто бродит. kDesireSwitch — насколько сильнее должно быть
 // другое желание, чтобы перебить уже выбранное: без этого запаса животное с
@@ -839,6 +859,40 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     animal.fear = scare;
                     threatX[a] = predatorX[b];
                     threatY[a] = predatorY[b];
+                    hasThreat[a] = true;
+                }
+            }
+
+            // Чужой вид травоядных: не зубы, но и не сородич — он ест ту
+            // же траву. Страх перед ним слабее хищничьего (kRivalFear
+            // против полного kFull) и оттого работает иначе: он не гонит
+            // прочь от всякого, кого видно, а только раздвигает тех, кто
+            // сошёлся вплотную, и уступает и голоду, и созревшему желанию
+            // пары (см. kRivalFear).
+            //
+            // Свой вид сюда не попадает намеренно: бояться своих значило бы
+            // разогнать собственное стадо и запереть себе размножение. Что
+            // делает с чужими СВОЙ вид, сказано отдельно и по-другому — это
+            // болезнь от тесноты (kDiseaseCrowd выше), а не страх.
+            //
+            // Перебор по всем животным, а не по короткому списку, как у
+            // хищников: чужой вид — это почти всё поголовье травоядных, и
+            // выигрывать тут нечего.
+            for (std::size_t b = 0; b < animals.size(); ++b) {
+                if (b == a || animals[b].predator || animals[b].genome->species == genome.species) {
+                    continue;
+                }
+                const int dx = animals[b].x - animal.x;
+                const int dy = animals[b].y - animal.y;
+                const float distance = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+                if (distance > sight) {
+                    continue;
+                }
+                const int scare = static_cast<int>(kRivalFear * (1.0f - distance / sight));
+                if (scare > animal.fear) {
+                    animal.fear = scare;
+                    threatX[a] = animals[b].x;
+                    threatY[a] = animals[b].y;
                     hasThreat[a] = true;
                 }
             }
@@ -1783,6 +1837,7 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kDiseaseRadius", static_cast<float>(kDiseaseRadius)});
     out.push_back({g, "kDiseaseCrowd", static_cast<float>(kDiseaseCrowd)});
     out.push_back({g, "kDiseaseHarm", kDiseaseHarm});
+    out.push_back({g, "kRivalFear", kRivalFear});
     out.push_back({g, "kDangerPerAttack", kDangerPerAttack});
     out.push_back({g, "kDangerRot", kDangerRot});
     out.push_back({g, "kDangerFearWeight", kDangerFearWeight});

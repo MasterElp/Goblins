@@ -1,7 +1,7 @@
 {
     "animals": {
         "herbivore_count": 400,
-        "herbivore_species": 4,
+        "herbivore_species": 3,
         "mutation_rate": 146,
         "predator_count": 20,
         "predator_species": 2
@@ -14,11 +14,11 @@
     "host": "127.0.0.1",
     "plants": {
         "grass_coverage": 395,
-        "grass_species": 4,
+        "grass_species": 3,
         "humus_decay_period": 801,
         "mutation_rate": 54,
-        "tree_coverage": 10,
-        "tree_species": 2
+        "tree_coverage": 22,
+        "tree_species": 3
     },
     "port": 9002,
     "saves_dir": "saves",
