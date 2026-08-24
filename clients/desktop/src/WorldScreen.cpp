@@ -678,7 +678,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             // до спрайтов — тонким стволом в треть клетки. Это не запасной
             // путь на случай беды, а тот же предмет, изображённый настолько
             // подробно, насколько его видно.
-            const bool drawSprites = tileSize >= 6;
+            const bool drawSprites = tileSize >= 6 && TreeSprites::ready();
             const int trunkWidth = std::max(1, tileSize / 3);
             const int trunkHeight = std::max(1, tileSize * 2);
             // Время берётся раз на всю рощу: качание считается от него и от

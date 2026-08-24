@@ -17,6 +17,8 @@ add_executable(client
     src/main.cpp
     src/NetworkClient.cpp
     src/MapTexture.cpp
+    src/Assets.cpp
+    src/SpriteAtlas.cpp
     src/TreeSprites.cpp
     src/ConstantsOverlay.cpp
     src/PopulationGraph.cpp
@@ -31,3 +33,13 @@ add_executable(client
 )
 
 target_link_libraries(client PRIVATE nlohmann_json ixwebsocket shared_config raylib raygui)
+
+# Ресурсы кладутся рядом с исполняемым файлом: клиент ищет их именно там
+# (Assets::directory), потому что рабочая директория — не то же самое, что
+# расположение exe, и запущенный ярлыком клиент иначе не нашёл бы ничего.
+# Копирование после каждой сборки, а не при установке: правку рисунка надо
+# видеть следующим же запуском, не собирая пакет.
+add_custom_command(TARGET client POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:client>/assets"
+    COMMENT "Copying assets next to the client")

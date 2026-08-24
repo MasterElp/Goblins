@@ -42,7 +42,7 @@
             "erosion_deposition": true,
             "minerals_spread": false
         },
-        "water_evaporation_rate": 158,
+        "water_evaporation_rate": 96,
         "water_source_count": 7,
         "water_source_depth": 1009
     },

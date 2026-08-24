@@ -1,127 +1,30 @@
 #include "TreeSprites.hpp"
 
+#include <array>
 #include <cmath>
 #include <vector>
 
+#include "Assets.hpp"
+#include "SpriteAtlas.hpp"
 #include "TileColors.hpp"
 
 namespace TreeSprites {
 
 namespace {
 
-// Рисунок кадра: kHeight строк по kWidth знаков, сверху вниз. Верхняя
-// половина (шестнадцать строк) — клетка НАД деревом, нижняя — его
-// собственная.
-//
-// Знаки:
-//   '.' — пусто, сквозь него видно землю;
-//   'C' — крона, цвет вида;
-//   'c' — тень в кроне, тот же цвет потемнее;
-//   'T' — освещённая сторона ствола;
-//   't' — ствол и корни.
-//
-// Второй кадр каждого возраста — не сдвиг первого целиком: качается крона,
-// а комель стоит. Поэтому кадры нарисованы порознь, и у второго верх кроны
-// уведён вправо, а низ остался на месте — так ветка кланяется, а не дерево
-// прыгает.
-
-// --- Росток ---
-// Только своя клетка, и та наполовину пуста: два листа на стебле. Ствола
-// как такового ещё нет, корней не видно вовсе.
-constexpr const char* kSprout[2][kHeight] = {
-    {
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "......cCc.......", ".....CCCCC......", "....CCcCCCC.....",
-        ".....CCCCC......", "......CtC.......", ".......t........", "......ttt.......",
-    },
-    {
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", ".......cCc......", "......CCCCC.....", ".....CCcCCCC....",
-        "......CCCCC.....", "......CtC.......", ".......t........", "......ttt.......",
-    },
+// Имена кадров в файле рисунка. Порядок здесь — порядок возрастов, а не
+// порядок строк в файле: кадры ищутся по имени (Assets::frameIndex),
+// поэтому переставить их в ресурсе местами можно, а переименовать —
+// нельзя, и вот этот список тому единственная причина.
+constexpr std::array<const char*, kStages * kFrames> kFrameNames = {
+    "sprout.a", "sprout.b", "young.a", "young.b", "mature.a", "mature.b",
 };
-
-// --- Подрост ---
-// Крона поднялась в клетку выше, но заняла только её низ; ствол уже
-// настоящий, с освещённой стороной, корни едва намечены.
-constexpr const char* kYoung[2][kHeight] = {
-    {
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", ".......CC.......",
-        ".....CCCCCC.....", "....CCCCcCCC....", "...CCCcCCCCCC...", "...CCCCCCCcCC...",
-        "....CCCCCCCC....", ".....CCCCCC.....", "......cCCc......", ".......tT.......",
-        ".......tT.......", "......ttT.......", ".......tT.......", ".......tTt......",
-        ".......tT.......", ".......tT.......", "......ttT.......", ".......tT.......",
-        ".......tT.......", ".......tT.......", "......ttTt......", ".....tt..tt.....",
-    },
-    {
-        "................", "................", "................", "................",
-        "................", "................", "................", "................",
-        "................", "................", "................", "........CC......",
-        "......CCCCCC....", ".....CCCCcCCC...", "....CCCcCCCCCC..", "...CCCCCCCcCC...",
-        "....CCCCCCCC....", ".....CCCCCC.....", "......cCCc......", ".......tT.......",
-        ".......tT.......", "......ttT.......", ".......tT.......", ".......tTt......",
-        ".......tT.......", ".......tT.......", "......ttT.......", ".......tT.......",
-        ".......tT.......", ".......tT.......", "......ttTt......", ".....tt..tt.....",
-    },
-};
-
-// --- Взрослое ---
-// Крона заняла верхнюю клетку целиком, ствол проходит свою насквозь, корни
-// разошлись в стороны.
-constexpr const char* kMature[2][kHeight] = {
-    {
-        "......CCCC......", ".....CCCCCC.....", "...CCCCCCCCCC...", "..CCCCcCCCCCC...",
-        "..CCCCCCCCcCCC..", ".CCcCCCCCCCCCC..", ".CCCCCCCcCCCCCC.", ".CCCCcCCCCCCCCC.",
-        ".CCCCCCCCCCcCCC.", "..CCCCCcCCCCCC..", "..CCCCCCCCCCCC..", "..CCCCCCCCCCC...",
-        "...CCCCCCCCCC...", "....CCCCCCCC....", ".....CCCCCC.....", "......cCCc......",
-        ".......tT.......", ".......tT.......", ".......tT.......", "......ttT.......",
-        ".......tTt......", ".......tT.......", ".......tT.......", "......ttTt......",
-        ".......tT.......", ".......tT.......", ".......tT.......", "......ttT.......",
-        ".....t.tT.t.....", "....tt.tT.tt....", "...tt..tT..tt...", "..tt...tT...tt..",
-    },
-    {
-        ".......CCCC.....", "......CCCCCC....", "....CCCCCCCCCC..", "...CCCCcCCCCCC..",
-        "...CCCCCCCCcCCC.", "..CCcCCCCCCCCCC.", "..CCCCCCCcCCCCCC", "..CCCCcCCCCCCCCC",
-        ".CCCCCCCCCCcCCC.", "..CCCCCcCCCCCC..", "..CCCCCCCCCCCC..", "..CCCCCCCCCCC...",
-        "...CCCCCCCCCC...", "....CCCCCCCC....", ".....CCCCCC.....", "......cCCc......",
-        ".......tT.......", ".......tT.......", ".......tT.......", "......ttT.......",
-        ".......tTt......", ".......tT.......", ".......tT.......", "......ttTt......",
-        ".......tT.......", ".......tT.......", ".......tT.......", "......ttT.......",
-        ".....t.tT.t.....", "....tt.tT.tt....", "...tt..tT..tt...", "..tt...tT...tt..",
-    },
-};
-
-const char* const* frameArt(int stage, int frame) {
-    switch (stage) {
-        case 0: return kSprout[frame];
-        case 1: return kYoung[frame];
-        default: break;
-    }
-    return kMature[frame];
-}
 
 // Кора у всех видов одна: ствол — это ствол, а вид опознаётся кроной.
-// Разводить его по видам значило бы отнять у кроны единственную работу,
+// Разводить кору по видам значило бы отнять у кроны единственную работу,
 // которую она делает.
 constexpr Color kBark{58, 44, 32, 255};
 constexpr Color kBarkLit{78, 60, 42, 255};
-
-// Развитость, по которой берётся цвет кроны для этого возраста. Не
-// середина ступени, а её верх: дерево красится в цвет того, чем оно уже
-// стало, а не того, чем становится.
-constexpr float kStageGrowth[kStages] = {0.2f, 0.6f, 1.0f};
 
 Color darken(Color color, float amount) {
     return Color{static_cast<unsigned char>(color.r * (1.0f - amount)),
@@ -129,68 +32,75 @@ Color darken(Color color, float amount) {
                  static_cast<unsigned char>(color.b * (1.0f - amount)), color.a};
 }
 
-Texture2D buildAtlas() {
-    // Строка атласа — вид, столбец — возраст и кадр. Все виды сразу, а не
-    // текстура на вид: их не больше пяти, вместе они весят меньше экрана, а
-    // одна текстура — это одна привязка на всю рощу.
-    const int columns = kStages * kFrames;
-    const int rows = TileColors::kTreeSpeciesCount;
-    const int atlasWidth = columns * kWidth;
-    const int atlasHeight = rows * kHeight;
+// Раскраска на вид дерева. Возраст цвет не меняет: его говорит силуэт —
+// росток, подрост и взрослое отличаются рисунком, а не оттенком, — и
+// оставить цвету одну работу (какой это вид) вернее, чем нагрузить его
+// двумя.
+SpriteAtlas::Palette paletteOf(int species) {
+    const Color crown = TileColors::treeSpecies(species);
+    return {SpriteAtlas::Ink{'C', crown}, SpriteAtlas::Ink{'c', darken(crown, 0.30f)},
+            SpriteAtlas::Ink{'T', kBarkLit}, SpriteAtlas::Ink{'t', kBark}};
+}
 
-    std::vector<Color> pixels(static_cast<std::size_t>(atlasWidth) * atlasHeight, Color{0, 0, 0, 0});
+struct Baked {
+    SpriteAtlas::Sheet sheet;
+    // Номера кадров в атласе по нашему порядку возрастов. -1 — такого
+    // кадра в ресурсе нет, и рисовать дерево нечем.
+    std::array<int, kStages * kFrames> frames{};
+    bool complete = false;
+};
 
-    for (int species = 0; species < rows; ++species) {
-        for (int stage = 0; stage < kStages; ++stage) {
-            const Color crown = TileColors::tree(species, kStageGrowth[stage]);
-            const Color crownShade = darken(crown, 0.30f);
-            for (int frame = 0; frame < kFrames; ++frame) {
-                const char* const* art = frameArt(stage, frame);
-                const int originX = (stage * kFrames + frame) * kWidth;
-                const int originY = species * kHeight;
-                for (int y = 0; y < kHeight; ++y) {
-                    const char* row = art[y];
-                    for (int x = 0; x < kWidth; ++x) {
-                        Color color{0, 0, 0, 0};
-                        switch (row[x]) {
-                            case 'C': color = crown; break;
-                            case 'c': color = crownShade; break;
-                            case 'T': color = kBarkLit; break;
-                            case 't': color = kBark; break;
-                            default: break;
-                        }
-                        pixels[static_cast<std::size_t>(originY + y) * atlasWidth + (originX + x)] = color;
-                    }
-                }
+const Baked& baked() {
+    // Печётся при первом обращении: нужен уже созданный GL-контекст.
+    static const Baked result = [] {
+        Baked out;
+        out.frames.fill(-1);
+
+        const Assets::SpriteSheet& art = Assets::sprites("tree");
+        if (art.empty()) {
+            return out;
+        }
+
+        std::vector<SpriteAtlas::Palette> palettes;
+        palettes.reserve(TileColors::kTreeSpeciesCount);
+        for (int species = 0; species < TileColors::kTreeSpeciesCount; ++species) {
+            palettes.push_back(paletteOf(species));
+        }
+        out.sheet.build(art, palettes);
+        if (!out.sheet.ready()) {
+            return out;
+        }
+
+        out.complete = true;
+        for (std::size_t i = 0; i < kFrameNames.size(); ++i) {
+            out.frames[i] = art.frameIndex(kFrameNames[i]);
+            if (out.frames[i] < 0) {
+                // Не хватает хоть одного кадра — не рисуем ничем: дерево
+                // без своего возраста хуже, чем дерево прямоугольником,
+                // потому что выглядит как дерево не того возраста.
+                out.complete = false;
             }
         }
-    }
-
-    Image image{};
-    image.data = pixels.data();
-    image.width = atlasWidth;
-    image.height = atlasHeight;
-    image.mipmaps = 1;
-    image.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
-    const Texture2D texture = LoadTextureFromImage(image);
-    // Рисунок пиксельный: сглаживание превратило бы его в зелёное пятно на
-    // любом масштабе, кроме единичного.
-    SetTextureFilter(texture, TEXTURE_FILTER_POINT);
-    return texture;
+        return out;
+    }();
+    return result;
 }
 
 } // namespace
 
+bool ready() {
+    return baked().complete;
+}
+
 const Texture2D& atlas() {
-    static Texture2D texture = buildAtlas();
-    return texture;
+    return baked().sheet.texture();
 }
 
 Rectangle source(int species, int stage, int frame) {
-    const int row = species < 0 ? 0 : species % TileColors::kTreeSpeciesCount;
-    const int column = (stage < 0 ? 0 : stage % kStages) * kFrames + (frame < 0 ? 0 : frame % kFrames);
-    return Rectangle{static_cast<float>(column * kWidth), static_cast<float>(row * kHeight),
-                     static_cast<float>(kWidth), static_cast<float>(kHeight)};
+    const auto& data = baked();
+    const int clampedStage = stage < 0 ? 0 : stage % kStages;
+    const int clampedFrame = frame < 0 ? 0 : frame % kFrames;
+    return data.sheet.source(species, data.frames[static_cast<std::size_t>(clampedStage * kFrames + clampedFrame)]);
 }
 
 int stageOf(float growth) {
