@@ -52,6 +52,10 @@ struct TileSnapshot {
     std::vector<int> plantGrowth;
     // Мясо лежащей туши.
     std::vector<int> carcassMeat;
+    // Влажность и каменистость почвы. Ходьбе они не мешают ничем, а вот
+    // лежанию мешают обе (core/Rest.hpp): мокро и жёстко.
+    std::vector<int> moisture;
+    std::vector<int> rockiness;
     // Дерево — не еда (объедать крону травоядное не умеет), а укрытие: под
     // ним добычу не высматривают (kCoverSight, core/Hunting.hpp), и к нему
     // же бежит испуганный.
@@ -78,6 +82,8 @@ struct TileSnapshot {
         plantAt.assign(cells, entt::null);
         plantGrowth.assign(cells, 0);
         carcassMeat.assign(cells, 0);
+        moisture.assign(cells, 0);
+        rockiness.assign(cells, 0);
         treeAt.assign(cells, 0);
         if (cells == 0) {
             return;
@@ -93,6 +99,9 @@ struct TileSnapshot {
             }
             const std::size_t i = index(position.x, position.y);
             terrain[i] = entity;
+            const auto& soil = terrainView.get<const SoilComponent>(entity);
+            moisture[i] = soil.moisture;
+            rockiness[i] = soil.rockiness;
             if (const auto* water = registry.try_get<const WaterComponent>(entity)) {
                 waterAt[i] = water->depth;
             }

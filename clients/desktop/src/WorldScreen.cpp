@@ -645,6 +645,35 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // подсветкой под всем остальным: это ответ на вопрос "почему он не
         // пошёл к тому, что стоит на виду за рекой", и заслонять ею карту
         // нельзя.
+        // Пригодность округи для отдыха у наблюдаемого гоблина — тем же
+        // способом и в том же месте, что и округа зверя: подсветкой ПОД
+        // всем остальным. Это ответ на вопрос "почему он лёг именно здесь",
+        // и заслонять ею карту нельзя.
+        //
+        // Зелёное — годное для отдыха (порог решает сам мир, core/Rest.hpp),
+        // и чем годнее, тем плотнее; негодное не рисуется вовсе. Не шкала
+        // от нуля до единицы: гоблину важно не "насколько тут хорошо", а
+        // "годится ли", — и карта должна отвечать на тот же вопрос.
+        if (snapshot.watched.kind == "goblin" && !snapshot.watched.rest.empty()) {
+            for (const auto& [cellX, cellY, quality] : snapshot.watched.rest) {
+                if (quality < 45) {
+                    continue; // ниже порога мира (kRestGood в сотых)
+                }
+                const float screenX = static_cast<float>(cellX) * tileSizeF - viewX;
+                const float screenY = static_cast<float>(cellY) * tileSizeF - viewY + kHudHeight;
+                if (screenX + tileSize < 0 || screenX > viewportW || screenY + tileSize < kHudHeight ||
+                    screenY > viewportH + kHudHeight) {
+                    continue;
+                }
+                // От порога до сотни — в прозрачность: у самого порога
+                // клетка едва заметна, у лучшей видна ясно.
+                const int alpha = 40 + (quality - 45) * 90 / 55;
+                DrawRectangle(static_cast<int>(screenX), static_cast<int>(screenY),
+                              std::max(1, static_cast<int>(tileSizeF)), std::max(1, static_cast<int>(tileSizeF)),
+                              Color{110, 200, 150, static_cast<unsigned char>(std::clamp(alpha, 0, 160))});
+            }
+        }
+
         const bool watchingWalker = snapshot.watched.kind == "animal" && !snapshot.watched.reach.empty();
         if (watchingWalker) {
             for (const auto& cell : snapshot.watched.reach) {

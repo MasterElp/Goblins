@@ -14,6 +14,7 @@
 #include "core/Needs.hpp"
 #include "core/Path.hpp"
 #include "core/Random.hpp"
+#include "core/Rest.hpp"
 #include "core/Scale.hpp"
 #include "core/Share.hpp"
 #include "core/TileSnapshot.hpp"
@@ -51,6 +52,29 @@ constexpr int kDesireSwitch = 150;
 constexpr int kBreedingGrowth = 900;
 constexpr int kCalmNeed = 750;
 constexpr int kMateDesire = 600;
+
+// Усталость: сколько её прибывает за тик просто оттого, что гоблин жив, и
+// сколько сверх того стоит сделанный шаг.
+//
+// Целыми числами за тик, без накопителя (core/Scale.hpp). Ходьба дороже
+// стояния втрое — иначе усталость была бы просто вторым возрастом и не
+// значила бы ничего: она должна отличать того, кто обошёл полкарты, от
+// того, кто простоял у куста.
+//
+// Размером тела не делится, в отличие от расхода энергии: маленький устаёт
+// не меньше взрослого, а скорее больше. Делать из этого черту генома было
+// бы преждевременно — сперва надо увидеть, что усталость вообще делает с
+// поведением.
+constexpr int kFatigueTick = 1;
+constexpr int kFatigueStep = 3;
+
+// Сколько усталости уходит за тик отдыха. Заметно больше, чем прибывает:
+// отдых должен занимать меньшую часть жизни, чем дорога, иначе поселение
+// будет состоять из лежащих.
+//
+// Прибывает при этом и во время отдыха (kFatigueTick вычитается из этого
+// числа, а не отменяется): гоблин отдыхает, но не перестаёт жить.
+constexpr int kRestRelief = 8;
 
 // С какой вероятностью ничего не желающий гоблин всё-таки делает шаг.
 // Постоянно бродящий выглядит нервным и зря жжёт энергию, полностью
@@ -100,6 +124,9 @@ struct Goblin {
     const AnimalGenomeComponent* genome = nullptr;
     GoblinDesireComponent* desire = nullptr;
     MovementComponent* memory = nullptr;
+    // Своё, гоблинское: усталость. Тело (AnimalComponent) у него общее со
+    // зверем, а это — нет.
+    GoblinComponent* own = nullptr;
 
     // Голод и жажда живут здесь, в снимке тика, а не в компоненте: оба
     // пересчитываются из тела заново каждый тик (core/Needs.hpp), и
@@ -120,7 +147,13 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate) {
     const GoblinDesireComponent& desire = *goblin.desire;
     const int mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0;
 
+    // Порядок — приоритет при равенстве, побеждает последний. Отдых стоит
+    // первым и потому проигрывает всем: усталость никого не убивает, а
+    // голод и жажда убивают. Лечь гоблин должен тогда, когда его больше
+    // ничто не гонит, — и это не поблажка, а точное описание того, чем
+    // отдых отличается от еды.
     const Urgency candidates[] = {
+        {static_cast<int>(GoblinDesire::Rest), goblin.own->fatigue},
         {static_cast<int>(GoblinDesire::Food), goblin.hunger},
         {static_cast<int>(GoblinDesire::Water), goblin.thirst},
         {static_cast<int>(GoblinDesire::Mate), mating},
@@ -131,6 +164,7 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate) {
         case GoblinDesire::Food: currentUrgency = goblin.hunger; break;
         case GoblinDesire::Water: currentUrgency = goblin.thirst; break;
         case GoblinDesire::Mate: currentUrgency = mating; break;
+        case GoblinDesire::Rest: currentUrgency = goblin.own->fatigue; break;
         case GoblinDesire::Idle: break;
     }
 
@@ -175,7 +209,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                   &goblinView.get<AnimalComponent>(entity),
                                   &goblinView.get<AnimalGenomeComponent>(entity),
                                   &goblinView.get<GoblinDesireComponent>(entity),
-                                  &goblinView.get<MovementComponent>(entity)});
+                                  &goblinView.get<MovementComponent>(entity),
+                                  &goblinView.get<GoblinComponent>(entity)});
     }
     // Гоблинов нет — делать системе нечего. В отличие от AnimalSystem, за
     // которой числится ещё и гниение падали, у этой своих обязанностей перед
@@ -231,6 +266,12 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // простоявший сотню тиков у куста не должен помнить преграду,
         // которой давно нет.
         fadeWalkMemory(*goblin.memory);
+
+        // Усталость прибывает от того, что гоблин жив. Шаг добавит своё
+        // ниже, в фазе шагов, а отдых вычтет своё в фазе решений: и то, и
+        // другое — следствия того, чем он занят, и считать их здесь, до
+        // выбора занятия, было бы гаданием.
+        goblin.own->fatigue = std::min(kFull, goblin.own->fatigue + kFatigueTick);
 
         goblin.hunger = hungerOf(state, genome);
         goblin.thirst = thirstOf(state, genome);
@@ -471,6 +512,33 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 }
                 break;
             }
+            case GoblinDesire::Rest: {
+                // Годность клетки — общий закон (core/Rest.hpp): по нему же
+                // наблюдатель рисует эту пригодность на карте.
+                const auto placeAt = [&](std::size_t cell, int nx, int ny) {
+                    return RestPlace{tiles.moisture[cell], tiles.rockiness[cell], tiles.treeAt[cell] != 0,
+                                      carcassMeat[cell]};
+                };
+                if (restQualityOf(placeAt(here, goblin.x, goblin.y)) >= kRestGood) {
+                    // Лёг. Отдых — единственное занятие, которое НИЧЕГО не
+                    // забирает у мира: гоблин просто не идёт никуда, и от
+                    // этого ему становится легче. Оттого место для отдыха
+                    // ничем и не кончается, в отличие от куста и туши.
+                    goblin.own->fatigue = std::max(0, goblin.own->fatigue - kRestRelief);
+                    busy = true;
+                    break;
+                }
+                // Ближайшая годная, а не лучшая в округе: гоблин идёт к
+                // тому, что видит рядом и что ему подходит. Выбирать лучшее
+                // из всего круга видимости значило бы знать округу целиком.
+                hasTarget = findNearest(
+                                [&](std::size_t cell, int nx, int ny) {
+                                    return standable(nx, ny) &&
+                                           restQualityOf(placeAt(cell, nx, ny)) >= kRestGood;
+                                },
+                                targetX, targetY) >= 0;
+                break;
+            }
             case GoblinDesire::Idle: break;
         }
 
@@ -523,6 +591,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         }
 
         state.energy = std::max(0, state.energy - kStepEnergy * size / kFull);
+        // Шаг стоит не только энергии, но и сил: ходьба утомляет сильнее,
+        // чем стояние, и именно это отличает обошедшего полкарты от того,
+        // кто простоял у куста.
+        goblin.own->fatigue = std::min(kFull, goblin.own->fatigue + kFatigueStep);
         steps.push_back(StepIntent{static_cast<int>(g), step.x, step.y});
     }
 
@@ -757,6 +829,19 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kMateDesire", kMateDesire});
     out.push_back({g, "kWanderChance", kWanderChance});
     out.push_back({g, "kRoamTicks", static_cast<float>(kRoamTicks)});
+    out.push_back({g, "kFatigueTick", kFatigueTick});
+    out.push_back({g, "kFatigueStep", kFatigueStep});
+    out.push_back({g, "kRestRelief", kRestRelief});
+
+    // Годность места для отдыха — свои слагаемые (core/Rest.hpp): их
+    // подбирают вместе, друг против друга, и смотреть на них надо рядом.
+    constexpr const char* r = "Goblins (rest)";
+    out.push_back({r, "kRestBase", kRestBase});
+    out.push_back({r, "kRestDryWeight", kRestDryWeight});
+    out.push_back({r, "kRestShelter", kRestShelter});
+    out.push_back({r, "kRestRockPenalty", kRestRockPenalty});
+    out.push_back({r, "kRestCarcassPenalty", kRestCarcassPenalty});
+    out.push_back({r, "kRestGood", kRestGood});
 }
 
 } // namespace goblins

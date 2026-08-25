@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -129,6 +130,9 @@ struct WorldState {
         int tribe = 0;
         float growth = 0.0f;
         float health = 1.0f;
+        // Усталость, доля от полной. Меняется за жизнь и потому едет
+        // дельтой, а не только карточкой.
+        float fatigue = 0.0f;
         std::string sex;
         std::string desire;
     };
@@ -169,6 +173,11 @@ struct WorldState {
         // Числа, а не картинка: клиент рисует их как хочет и ничего о законе
         // охоты не знает (07_TechStack.md, п.6).
         std::vector<std::pair<int, int>> reach;
+        // Пригодность округи для отдыха у наблюдаемого гоблина: клетка и
+        // число 0..100. Считает её сервер тем же законом, по которому
+        // гоблин выбирает, куда лечь (core/Rest.hpp) — иначе нарисованное
+        // расходилось бы с настоящим.
+        std::vector<std::tuple<int, int, int>> rest;
         std::vector<std::pair<int, int>> road;
         // К кому идёт: "prey" — за живой добычей, "carcass" — к туше,
         // "teeth" — добыча уже под зубами, идти некуда, "mate" — к паре,

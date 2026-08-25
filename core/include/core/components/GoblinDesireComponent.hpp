@@ -31,6 +31,10 @@ enum class GoblinDesire : std::uint8_t {
     Food = 1,
     Water = 2,
     Mate = 3,
+    // Лечь и отдохнуть. Единственное из желаний, которое удовлетворяется
+    // МЕСТОМ, а не веществом: его нельзя съесть и унести с собой, к нему
+    // можно только прийти — и прийти второй раз (см. GoblinComponent).
+    Rest = 4,
 };
 
 // Имя желания — не логика, а имя значения (см. desireName в
@@ -41,6 +45,7 @@ inline const char* goblinDesireName(GoblinDesire desire) {
         case GoblinDesire::Food: return "food";
         case GoblinDesire::Water: return "water";
         case GoblinDesire::Mate: return "mate";
+        case GoblinDesire::Rest: return "rest";
         case GoblinDesire::Idle: break;
     }
     return "idle";
@@ -53,6 +58,7 @@ inline GoblinDesire goblinDesireFromName(const std::string& name) {
     if (name == "food") return GoblinDesire::Food;
     if (name == "water") return GoblinDesire::Water;
     if (name == "mate") return GoblinDesire::Mate;
+    if (name == "rest") return GoblinDesire::Rest;
     return GoblinDesire::Idle;
 }
 

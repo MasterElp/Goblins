@@ -65,6 +65,7 @@ WorldState::Goblin parseGoblin(const nlohmann::json& goblin) {
     parsed.tribe = goblin.value("tribe", 0);
     parsed.growth = goblin.value("growth", 0) * kFromHundredths;
     parsed.health = goblin.value("health", 100) * kFromHundredths;
+    parsed.fatigue = goblin.value("fatigue", 0) * kFromHundredths;
     parsed.sex = goblin.value("sex", std::string{});
     parsed.desire = goblin.value("desire", std::string{});
     return parsed;
@@ -84,8 +85,12 @@ WorldState::Goblin parseGoblin(const nlohmann::json& goblin) {
 // Порядок обязателен и он же порядок ключей в сообщении: сперва правки по
 // индексам, потом удаление ушедших (их индексы — в том же прежнем списке),
 // и только потом вставка родившихся.
-template <typename Card, typename Parse>
-void applyCreatureChanges(std::vector<Card>& list, const nlohmann::json& changes, Parse&& parse) {
+// extra получает сам applyPairs и правит им поля, которых у зверя нет
+// (усталость гоблина). Зовётся между правками и удалениями — там же, где
+// правятся остальные поля: индексы во всех них считаны в ПРЕЖНЕМ списке, и
+// после удаления ушедших они уже ничего не значат.
+template <typename Card, typename Parse, typename Extra>
+void applyCreatureChanges(std::vector<Card>& list, const nlohmann::json& changes, Parse&& parse, Extra&& extra) {
     // Пары "индекс - значение", как у тайловых слоёв, только правится не
     // клетка, а существо. Индекс проверяется: сообщение приходит извне.
     const auto applyPairs = [&](const char* key, auto&& write) {
@@ -118,6 +123,7 @@ void applyCreatureChanges(std::vector<Card>& list, const nlohmann::json& changes
             c.desire = v.get<std::string>();
         }
     });
+    extra(applyPairs);
 
     if (changes.contains("gone") && changes["gone"].is_array()) {
         // Пометить и выбросить одним проходом: удалять по одному значило бы
@@ -335,7 +341,7 @@ void NetworkClient::applyAnimalChanges(const nlohmann::json& message) {
     if (!message.contains("animals") || !message["animals"].is_object()) {
         return;
     }
-    applyCreatureChanges(working_.animals, message["animals"], parseAnimal);
+    applyCreatureChanges(working_.animals, message["animals"], parseAnimal, [](auto&&) {});
 }
 
 void NetworkClient::applyGoblins(const nlohmann::json& message) {
@@ -355,7 +361,11 @@ void NetworkClient::applyGoblinChanges(const nlohmann::json& message) {
     if (!message.contains("goblins") || !message["goblins"].is_object()) {
         return;
     }
-    applyCreatureChanges(working_.goblins, message["goblins"], parseGoblin);
+    applyCreatureChanges(working_.goblins, message["goblins"], parseGoblin, [](auto&& applyPairs) {
+        applyPairs("fatigue", [](WorldState::Goblin& g, const nlohmann::json& v) {
+            g.fatigue = v.get<int>() * kFromHundredths;
+        });
+    });
 }
 
 // Летопись численности — общий разбор для world_init и дельты (см.
@@ -517,6 +527,16 @@ void NetworkClient::applyWatched(const nlohmann::json& message) {
         }
     };
     readCells("reach", parsed.reach);
+    // Пригодность отдыха — тройками "клетка и число", а не парами: у неё
+    // есть значение, а не только место.
+    parsed.rest.clear();
+    if (watched.contains("rest") && watched["rest"].is_array()) {
+        const auto& triples = watched["rest"];
+        for (std::size_t i = 0; i + 2 < triples.size(); i += 3) {
+            parsed.rest.emplace_back(triples[i].get<int>(), triples[i + 1].get<int>(),
+                                      triples[i + 2].get<int>());
+        }
+    }
     readCells("road", parsed.road);
     parsed.roadKind = watched.value("road_kind", std::string{});
     parsed.roadX = watched.value("road_x", 0);

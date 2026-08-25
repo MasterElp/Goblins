@@ -1,6 +1,7 @@
 #include "server/NetworkServer.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "core/Hunting.hpp"
 #include "core/Mating.hpp"
 #include "core/Needs.hpp"
+#include "core/Rest.hpp"
 #include "core/Random.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
@@ -367,6 +369,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
                 .growth = toWire(body.growth),
                 .health = toWire(body.health),
                 .desire = desire.current,
+                .fatigue = toWire(registry.get<const GoblinComponent>(entity).fatigue),
                 .tribe = genome.species,
                 .sex = body.sex});
         });
@@ -396,11 +399,13 @@ const char* wireDesire(GoblinDesire desire) { return goblinDesireName(desire); }
 // — существо просто окажется на карте не там, где оно есть в мире.
 //
 // От вида требуется ровно то, что сравнивается: id, x, y, growth, health,
-// desire. Всё остальное в дельту не входит по определению — оно не меняется
-// за жизнь.
-template <typename View, typename ToCard>
+// desire. Это то, что есть у ВСЕХ; поля, которых у зверя нет (усталость
+// гоблина), добавляет вызывающая сторона через extra — оно зовётся на
+// каждую совпавшую пару и получает место в прежнем списке. Иначе пришлось
+// бы либо возить зверю чужие поля, либо копировать всё слияние второй раз.
+template <typename View, typename ToCard, typename Extra>
 nlohmann::json creaturesDeltaJson(const std::vector<View>& previous, const std::vector<View>& current,
-                                   ToCard&& toCard) {
+                                   ToCard&& toCard, Extra&& extra) {
     auto gone = nlohmann::json::array();
     auto born = nlohmann::json::array();
     auto pos = nlohmann::json::array();
@@ -442,6 +447,7 @@ nlohmann::json creaturesDeltaJson(const std::vector<View>& previous, const std::
             desire.push_back(p);
             desire.push_back(wireDesire(now.desire));
         }
+        extra(p, was, now);
         ++p;
         ++c;
     }
@@ -487,7 +493,9 @@ nlohmann::json NetworkServer::animalsDeltaJson(const std::vector<LayerSnapshot::
     // Вид, диета и пол животного не меняются за всю его жизнь, поэтому в
     // дельте их нет вовсе: они приезжают один раз, в карточке. Само слияние
     // — общий закон (creaturesDeltaJson выше).
-    return creaturesDeltaJson(previous, current, animalToJson);
+    return creaturesDeltaJson(previous, current, animalToJson,
+                              [](std::size_t, const LayerSnapshot::AnimalView&,
+                                 const LayerSnapshot::AnimalView&) {});
 }
 
 // Карточка одного гоблина. Племя вместо диеты, и "kind" здесь нет вовсе:
@@ -500,7 +508,8 @@ nlohmann::json NetworkServer::goblinToJson(const LayerSnapshot::GoblinView& gobl
             {"growth", goblin.growth},
             {"health", goblin.health},
             {"sex", sexName(goblin.sex)},
-            {"desire", goblinDesireName(goblin.desire)}};
+            {"desire", goblinDesireName(goblin.desire)},
+            {"fatigue", goblin.fatigue}};
 }
 
 nlohmann::json NetworkServer::goblinsToJson(const std::vector<LayerSnapshot::GoblinView>& goblins) {
@@ -513,8 +522,28 @@ nlohmann::json NetworkServer::goblinsToJson(const std::vector<LayerSnapshot::Gob
 
 nlohmann::json NetworkServer::goblinsDeltaJson(const std::vector<LayerSnapshot::GoblinView>& previous,
                                                 const std::vector<LayerSnapshot::GoblinView>& current) {
-    // Племя и пол за жизнь не меняются — в дельту не входят.
-    return creaturesDeltaJson(previous, current, goblinToJson);
+    // Племя и пол за жизнь не меняются — в дельту не входят. А усталость
+    // меняется, и её у зверя нет вовсе, поэтому она и добавляется здесь, а
+    // не внутри общего слияния.
+    auto fatigue = nlohmann::json::array();
+    auto message = creaturesDeltaJson(
+        previous, current, goblinToJson,
+        [&fatigue](std::size_t index, const LayerSnapshot::GoblinView& was,
+                    const LayerSnapshot::GoblinView& now) {
+            if (was.fatigue != now.fatigue) {
+                fatigue.push_back(index);
+                fatigue.push_back(now.fatigue);
+            }
+        });
+    if (fatigue.empty()) {
+        return message;
+    }
+    // Могло не измениться больше ничего — тогда объекта ещё нет.
+    if (message.is_null()) {
+        message = nlohmann::json::object();
+    }
+    message["fatigue"] = std::move(fatigue);
+    return message;
 }
 
 namespace {
@@ -735,6 +764,35 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
     pathGroup(static_cast<int>(cells.size()));
 }
 
+// Что известно о клетке для закона отдыха — прочитанное прямо из мира, а не
+// из снимка тика: наблюдатель ходит по registry, а система по своим массивам
+// (см. standableAt в core/Path.hpp — там ровно то же разделение). Пусто,
+// если земли на клетке нет вовсе.
+std::optional<RestPlace> restPlaceAt(const World& world, int x, int y) {
+    const auto& registry = world.registry();
+    for (const auto entity : world.area().cellAt(x, y).entities) {
+        const auto* soil = registry.try_get<const SoilComponent>(entity);
+        if (soil == nullptr) {
+            continue;
+        }
+        RestPlace place;
+        place.moisture = soil->moisture;
+        place.rockiness = soil->rockiness;
+        if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
+            place.carcassMeat = carcass->meat;
+        }
+        // Дерево — отдельный Entity на той же клетке, а не свойство почвы.
+        for (const auto other : world.area().cellAt(x, y).entities) {
+            if (registry.all_of<TreeComponent>(other)) {
+                place.tree = true;
+                break;
+            }
+        }
+        return place;
+    }
+    return std::nullopt;
+}
+
 // Геном — по таблице черт своей диеты, а не полем за полем: новая черта
 // уедет клиенту сама, как это уже сделано для архетипов видов.
 template <typename Traits, typename Genome>
@@ -866,10 +924,47 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                                                  {"protein", body.protein},
                                                  {"dung", body.dung},
                                                  {"step_progress", body.stepProgress}}));
+            // Усталость — среди желаний, а не среди тела: голод и жажда
+            // стоят рядом с ней по той же причине — это то, что гонит, а не
+            // то, из чего гоблин состоит.
+            const auto& own = registry.get<const GoblinComponent>(entity);
             groups.push_back(makeGroup("Desires", {{"hunger", hungerOf(body, genome)},
                                                     {"thirst", thirstOf(body, genome)},
+                                                    {"fatigue", own.fatigue},
                                                     {"mating", desire.mating}}));
             groups.push_back(makeGenomeGroup(goblinTraits(), genome));
+
+            // Пригодность округи для отдыха — единственное, что видно не
+            // только числом, но и на карте. Считается тем же законом
+            // (core/Rest.hpp), по которому гоблин выбирает, куда лечь: карта,
+            // показывающая не ту пригодность, по которой принято решение,
+            // хуже карты, не показывающей ничего.
+            //
+            // Круг видимости, а не вся Область: дальше своей зоркости гоблин
+            // о клетках ничего не знает (02_CorePrinciples.md, п.6), и
+            // рисовать там было бы враньём.
+            const int sight = std::max(1, genome.perception);
+            auto restJson = nlohmann::json::array();
+            for (int dy = -sight; dy <= sight; ++dy) {
+                for (int dx = -sight; dx <= sight; ++dx) {
+                    if (dx * dx + dy * dy > sight * sight) {
+                        continue; // видимость круглая, а не квадратная
+                    }
+                    const int nx = position.x + dx;
+                    const int ny = position.y + dy;
+                    if (!world_.area().inBounds(nx, ny)) {
+                        continue;
+                    }
+                    const auto place = restPlaceAt(world_, nx, ny);
+                    if (!place) {
+                        continue; // земли здесь нет вовсе
+                    }
+                    restJson.push_back(nx);
+                    restJson.push_back(ny);
+                    restJson.push_back(restQualityOf(*place));
+                }
+            }
+            watched["rest"] = std::move(restJson);
 
             // Дороги пока нет: её рисует appendRoad по звериным желаниям
             // (охота, зов пары), а у гоблина они свои. Появится вместе с

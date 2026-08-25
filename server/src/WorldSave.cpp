@@ -178,6 +178,7 @@ struct ParsedEntity {
     bool predator = false;
     // Гоблин: то же тело, но своя таблица черт и своё желание.
     bool goblin = false;
+    GoblinComponent goblinState{};
     AnimalComponent animal{};
     AnimalGenomeComponent animalGenome{};
     DesireComponent desire{};
@@ -308,9 +309,14 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // Тело при этом пишется тем же ключом "animal", что и у зверя, и это
         // не небрежность: тело у них одно и то же (core/Body.hpp), а два
         // ключа для одного компонента разошлись бы при первой же правке.
-        const bool goblin = registry.all_of<GoblinComponent>(entity);
+        const auto* goblinState = registry.try_get<GoblinComponent>(entity);
+        const bool goblin = goblinState != nullptr;
         if (goblin) {
-            record["goblin"] = true;
+            // Не просто метка: усталость — накопленное состояние, и в теле
+            // её не прочитать заново (см. GoblinComponent). Потерять её
+            // значило бы вернуть из файла поселенца, который только что
+            // выспался, где бы он ни был застигнут сохранением.
+            record["goblin"] = {{"fatigue", goblinState->fatigue}};
         }
         if (const auto* animal = registry.try_get<AnimalComponent>(entity)) {
             record["animal"] = {{"age", animal->age},
@@ -567,7 +573,16 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         // новый пишется без оглядки на прошлое.
         const bool legacyBody = record.contains("herbivore") && record["herbivore"].is_object();
         parsed.predator = record.value("predator", false);
-        parsed.goblin = record.value("goblin", false);
+        // Метка гоблина была признаком true, а стала объектом с усталостью:
+        // различаем по типу, чтобы миры, записанные до неё, открывались как
+        // открывались — просто с невыспавшимися жителями.
+        if (record.contains("goblin")) {
+            const auto& mark = record["goblin"];
+            parsed.goblin = mark.is_object() ? true : mark.get<bool>();
+            if (mark.is_object()) {
+                parsed.goblinState.fatigue = mark.value("fatigue", 0);
+            }
+        }
 
         const char* bodyKey = record.contains("animal") ? "animal" : (legacyBody ? "herbivore" : nullptr);
         if (bodyKey != nullptr) {
@@ -1290,7 +1305,7 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             // Память ног в файле не лежит по той же причине, что и у зверя:
             // шесть последних шагов — это походка, а не мир.
             world.registry().emplace<MovementComponent>(entity);
-            world.registry().emplace<GoblinComponent>(entity);
+            world.registry().emplace<GoblinComponent>(entity, parsed.goblinState);
         } else if (parsed.hasAnimal) {
             world.registry().emplace<AnimalComponent>(entity, parsed.animal);
             world.registry().emplace<AnimalGenomeComponent>(entity, parsed.animalGenome);
