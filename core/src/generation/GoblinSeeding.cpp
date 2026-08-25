@@ -10,6 +10,7 @@
 #include "core/components/GoblinDesireComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
+#include "core/components/KnowledgeComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
@@ -179,6 +180,9 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
         // Память ног пуста: расставленный гоблин ещё никуда не ходил.
         world.registry().emplace<MovementComponent>(entity);
         world.registry().emplace<GoblinComponent>(entity);
+        // Память пуста: расставленный гоблин ещё нигде не был. Мир он узнает
+        // сам, блужданием, — и тем, что запомнит, будет отличаться от соседа.
+        world.registry().emplace<KnowledgeComponent>(entity);
         world.place(entity, x, y);
 
         ++placed;

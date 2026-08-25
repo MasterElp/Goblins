@@ -861,6 +861,39 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             }
         }
 
+        // Что наблюдаемый гоблин ПОМНИТ — поверх всего остального, кольцами
+        // на запомненных клетках. Поверх, а не под: вспомненное место обычно
+        // лежит за пределами видимости, там на карте не нарисовано ничего, и
+        // заслонять кольцу нечего. Это ответ на вопрос "почему он пошёл
+        // туда, где ничего не видно".
+        //
+        // Цвет говорит, чем место было хорошо, толщина — насколько твёрдо
+        // помнится: выцветающее кольцо и есть забывание (core/Knowledge.hpp).
+        if (snapshot.watched.kind == "goblin" && !snapshot.watched.knows.empty()) {
+            for (const auto& known : snapshot.watched.knows) {
+                const float screenX = static_cast<float>(known.x) * tileSizeF - viewX;
+                const float screenY = static_cast<float>(known.y) * tileSizeF - viewY + kHudHeight;
+                if (screenX + tileSize < 0 || screenX > viewportW || screenY + tileSize < kHudHeight ||
+                    screenY > viewportH + kHudHeight) {
+                    continue;
+                }
+                Color color{200, 200, 200, 255};
+                if (known.kind == "food") {
+                    color = Color{120, 200, 90, 255};
+                } else if (known.kind == "water") {
+                    color = Color{90, 160, 230, 255};
+                } else if (known.kind == "rest") {
+                    color = Color{225, 190, 100, 255};
+                }
+                color.a = static_cast<unsigned char>(70 + std::clamp(known.strength, 0, 100) * 170 / 100);
+                const float centerX = screenX + tileSizeF * 0.5f;
+                const float centerY = screenY + tileSizeF * 0.5f;
+                DrawCircleLines(static_cast<int>(centerX), static_cast<int>(centerY), tileSizeF * 0.45f, color);
+                DrawCircleLines(static_cast<int>(centerX), static_cast<int>(centerY), tileSizeF * 0.45f - 1.0f,
+                                color);
+            }
+        }
+
         // Дорога — поверх зверей: она и есть то, ради чего смотрят. Линия
         // от самого зверя через клетки найденной дороги до цели, а на цели
         // — кольцо. Цвет говорит, за чем он идёт: за живой добычей, к туше

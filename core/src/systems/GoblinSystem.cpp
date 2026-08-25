@@ -10,6 +10,7 @@
 #include "core/Desires.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Hunting.hpp"
+#include "core/Knowledge.hpp"
 #include "core/Mating.hpp"
 #include "core/Needs.hpp"
 #include "core/Path.hpp"
@@ -26,6 +27,7 @@
 #include "core/components/GoblinDesireComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
+#include "core/components/KnowledgeComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
@@ -127,6 +129,8 @@ struct Goblin {
     // Своё, гоблинское: усталость. Тело (AnimalComponent) у него общее со
     // зверем, а это — нет.
     GoblinComponent* own = nullptr;
+    // Память мест. Единственное, чего у зверя нет вовсе.
+    KnowledgeComponent* mind = nullptr;
 
     // Голод и жажда живут здесь, в снимке тика, а не в компоненте: оба
     // пересчитываются из тела заново каждый тик (core/Needs.hpp), и
@@ -198,8 +202,9 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     // Разреженно, а не плотным массивом на всю Область: гоблинов десятки, а
     // клеток десятки тысяч.
     std::vector<Goblin> goblins;
-    auto goblinView = registry.view<AnimalComponent, AnimalGenomeComponent, GoblinDesireComponent,
-                                     IdentityComponent, MovementComponent, PositionComponent, GoblinComponent>();
+    auto goblinView =
+        registry.view<AnimalComponent, AnimalGenomeComponent, GoblinDesireComponent, IdentityComponent,
+                       MovementComponent, PositionComponent, GoblinComponent, KnowledgeComponent>();
     for (const auto entity : goblinView) {
         const auto& position = goblinView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
@@ -210,7 +215,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                   &goblinView.get<AnimalGenomeComponent>(entity),
                                   &goblinView.get<GoblinDesireComponent>(entity),
                                   &goblinView.get<MovementComponent>(entity),
-                                  &goblinView.get<GoblinComponent>(entity)});
+                                  &goblinView.get<GoblinComponent>(entity),
+                                  &goblinView.get<KnowledgeComponent>(entity)});
     }
     // Гоблинов нет — делать системе нечего. В отличие от AnimalSystem, за
     // которой числится ещё и гниение падали, у этой своих обязанностей перед
@@ -272,6 +278,11 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // другое — следствия того, чем он занят, и считать их здесь, до
         // выбора занятия, было бы гаданием.
         goblin.own->fatigue = std::min(kFull, goblin.own->fatigue + kFatigueTick);
+
+        // Память тает сама. Не изнашивание и не уборка: именно забывание и
+        // заставляет возвращаться — помни гоблин вечно, ему хватило бы
+        // одного обхода мира на всю жизнь (core/Knowledge.hpp).
+        forget(*goblin.mind);
 
         goblin.hunger = hungerOf(state, genome);
         goblin.thirst = thirstOf(state, genome);
@@ -381,6 +392,29 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             return ties > 0 ? bestDistance : -1;
         };
 
+        // Нужного не видно — идём туда, где оно было. Общее окончание всех
+        // трёх веток: сперва разочароваться, если стоим ровно на том
+        // вспомненном месте, где ничего нет, потом вспомнить лучшее.
+        //
+        // Идут к вспомненному НАПРЯМИК, а не дорогой (core/Path.hpp), и это
+        // не упрощение: дорога считается волной в пределах видимости, а
+        // вспомненное место лежит дальше. Гоблин помнит, ГДЕ, но не помнит,
+        // КАК, — преграду он обойдёт вслепую памятью ног, как делает это,
+        // идя за травой.
+        const auto goByMemory = [&](PlaceKind kind) {
+            if (const auto* known = recall(*goblin.mind, kind, goblin.x, goblin.y)) {
+                if (known->x == goblin.x && known->y == goblin.y) {
+                    // Пришли, а нужного нет: место обмануло.
+                    disappoint(*goblin.mind, kind, goblin.x, goblin.y);
+                    return false;
+                }
+                targetX = known->x;
+                targetY = known->y;
+                return true;
+            }
+            return false;
+        };
+
         switch (desire.current) {
             case GoblinDesire::Food: {
                 // Мясо под ногами — раньше травы под ногами: туша это
@@ -391,12 +425,16 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 if (carcassMeat[here] > kMinBiteMeat) {
                     meals.push_back(
                         ShareIntent{here, static_cast<int>(g), goblin.id, genome.biteSize * size / kFull});
+                    // Помнится то, что ПРИГОДИЛОСЬ, а не то, что попалось на
+                    // глаза (core/Knowledge.hpp).
+                    remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
                     busy = true;
                     break;
                 }
                 if (plantAt[here] != entt::null && plantGrowth[here] > kMinBiteGrowth) {
                     bites.push_back(
                         ShareIntent{here, static_cast<int>(g), goblin.id, genome.biteSize * size / kFull});
+                    remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
                     busy = true;
                     break;
                 }
@@ -437,6 +475,9 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                     },
                                     targetX, targetY) >= 0;
                 }
+                if (!hasTarget) {
+                    hasTarget = goByMemory(PlaceKind::Food);
+                }
                 break;
             }
             case GoblinDesire::Water: {
@@ -464,10 +505,17 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 if (source < cellCount) {
                     drinks.push_back(
                         ShareIntent{source, static_cast<int>(g), goblin.id, kDrinkRate * size / kFull});
+                    // Помнится берег, на котором стоял, а не сама вода: в
+                    // воду гоблин шагнуть не может, и место водопоя — это
+                    // клетка под ногами.
+                    remember(*goblin.mind, PlaceKind::Water, goblin.x, goblin.y);
                     busy = true;
                 } else {
                     hasTarget = findNearest([&](std::size_t cell, int, int) { return waterAt[cell] > 0; },
                                              targetX, targetY) >= 0;
+                    if (!hasTarget) {
+                        hasTarget = goByMemory(PlaceKind::Water);
+                    }
                 }
                 break;
             }
@@ -525,6 +573,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     // этого ему становится легче. Оттого место для отдыха
                     // ничем и не кончается, в отличие от куста и туши.
                     goblin.own->fatigue = std::max(0, goblin.own->fatigue - kRestRelief);
+                    remember(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y);
                     busy = true;
                     break;
                 }
@@ -537,6 +586,9 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                            restQualityOf(placeAt(cell, nx, ny)) >= kRestGood;
                                 },
                                 targetX, targetY) >= 0;
+                if (!hasTarget) {
+                    hasTarget = goByMemory(PlaceKind::Rest);
+                }
                 break;
             }
             case GoblinDesire::Idle: break;
@@ -809,6 +861,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             w.registry().emplace<GoblinDesireComponent>(entity, GoblinDesireComponent{});
             w.registry().emplace<MovementComponent>(entity);
             w.registry().emplace<GoblinComponent>(entity);
+            // Голова пустая: родившийся не помнит ничего и узнаёт мир сам.
+            // Наследовать память было бы наследованием опыта — а он берётся
+            // жизнью, не рождением (02_CorePrinciples.md, п.6).
+            w.registry().emplace<KnowledgeComponent>(entity);
             // Проверять клетку не нужно: существо не занимает тайл
             // (04_WorldModel.md, п.4), поэтому ребёнок всегда помещается
             // рядом с матерью.
@@ -842,6 +898,15 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({r, "kRestRockPenalty", kRestRockPenalty});
     out.push_back({r, "kRestCarcassPenalty", kRestCarcassPenalty});
     out.push_back({r, "kRestGood", kRestGood});
+
+    // Память места (core/Knowledge.hpp) — своей группой: эти числа решают,
+    // насколько твёрдо гоблин держится за уже известное.
+    constexpr const char* m = "Goblins (memory)";
+    out.push_back({m, "kKnownPlaces", static_cast<float>(kKnownPlaces)});
+    out.push_back({m, "kRememberGain", kRememberGain});
+    out.push_back({m, "kForgetRate", kForgetRate});
+    out.push_back({m, "kDisappointLoss", kDisappointLoss});
+    out.push_back({m, "kRecallDistance", kRecallDistance});
 }
 
 } // namespace goblins

@@ -529,6 +529,18 @@ void NetworkClient::applyWatched(const nlohmann::json& message) {
     readCells("reach", parsed.reach);
     // Пригодность отдыха — тройками "клетка и число", а не парами: у неё
     // есть значение, а не только место.
+    parsed.knows.clear();
+    if (watched.contains("knows") && watched["knows"].is_array()) {
+        for (const auto& place : watched["knows"]) {
+            if (!place.is_object()) {
+                continue;
+            }
+            parsed.knows.push_back(WorldState::Watched::Known{place.value("x", 0), place.value("y", 0),
+                                                               place.value("kind", std::string{}),
+                                                               place.value("strength", 0)});
+        }
+    }
+
     parsed.rest.clear();
     if (watched.contains("rest") && watched["rest"].is_array()) {
         const auto& triples = watched["rest"];

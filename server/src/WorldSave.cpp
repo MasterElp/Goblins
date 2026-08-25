@@ -35,6 +35,7 @@
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinDesireComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
+#include "core/components/KnowledgeComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -179,6 +180,7 @@ struct ParsedEntity {
     // Гоблин: то же тело, но своя таблица черт и своё желание.
     bool goblin = false;
     GoblinComponent goblinState{};
+    KnowledgeComponent goblinMind{};
     AnimalComponent animal{};
     AnimalGenomeComponent animalGenome{};
     DesireComponent desire{};
@@ -317,6 +319,25 @@ nlohmann::json buildEntitiesJson(const World& world) {
             // значило бы вернуть из файла поселенца, который только что
             // выспался, где бы он ни был застигнут сохранением.
             record["goblin"] = {{"fatigue", goblinState->fatigue}};
+        }
+        if (const auto* mind = registry.try_get<KnowledgeComponent>(entity)) {
+            // Память — состояние мира, а не походка: гоблин, забывший при
+            // загрузке всё, начал бы набивать свои тропы заново, и открытый
+            // мир оказался бы не тем, который сохраняли. Пустые места не
+            // пишутся — их незачем возить.
+            auto places = nlohmann::json::array();
+            for (const auto& place : mind->places) {
+                if (place.kind == PlaceKind::None || place.strength <= 0) {
+                    continue;
+                }
+                places.push_back({{"x", place.x},
+                                   {"y", place.y},
+                                   {"kind", placeKindName(place.kind)},
+                                   {"strength", place.strength}});
+            }
+            if (!places.empty()) {
+                record["knows"] = std::move(places);
+            }
         }
         if (const auto* animal = registry.try_get<AnimalComponent>(entity)) {
             record["animal"] = {{"age", animal->age},
@@ -581,6 +602,18 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.goblin = mark.is_object() ? true : mark.get<bool>();
             if (mark.is_object()) {
                 parsed.goblinState.fatigue = mark.value("fatigue", 0);
+            }
+        }
+        if (record.contains("knows") && record["knows"].is_array()) {
+            std::size_t slot = 0;
+            for (const auto& place : record["knows"]) {
+                if (slot >= parsed.goblinMind.places.size() || !place.is_object()) {
+                    break;
+                }
+                parsed.goblinMind.places[slot++] =
+                    KnownPlace{place.value("x", 0), place.value("y", 0),
+                                placeKindFromName(place.value("kind", std::string("none"))),
+                                place.value("strength", 0)};
             }
         }
 
@@ -1306,6 +1339,7 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             // шесть последних шагов — это походка, а не мир.
             world.registry().emplace<MovementComponent>(entity);
             world.registry().emplace<GoblinComponent>(entity, parsed.goblinState);
+            world.registry().emplace<KnowledgeComponent>(entity, parsed.goblinMind);
         } else if (parsed.hasAnimal) {
             world.registry().emplace<AnimalComponent>(entity, parsed.animal);
             world.registry().emplace<AnimalGenomeComponent>(entity, parsed.animalGenome);

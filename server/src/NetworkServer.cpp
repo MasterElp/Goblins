@@ -31,6 +31,7 @@
 #include "core/components/PositionComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
+#include "core/components/KnowledgeComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/TreeComponent.hpp"
@@ -965,6 +966,27 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                 }
             }
             watched["rest"] = std::move(restJson);
+
+            // Что гоблин помнит. Без этого понять, почему он пошёл именно
+            // туда, нельзя ничем: вспомненное место лежит за пределами
+            // видимости, и на карте на его месте не нарисовано ничего.
+            //
+            // В дельту память не идёт и не должна: восемь мест на каждого
+            // гоблина каждый тик — это дорого, а нужны они по одному, у того,
+            // за кем следят. Ровно как голод и жажда, которые тоже живут
+            // только здесь.
+            const auto& mind = registry.get<const KnowledgeComponent>(entity);
+            auto knownJson = nlohmann::json::array();
+            for (const auto& place : mind.places) {
+                if (place.kind == PlaceKind::None || place.strength <= 0) {
+                    continue;
+                }
+                knownJson.push_back({{"x", place.x},
+                                      {"y", place.y},
+                                      {"kind", placeKindName(place.kind)},
+                                      {"strength", toWire(place.strength)}});
+            }
+            watched["knows"] = std::move(knownJson);
 
             // Дороги пока нет: её рисует appendRoad по звериным желаниям
             // (охота, зов пары), а у гоблина они свои. Появится вместе с

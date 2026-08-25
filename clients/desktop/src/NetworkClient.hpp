@@ -178,6 +178,16 @@ struct WorldState {
         // гоблин выбирает, куда лечь (core/Rest.hpp) — иначе нарисованное
         // расходилось бы с настоящим.
         std::vector<std::tuple<int, int, int>> rest;
+        // Что наблюдаемый гоблин помнит: клетка, вид места ("food"/"water"/
+        // "rest") и твёрдость 0..100. Строкой, а не числом: клиент только
+        // показывает и не должен знать, какие ещё бывают виды мест.
+        struct Known {
+            int x = 0;
+            int y = 0;
+            std::string kind;
+            int strength = 0;
+        };
+        std::vector<Known> knows;
         std::vector<std::pair<int, int>> road;
         // К кому идёт: "prey" — за живой добычей, "carcass" — к туше,
         // "teeth" — добыча уже под зубами, идти некуда, "mate" — к паре,

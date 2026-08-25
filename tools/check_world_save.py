@@ -76,6 +76,62 @@ def settle(probe, seconds=20.0, quiet=1.0):
     return False
 
 
+def watch_goblin(session_probe, control, goblin_id, seconds=30):
+    """Подробности одного гоблина — то, чего нет в общем списке.
+
+    Память места (`knows`) не едет в карточке и в дельте: восемь мест на
+    каждого каждый тик — это дорого, а нужны они по одному, у того, за кем
+    следят (см. buildWatchedJson). Значит и проверить её сохранность иначе
+    нельзя: пропади она при загрузке, общий список сойдётся до последнего
+    числа, а гоблины откроют мир, забывшими всё, и начнут набивать свои
+    тропы заново.
+    """
+    # Сперва отпустить прежнюю цель. Сервер шлёт "watched" только когда она
+    # ИЗМЕНИЛАСЬ, и повторная просьба следить за тем же самым не меняет
+    # ничего — ответа на неё не будет никогда.
+    control.send({"type": "watch", "kind": "none", "id": 0, "x": 0, "y": 0})
+    while session_probe.recv(0.3) is not None:
+        pass
+    control.send({"type": "watch", "kind": "goblin", "id": goblin_id, "x": 0, "y": 0})
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        message = session_probe.recv(min(5.0, max(0.1, deadline - time.time())))
+        if message is None:
+            continue
+        watched = message.get("watched")
+        if isinstance(watched, dict) and watched.get("id") == goblin_id:
+            return watched
+    return None
+
+
+def compare_memory(goblin_id, before, after):
+    """Что должно совпасть в памяти, а что совпасть не может.
+
+    Места — точно: клетка, вид, их число и порядок. Потеряйся хоть одно, и
+    гоблин открыл бы мир, забывшим дорогу, которую набивал.
+
+    А вот твёрдость точно совпасть НЕ МОЖЕТ, и требовать этого было бы
+    требованием остановить время. Между тем, как мир записан в файл, и тем,
+    как он прочитан обратно, проходят тики: загрузка снимает паузу, и
+    забывание работает каждый тик (core/Knowledge.hpp). Поэтому от твёрдости
+    спрашивается ровно то, что отличает сохранённую память от несохранённой:
+    она на месте (не ноль) и не выросла — убыть за это время она могла, а
+    прибавиться неоткуда.
+    """
+    if not after:
+        return [f"память гоблина {goblin_id} пропала целиком: было {before}"]
+    if len(before) != len(after):
+        return [f"память гоблина {goblin_id}: было {len(before)} мест, стало {len(after)}"]
+    problems = []
+    for was, now in zip(before, after):
+        if (was["x"], was["y"], was["kind"]) != (now["x"], now["y"], now["kind"]):
+            problems.append(f"память гоблина {goblin_id}: место {was} стало {now}")
+        elif now["strength"] <= 0 or now["strength"] > was["strength"]:
+            problems.append(f"память гоблина {goblin_id}: твёрдость {was['strength']} стала "
+                            f"{now['strength']} (могла только убыть и не до нуля)")
+    return problems
+
+
 def compare(before, after):
     """Что именно разошлось. Пусто — не разошлось ничего."""
     problems = []
@@ -179,11 +235,33 @@ def main():
         # разошлись бы не файл со снимком, а два разных момента времени.
         control.send({"type": "start_simulation", "world": WORLD})
         after = wait_for(listen, "world_init")
+        # Загрузка снимает паузу — останавливаем мир сразу, как только он
+        # пришёл, чтобы он ушёл от сохранённого тика как можно меньше.
+        control.send({"type": "stop_simulation"})
+        settle(listen)
         if after is None:
             print("Загруженный мир не пришёл")
             return 1
 
         problems = compare(before, after)
+
+        # Память — отдельной проверкой, по одному гоблину: в общем списке её
+        # нет. Берём того, кто успел что-то запомнить; если такого нет вовсе,
+        # проверять нечего и молчать об этом нельзя.
+        remembered_before = None
+        watched_id = None
+        for goblin in before.get("goblins") or []:
+            watched = watch_goblin(listen, control, goblin["id"])
+            if watched and watched.get("knows"):
+                remembered_before = watched["knows"]
+                watched_id = goblin["id"]
+                break
+        if watched_id is None:
+            problems.append("ни один гоблин ничего не помнит — память проверить не на чем")
+        else:
+            remembered_after = watch_goblin(listen, control, watched_id)
+            got = None if remembered_after is None else remembered_after.get("knows")
+            problems.extend(compare_memory(watched_id, remembered_before, got))
         counts = (len(before.get("animals") or []), len(before.get("goblins") or []))
         if problems:
             print(f"ПОТЕРЯ при сохранении (тик {before.get('tick')}):")
