@@ -53,6 +53,7 @@ PROBE = {
                "humus_decay_period": 27},
     "animals": {"herbivore_species": 5, "predator_species": 4,
                 "herbivore_count": 211, "predator_count": 31, "mutation_rate": 175},
+    "goblins": {"tribes": 5, "count": 147, "mutation_rate": 188},
 }
 
 
@@ -100,6 +101,7 @@ def main():
             "terrain": generation["terrain"],
             "plants": generation["plants"],
             "animals": generation["animals"],
+            "goblins": generation["goblins"],
         }
         arrived_flat = flat(arrived)
         for name, expected in flat(PROBE).items():
@@ -119,9 +121,9 @@ def main():
 
         edited = json.loads(json.dumps(generation))
         expected_saved = {}
-        for section in ("terrain", "plants", "animals"):
+        for section in ("terrain", "plants", "animals", "goblins"):
             edited[section] = bump(edited[section])
-        for section, values in flat({s: edited[s] for s in ("terrain", "plants", "animals")}).items():
+        for section, values in flat({s: edited[s] for s in ("terrain", "plants", "animals", "goblins")}).items():
             expected_saved[section] = values
         for name, key in (("boulder_count", "boulder_count"), ("seed", "seed")):
             edited[name] += 1 if name == "seed" else 10

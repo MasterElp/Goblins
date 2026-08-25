@@ -207,6 +207,28 @@ struct AnimalConfig {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AnimalConfig, herbivore_species, predator_species,
                                     herbivore_count, predator_count, mutation_rate)
 
+// Зеркало core::GoblinParams (core/generation/GoblinParams.hpp). Секция
+// своя, а не третья строка в AnimalConfig: гоблин появляется отдельным,
+// последним этапом генерации (02_CorePrinciples.md, п.5), и связывать его
+// настройку с животными значило бы сказать, что разум и зверьё — одна
+// стадия мира.
+struct GoblinConfig {
+    // Число племён. Ядро обрежет к своим границам (1..6,
+    // core/generation/GoblinGenetics.hpp).
+    int tribes = 2;
+
+    // Стартовое поголовье в штуках. Порядок величины — из
+    // 02_CorePrinciples.md, п.16: около трёх поселений примерно по двадцать
+    // жителей. Ноль — мир вовсе без гоблинов.
+    int count = 30;
+
+    // Своя мутация, не общая с животными: тело у гоблина звериное, но
+    // скорость наследственных изменений у разумных не обязана совпадать со
+    // звериной (см. GoblinTrait в GoblinGenetics.hpp).
+    int mutation_rate = 60;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GoblinConfig, tribes, count, mutation_rate)
+
 struct ServerConfig {
     std::string host = "127.0.0.1";
     int port = 9002;
@@ -229,6 +251,7 @@ struct ServerConfig {
 
     PlantConfig plants{};
     AnimalConfig animals{};
+    GoblinConfig goblins{};
 
     // Целевой интервал тика. Сколько тиков выполнить — не настройка:
     // мир существует независимо от наблюдателя и тикает, пока сервер жив
@@ -250,7 +273,7 @@ struct ServerConfig {
     std::string saves_dir = "saves";
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, area, seed, terrain, boulder_count,
-                                    plants, animals, tick_interval_ms, snapshot_interval_ms,
+                                    plants, animals, goblins, tick_interval_ms, snapshot_interval_ms,
                                     saves_dir)
 
 // Подмножество ServerConfig, которое можно перегенерировать вживую по
@@ -273,6 +296,7 @@ struct RegenerationRequest {
     int boulder_count = 40;
     PlantConfig plants{};
     AnimalConfig animals{};
+    GoblinConfig goblins{};
 };
 // ..._WITH_DEFAULT, а не строгий вариант, — по той же причине, что и у
 // структур конфигурации выше: этот запрос лежит внутри каждого файла
@@ -287,7 +311,7 @@ struct RegenerationRequest {
 // не "generation") от этого не пострадает, только надпись "чем
 // сгенерирован" в панели будет неточной для таких файлов.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegenerationRequest, area_width, area_height, seed, terrain,
-                                    boulder_count, plants, animals)
+                                    boulder_count, plants, animals, goblins)
 
 // --- Перекладывание полей между ServerConfig и RegenerationRequest ---
 //
@@ -318,6 +342,7 @@ inline RegenerationRequest toRegenerationRequest(const ServerConfig& config) {
     request.boulder_count = config.boulder_count;
     request.plants = config.plants;
     request.animals = config.animals;
+    request.goblins = config.goblins;
     return request;
 }
 
@@ -337,6 +362,7 @@ inline void applyGeneration(ServerConfig& config, const RegenerationRequest& req
     config.boulder_count = request.boulder_count;
     config.plants = request.plants;
     config.animals = request.animals;
+    config.goblins = request.goblins;
 }
 
 struct ClientConfig {

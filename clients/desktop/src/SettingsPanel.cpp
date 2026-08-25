@@ -139,6 +139,15 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     ops.intRow("Species", edited.animals.predator_species, 1, 6);
     ops.intRow("Initial head count", edited.animals.predator_count, 0, 100);
 
+    ops.section("Goblins");
+    // Появляются последним этапом генерации, после животных
+    // (02_CorePrinciples.md, п.5) — секция здесь же, последней. Границы
+    // племён — 1..6 (core/generation/GoblinGenetics.hpp). Стартовое
+    // поголовье: порядок величины из п.16 того же документа — около трёх
+    // поселений примерно по двадцать жителей.
+    ops.intRow("Tribes", edited.goblins.tribes, 1, 6);
+    ops.intRow("Initial head count", edited.goblins.count, 0, 200);
+
     ops.group("WORLD PROPERTIES -- chosen here, read every tick");
 
     ops.section("Water sources");
@@ -191,6 +200,11 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // бы связать два независимых мира одним ползунком. Одна на обе диеты —
     // это скорость наследственных изменений в мире, а не свойство диеты.
     ops.intRow("Mutation rate (per mille)", edited.animals.mutation_rate, 0, 300);
+
+    ops.section("Goblin life");
+    // Своя, не общая с животными, хотя тело у гоблина звериное: скорость
+    // наследственных изменений у разумных не обязана совпадать со звериной.
+    ops.intRow("Mutation rate (per mille)", edited.goblins.mutation_rate, 0, 300);
 }
 
 // Только считает высоту, ничего не рисует — используется до

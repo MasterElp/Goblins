@@ -101,6 +101,15 @@ goblins::AnimalParams toAnimalParams(const goblins::AnimalConfig& config) {
 // (core). Сам конвейер генерации — этапы и их порядок — живёт в core
 // (core::generateWorld, 02_CorePrinciples.md, п.5): это закон мира, а не
 // решение транспортного слоя. Здесь остаётся только перекладывание полей.
+// И для гоблинов — тем же переносом полей.
+goblins::GoblinParams toGoblinParams(const goblins::GoblinConfig& config) {
+    goblins::GoblinParams params;
+    params.tribes = config.tribes;
+    params.count = config.count;
+    params.mutationRate = config.mutation_rate;
+    return params;
+}
+
 goblins::WorldGenParams toWorldGenParams(const goblins::RegenerationRequest& request) {
     goblins::WorldGenParams params;
     params.seed = request.seed;
@@ -108,6 +117,7 @@ goblins::WorldGenParams toWorldGenParams(const goblins::RegenerationRequest& req
     params.boulderCount = request.boulder_count;
     params.plants = toPlantParams(request.plants);
     params.animals = toAnimalParams(request.animals);
+    params.goblins = toGoblinParams(request.goblins);
     return params;
 }
 
