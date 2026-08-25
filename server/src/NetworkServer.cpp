@@ -962,7 +962,14 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                     }
                     restJson.push_back(nx);
                     restJson.push_back(ny);
-                    restJson.push_back(restQualityOf(*place));
+                    // Сотыми, как и всё остальное на проводе
+                    // (shared/protocol/WirePrecision.hpp). Годность живёт в
+                    // тысячных (core/Scale.hpp), и однажды она уехала как
+                    // есть: клиент честно считал её сотыми, всё, что выше
+                    // сорока пяти тысячных, оказывалось "годным", и карта
+                    // показывала пригодной почти каждую клетку суши. Закон
+                    // был ни при чём — врал показ.
+                    restJson.push_back(toWire(restQualityOf(*place)));
                 }
             }
             watched["rest"] = std::move(restJson);
