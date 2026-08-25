@@ -24,7 +24,7 @@ namespace InfoPanel {
 // На что смотрим. Animal — по постоянному идентификатору (животное
 // ходит, и клетка его не определяет), Plant и Soil — по клетке.
 struct Target {
-    enum class Kind { None, Animal, Plant, Soil };
+    enum class Kind { None, Animal, Goblin, Plant, Soil };
 
     Kind kind = Kind::None;
     std::uint64_t animalId = 0;
@@ -43,7 +43,10 @@ inline bool sameTarget(const Target& a, const Target& b) {
     if (a.kind != b.kind) {
         return false;
     }
-    if (a.kind == Target::Kind::Animal) {
+    if (a.kind == Target::Kind::Animal || a.kind == Target::Kind::Goblin) {
+        // Поле одно на обоих: это постоянный идентификатор существа, а не
+        // "номер животного". Держать рядом второе, гоблинское, значило бы
+        // завести два имени одному и тому же.
         return a.animalId == b.animalId;
     }
     return a.x == b.x && a.y == b.y;

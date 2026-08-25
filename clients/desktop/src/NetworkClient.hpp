@@ -118,6 +118,22 @@ struct WorldState {
     // животных по ключу.
     std::vector<Animal> animals;
 
+    // Гоблины — свой список, устроенный так же и по тем же причинам.
+    // Отдельный, а не общий с животными: у гоблина вместо диеты племя, а
+    // желания у него свои (и их станет вдвое больше). Клиент, как и в случае
+    // с животными, только показывает эти строки и не знает, какие ещё бывают.
+    struct Goblin {
+        std::uint64_t id = 0;
+        int x = 0;
+        int y = 0;
+        int tribe = 0;
+        float growth = 0.0f;
+        float health = 1.0f;
+        std::string sex;
+        std::string desire;
+    };
+    std::vector<Goblin> goblins;
+
     // Подробности того, за кем следит клиент (существо или растение,
     // выбранное кликом или наведением; см. "watch" в протоколе сервера).
     // Тело, желания и геном — парами "имя-значение" в группах, а не полями
@@ -185,6 +201,10 @@ struct WorldState {
         // просто не начата, а не нарисована нулём: хищников там не было
         // вовсе, а не было ноль штук.
         std::vector<int> predators;
+        // Гоблины по племенам — своим вектором и по той же причине, что и
+        // деревья: нумерация у племён своя. Пусто у точек из мира,
+        // прожитого до их появления.
+        std::vector<int> goblins;
 
         // Средний геном всех живых этой диеты: по одному числу на черту
         // (порядок — порядок populationTraits ниже), в тех же единицах, в
@@ -196,6 +216,7 @@ struct WorldState {
         std::vector<int> treeGenome;
         std::vector<int> herbivoreGenome;
         std::vector<int> predatorGenome;
+        std::vector<int> goblinGenome;
     };
     std::vector<PopulationPoint> populationHistory;
 
@@ -214,6 +235,7 @@ struct WorldState {
     std::vector<PopulationTrait> treeTraits;
     std::vector<PopulationTrait> herbivoreTraits;
     std::vector<PopulationTrait> predatorTraits;
+    std::vector<PopulationTrait> goblinTraits;
     // Шаг между точками в тиках: сервер удваивает его, когда прореживает
     // летопись. Клиенту нужен только для подписи под графиком — чтобы
     // прореживание не выглядело как замедлившееся время.
@@ -336,11 +358,13 @@ private:
     void handleMessage(const std::string& payload);
     // Разбор списка животных: он одинаков в world_init и в world_delta.
     void applyAnimals(const nlohmann::json& message);
+    void applyGoblins(const nlohmann::json& message);
     // Изменения списка животных из дельты (см. "animals" в описании дельты
     // в server/NetworkServer.hpp). Порядок применения — правки, удаления,
     // вставки — не косметика: индексы во всех правках и в "gone" считаны в
     // прежнем списке, и любая вставка до них их сдвинула бы.
     void applyAnimalChanges(const nlohmann::json& message);
+    void applyGoblinChanges(const nlohmann::json& message);
     // Разбор летописи численности — тоже общий для world_init и дельты.
     // replace — заменить накопленное, а не дописать к нему (world_init:
     // мир построен заново, и прежняя летопись к нему не относится).

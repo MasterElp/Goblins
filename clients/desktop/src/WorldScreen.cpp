@@ -120,6 +120,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     static bool showHeight = true;
     static bool showPlants = true;
     static bool showAnimals = true;
+    static bool showGoblins = true;
     static Tab tab = Tab::Hidden;
     // За кем следим: выбранное кликом живёт, пока не выберут другое, — в
     // этом и смысл слежения. Наведение мышью его не сбивает.
@@ -143,6 +144,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         showHeight = config.show_height;
         showPlants = config.show_plants;
         showAnimals = config.show_animals;
+        showGoblins = config.show_goblins;
         tab = tabFromName(config.panel_tab);
         initialized = true;
     }
@@ -388,6 +390,15 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             config.show_animals = showAnimals;
             goblins::saveClientConfig(configPath, config);
         }
+        // Гоблины — свой выключатель: смотреть на мир без поселенцев и
+        // смотреть на мир без зверья — разные надобности, и гасить их одной
+        // клавишей значило бы не дать посмотреть ни на то, ни на другое
+        // отдельно.
+        if (IsKeyPressed(KEY_SEVEN)) {
+            showGoblins = !showGoblins;
+            config.show_goblins = showGoblins;
+            goblins::saveClientConfig(configPath, config);
+        }
 
         // Пауза — не локальное состояние клиента, а запрос серверу (настоящая
         // пауза мира). Сам клиент своё "paused" не выставляет — ждёт
@@ -455,6 +466,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         if (target.kind == InfoPanel::Target::Kind::None) {
             return std::nullopt;
         }
+        if (target.kind == InfoPanel::Target::Kind::Goblin) {
+            for (const auto& goblin : snapshot.goblins) {
+                if (goblin.id == target.animalId) {
+                    return std::make_pair(goblin.x, goblin.y);
+                }
+            }
+            return std::nullopt;
+        }
         if (target.kind != InfoPanel::Target::Kind::Animal) {
             return std::make_pair(target.x, target.y);
         }
@@ -511,6 +530,13 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 targets.push_back(InfoPanel::Target{InfoPanel::Target::Kind::Animal, animal.id, x, y, true});
             }
         }
+        // Гоблины — в том же переборе и перед растением: клик по клетке, где
+        // стоит поселенец, должен показывать его, а не землю под ним.
+        for (const auto& goblin : snapshot.goblins) {
+            if (goblin.x == x && goblin.y == y) {
+                targets.push_back(InfoPanel::Target{InfoPanel::Target::Kind::Goblin, goblin.id, x, y, true});
+            }
+        }
         const std::size_t index = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
         // Дерево выбирается тем же кликом и тем же видом цели, что и трава:
         // растение на клетке одно, а какое именно — разбирается InfoPanel.
@@ -562,10 +588,13 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     // и ровно тогда, когда она сменилась.
     {
         const char* watchKind = infoTarget.kind == InfoPanel::Target::Kind::Animal   ? "animal"
-                                : infoTarget.kind == InfoPanel::Target::Kind::Plant ? "plant"
+                                : infoTarget.kind == InfoPanel::Target::Kind::Goblin ? "goblin"
+                                : infoTarget.kind == InfoPanel::Target::Kind::Plant  ? "plant"
                                                                                      : "none";
-        const std::uint64_t watchId =
-            infoTarget.kind == InfoPanel::Target::Kind::Animal ? infoTarget.animalId : 0;
+        const std::uint64_t watchId = (infoTarget.kind == InfoPanel::Target::Kind::Animal ||
+                                       infoTarget.kind == InfoPanel::Target::Kind::Goblin)
+                                           ? infoTarget.animalId
+                                           : 0;
         const int watchX = infoTarget.kind == InfoPanel::Target::Kind::Plant ? infoTarget.x : 0;
         const int watchY = infoTarget.kind == InfoPanel::Target::Kind::Plant ? infoTarget.y : 0;
         if (!sentWatchValid || sentWatchKind != watchKind || sentWatchId != watchId || sentWatchX != watchX ||
@@ -590,6 +619,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     layers.height = showHeight;
     layers.plants = showPlants;
     layers.animals = showAnimals;
+    layers.goblins = showGoblins;
 
     if (!snapshot.connected || snapshot.areaWidth == 0) {
         const std::string waiting = "Connecting to " + config.host + ":" + std::to_string(config.port) + "...";
@@ -757,6 +787,46 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     const float barWidth = tileSizeF * 0.7f;
                     DrawRectangle(static_cast<int>(centerX - barWidth * 0.5f), static_cast<int>(screenY + 1.0f),
                                   std::max(1, static_cast<int>(barWidth * animal.health)), 2,
+                                  Color{220, 60, 50, 230});
+                }
+            }
+        }
+
+        // Гоблины — поверх той же карты и тем же способом, но ромбом:
+        // форма отличает их от зверя с первого взгляда, не полагаясь на
+        // цвет (кружок и квадрат уже заняты полом животного, а на мелком
+        // тайле цвета сливаются). Пол внутри ромба — размером: самец
+        // крупнее. Цвет — по племени, палитра холодная (TileColors).
+        if (showGoblins) {
+            for (const auto& goblin : snapshot.goblins) {
+                const float screenX = static_cast<float>(goblin.x) * tileSizeF - viewX;
+                const float screenY = static_cast<float>(goblin.y) * tileSizeF - viewY + kHudHeight;
+                if (screenX + tileSize < 0 || screenX > viewportW || screenY + tileSize < kHudHeight ||
+                    screenY > viewportH + kHudHeight) {
+                    continue;
+                }
+                const Color color = TileColors::goblinTribe(goblin.tribe);
+                const float scale = goblin.sex == "male" ? 0.32f : 0.26f;
+                const float radius = std::max(1.5f, tileSizeF * (scale + 0.16f * goblin.growth));
+                const float centerX = screenX + tileSizeF * 0.5f;
+                const float centerY = screenY + tileSizeF * 0.5f;
+                const Vector2 top{centerX, centerY - radius};
+                const Vector2 right{centerX + radius, centerY};
+                const Vector2 bottom{centerX, centerY + radius};
+                const Vector2 left{centerX - radius, centerY};
+                // Два треугольника, а не DrawPoly: у raylib многоугольник
+                // рисуется от угла поворота, и ромб из него выходит косым.
+                DrawTriangle(top, left, right, color);
+                DrawTriangle(left, bottom, right, color);
+                if (tileSizeF >= 8.0f) {
+                    DrawTriangleLines(top, left, right, Color{20, 34, 32, 200});
+                    DrawTriangleLines(left, bottom, right, Color{20, 34, 32, 200});
+                }
+                // Раненого видно так же, как и зверя.
+                if (goblin.health < 0.99f && tileSizeF >= 6.0f) {
+                    const float barWidth = tileSizeF * 0.7f;
+                    DrawRectangle(static_cast<int>(centerX - barWidth * 0.5f), static_cast<int>(screenY + 1.0f),
+                                  std::max(1, static_cast<int>(barWidth * goblin.health)), 2,
                                   Color{220, 60, 50, 230});
                 }
             }

@@ -43,8 +43,9 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ws_probe import WebSocketProbe
 
+from server_binary import find_server
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SERVER = os.path.join(ROOT, "build", "server", "server")
 PORT = 9107
 # Сличений с полным списком. Каждое стоит серверу world_init на всю
 # Область, поэтому их немного, но между ними проходят сотни тиков — как раз
@@ -72,8 +73,9 @@ def apply_changes(animals, changes):
     return animals
 
 
-def report(applied, animals, full):
-    print(f"РАСХОЖДЕНИЕ на тике {applied}: собрано {len(animals)}, у сервера {len(full)}")
+def report(what, applied, animals, full):
+    print(f"РАСХОЖДЕНИЕ ({what}) на тике {applied}: собрано {len(animals)}, "
+          f"у сервера {len(full)}")
     ids_have = {a["id"] for a in animals}
     ids_want = {a["id"] for a in full}
     if ids_have != ids_want:
@@ -110,6 +112,11 @@ class Session:
         while self.control.recv(1.0) is not None:
             pass
         self.animals = None
+        # Гоблины — второй такой же список. Собирается тем же apply_changes:
+        # на той стороне провода обе дельты строит один и тот же шаблон
+        # (creaturesDeltaJson в NetworkServer.cpp), и разными они быть не
+        # могут по устройству.
+        self.goblins = None
         self.tick = 0
         self.deltas = 0
 
@@ -121,12 +128,16 @@ class Session:
         kind = message.get("type")
         if kind == "world_init":
             self.animals = sorted(message.get("animals") or [], key=lambda a: a["id"])
+            self.goblins = sorted(message.get("goblins") or [], key=lambda a: a["id"])
             self.tick = message.get("tick", self.tick)
         elif kind == "world_delta":
             self.tick = message.get("tick", self.tick)
             if self.animals is not None and "animals" in message:
                 self.deltas += 1
                 self.animals = apply_changes(self.animals, message["animals"])
+            if self.goblins is not None and "goblins" in message:
+                self.deltas += 1
+                self.goblins = apply_changes(self.goblins, message["goblins"])
         return kind
 
     def run_to(self, tick):
@@ -260,7 +271,8 @@ def check_suspension(session):
 
 
 def main():
-    if not os.path.exists(SERVER):
+    server_binary = find_server(ROOT)
+    if server_binary is None:
         print("Сервер не собран: ./build.sh")
         return 1
 
@@ -292,7 +304,7 @@ def main():
     config_path = os.path.join(workdir, "config.json")
     json.dump(config, open(config_path, "w", encoding="utf-8"), indent=4, sort_keys=True)
 
-    server = subprocess.Popen([SERVER, config_path], cwd=workdir,
+    server = subprocess.Popen([server_binary, config_path], cwd=workdir,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         session = None
@@ -338,6 +350,7 @@ def main():
             # придёт всем, в том числе слушающему подключению, и переселит
             # его список.
             collected = list(session.animals)
+            collected_goblins = list(session.goblins)
             deltas = session.deltas
 
             # Полный список — по командному подключению (см. full_snapshot).
@@ -357,21 +370,27 @@ def main():
                       "мир с paused = false")
                 return 1
             full = sorted(full_message.get("animals") or [], key=lambda a: a["id"])
+            full_goblins = sorted(full_message.get("goblins") or [], key=lambda a: a["id"])
             if full_message.get("tick") != session.tick:
                 print(f"Мир шагнул на паузе: дельты по тик {session.tick}, "
                       f"полный список на тик {full_message.get('tick')}")
                 return 1
             if collected != full:
-                report(session.tick, collected, full)
+                report("животных", session.tick, collected, full)
+                return 1
+            if collected_goblins != full_goblins:
+                report("гоблинов", session.tick, collected_goblins, full_goblins)
                 return 1
             print(f"  сличение {check}/{RESYNCS} на тике {session.tick}: "
-                  f"{len(full)} животных, {deltas} дельт позади — сходится")
+                  f"{len(full)} животных, {len(full_goblins)} гоблинов, "
+                  f"{deltas} дельт позади — сходится")
 
             session.animals = full
+            session.goblins = full_goblins
             session.deltas = 0
             session.command({"type": "toggle_pause"})
 
-        print(f"Дельта животных сходится: {RESYNCS} сличений, тик {session.tick}")
+        print(f"Дельта существ сходится: {RESYNCS} сличений, тик {session.tick}")
         return check_suspension(session)
     finally:
         server.terminate()

@@ -33,6 +33,8 @@
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
+#include "core/components/GoblinDesireComponent.hpp"
+#include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -42,6 +44,7 @@
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
+#include "core/generation/GoblinGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "platform/ExecutablePath.hpp"
 
@@ -142,6 +145,10 @@ struct ParsedEntity {
     std::vector<PlantGenomeComponent> treeSpecies;
     bool hasAnimalSpecies = false;
     AnimalSpeciesComponent animalSpecies{};
+    // Племена гоблинов — там же и по тем же правилам, своим списком: таблица
+    // черт у них своя (kGoblinTraits), и племя — это вид внутри неё.
+    bool hasGoblinTribes = false;
+    GoblinTribesComponent goblinTribes{};
 
     // Живое растение — Entity с состоянием и геномом (оба обязательно
     // вместе: растение без генома не смогло бы ни расти, ни дать потомка).
@@ -169,9 +176,12 @@ struct ParsedEntity {
     // диеты оно не знало бы, что для него еда.
     bool hasAnimal = false;
     bool predator = false;
+    // Гоблин: то же тело, но своя таблица черт и своё желание.
+    bool goblin = false;
     AnimalComponent animal{};
     AnimalGenomeComponent animalGenome{};
     DesireComponent desire{};
+    GoblinDesireComponent goblinDesire{};
     std::uint64_t identity = 0;
 
     // Падаль лежит на терраформирующем Entity тайла, рядом с почвой,
@@ -237,6 +247,17 @@ nlohmann::json buildEntitiesJson(const World& world) {
             record["animal_species"] = {{"herbivores", std::move(herbivores)},
                                          {"predators", std::move(predators)}};
         }
+        if (const auto* tribes = registry.try_get<GoblinTribesComponent>(entity)) {
+            // Список один, в отличие от двух звериных: таблица черт у гоблинов
+            // одна. Без этой записи загруженный мир остаётся с гоблинами, но
+            // без племён — мутациям становится не вокруг чего гулять
+            // (kSpeciesBand), и за поколения племена слились бы в одно.
+            auto archetypes = nlohmann::json::array();
+            for (const auto& archetype : tribes->tribes) {
+                archetypes.push_back(genomeToJson(archetype, kGoblinTraits));
+            }
+            record["goblin_tribes"] = std::move(archetypes);
+        }
         if (const auto* position = registry.try_get<PositionComponent>(entity)) {
             record["position"] = {{"x", position->x}, {"y", position->y}};
         }
@@ -280,11 +301,16 @@ nlohmann::json buildEntitiesJson(const World& world) {
         }
         // Гоблин носит то же тело, но записан как животное он быть не
         // может: при чтении ему достался бы тег диеты, и в мир вернулся бы
-        // травоядный зверь с гоблинским геномом. Своя запись у гоблина
-        // появится вместе с его протоколом; пока сохранённый мир его теряет,
-        // и это честнее порчи.
-        if (registry.all_of<GoblinComponent>(entity)) {
-            continue;
+        // травоядный зверь с гоблинским геномом. Поэтому он помечается, и по
+        // этой метке читаются его геном (своя таблица черт) и его желание
+        // (своё перечисление).
+        //
+        // Тело при этом пишется тем же ключом "animal", что и у зверя, и это
+        // не небрежность: тело у них одно и то же (core/Body.hpp), а два
+        // ключа для одного компонента разошлись бы при первой же правке.
+        const bool goblin = registry.all_of<GoblinComponent>(entity);
+        if (goblin) {
+            record["goblin"] = true;
         }
         if (const auto* animal = registry.try_get<AnimalComponent>(entity)) {
             record["animal"] = {{"age", animal->age},
@@ -301,9 +327,10 @@ nlohmann::json buildEntitiesJson(const World& world) {
             // Черты пишутся по таблице своей диеты: у хищника их на одну
             // больше, и вписывать травоядному чужие поля было бы ложью о
             // том, из чего он состоит.
-            record["animal_genome"] = registry.all_of<PredatorComponent>(entity)
-                                           ? genomeToJson(*genome, kPredatorTraits)
-                                           : genomeToJson(*genome, kHerbivoreTraits);
+            record["animal_genome"] =
+                goblin ? genomeToJson(*genome, kGoblinTraits)
+                       : (registry.all_of<PredatorComponent>(entity) ? genomeToJson(*genome, kPredatorTraits)
+                                                                     : genomeToJson(*genome, kHerbivoreTraits));
         }
         if (const auto* carcass = registry.try_get<CarcassComponent>(entity)) {
             record["carcass"] = {{"meat", carcass->meat}, {"protein", carcass->protein}};
@@ -314,6 +341,12 @@ nlohmann::json buildEntitiesJson(const World& world) {
             // DesireComponent). Записывать их значило бы сохранять то, что
             // всё равно будет переписано.
             record["desire"] = {{"mating", desire->mating}, {"current", desireName(desire->current)}};
+        }
+        // Желание гоблина — своим ключом: перечисление у него другое, и имя
+        // "food" в двух этих ключах означает разные законы.
+        if (const auto* desire = registry.try_get<GoblinDesireComponent>(entity)) {
+            record["goblin_desire"] = {{"mating", desire->mating},
+                                        {"current", goblinDesireName(desire->current)}};
         }
         if (const auto* identity = registry.try_get<IdentityComponent>(entity)) {
             record["identity"] = identity->id;
@@ -444,6 +477,19 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 }
             }
         }
+        // Племена гоблинов — своим ключом и своей таблицей черт. Отдельной
+        // проверкой, а не веткой в цепочке выше: они не заменяют собой виды
+        // животных, они лежат рядом. У файлов, записанных до появления
+        // гоблинов, ключа просто нет.
+        if (record.contains("goblin_tribes") && record["goblin_tribes"].is_array()) {
+            parsed.hasGoblinTribes = true;
+            for (const auto& archetype : record["goblin_tribes"]) {
+                if (archetype.is_object()) {
+                    parsed.goblinTribes.tribes.push_back(
+                        genomeFromJson<AnimalGenomeComponent>(archetype, kGoblinTraits));
+                }
+            }
+        }
         if (record.contains("position")) {
             parsed.hasPosition = true;
             parsed.position.x = record["position"].value("x", 0);
@@ -521,6 +567,7 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         // новый пишется без оглядки на прошлое.
         const bool legacyBody = record.contains("herbivore") && record["herbivore"].is_object();
         parsed.predator = record.value("predator", false);
+        parsed.goblin = record.value("goblin", false);
 
         const char* bodyKey = record.contains("animal") ? "animal" : (legacyBody ? "herbivore" : nullptr);
         if (bodyKey != nullptr) {
@@ -547,9 +594,12 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 outError = "animal entity has no genome";
                 return false;
             }
-            parsed.animalGenome = parsed.predator
-                                       ? genomeFromJson<AnimalGenomeComponent>(record[genomeKey], kPredatorTraits)
-                                       : genomeFromJson<AnimalGenomeComponent>(record[genomeKey], kHerbivoreTraits);
+            parsed.animalGenome =
+                parsed.goblin
+                    ? genomeFromJson<AnimalGenomeComponent>(record[genomeKey], kGoblinTraits)
+                    : (parsed.predator
+                           ? genomeFromJson<AnimalGenomeComponent>(record[genomeKey], kPredatorTraits)
+                           : genomeFromJson<AnimalGenomeComponent>(record[genomeKey], kHerbivoreTraits));
 
             if (record.contains("desire")) {
                 const auto& desire = record["desire"];
@@ -558,6 +608,12 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 // тике, и хранить их между запусками мира незачем.
                 parsed.desire.mating = desire.value("mating", 0.0f);
                 parsed.desire.current = desireFromName(desire.value("current", std::string("idle")));
+            }
+            if (record.contains("goblin_desire")) {
+                const auto& desire = record["goblin_desire"];
+                parsed.goblinDesire.mating = desire.value("mating", 0);
+                parsed.goblinDesire.current =
+                    goblinDesireFromName(desire.value("current", std::string("idle")));
             }
             // Постоянный идентификатор — единственное, что животное не может
             // восстановить само: он и есть его ключ случайности. Если файл
@@ -1187,6 +1243,9 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             if (parsed.hasAnimalSpecies) {
                 world.registry().get<AnimalSpeciesComponent>(world.worldEntity()) = parsed.animalSpecies;
             }
+            if (parsed.hasGoblinTribes) {
+                world.registry().get<GoblinTribesComponent>(world.worldEntity()) = parsed.goblinTribes;
+            }
             continue;
         }
 
@@ -1219,7 +1278,20 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         if (parsed.tree) {
             world.registry().emplace<TreeComponent>(entity);
         }
-        if (parsed.hasAnimal) {
+        if (parsed.hasAnimal && parsed.goblin) {
+            // Гоблин: то же тело и тот же тип генома, но своё желание и свой
+            // тег. Диеты у него нет — он всеяден, и тега для этого не нужно
+            // (см. GoblinComponent). Увечий тоже нет: рогов на него никто не
+            // наставляет.
+            world.registry().emplace<AnimalComponent>(entity, parsed.animal);
+            world.registry().emplace<AnimalGenomeComponent>(entity, parsed.animalGenome);
+            world.registry().emplace<GoblinDesireComponent>(entity, parsed.goblinDesire);
+            world.registry().emplace<IdentityComponent>(entity, IdentityComponent{parsed.identity});
+            // Память ног в файле не лежит по той же причине, что и у зверя:
+            // шесть последних шагов — это походка, а не мир.
+            world.registry().emplace<MovementComponent>(entity);
+            world.registry().emplace<GoblinComponent>(entity);
+        } else if (parsed.hasAnimal) {
             world.registry().emplace<AnimalComponent>(entity, parsed.animal);
             world.registry().emplace<AnimalGenomeComponent>(entity, parsed.animalGenome);
             world.registry().emplace<DesireComponent>(entity, parsed.desire);

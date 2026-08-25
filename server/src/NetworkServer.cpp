@@ -28,6 +28,7 @@
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
+#include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/TreeComponent.hpp"
@@ -37,6 +38,7 @@
 #include "core/components/WaterSourceComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
+#include "core/generation/GoblinGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "core/Diagnostics.hpp"
 #include "protocol/WirePrecision.hpp"
@@ -96,9 +98,10 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     species.assign(count, -1);
     seeds.assign(count, -1);
     trees.assign(count, -1);
-    // Животные — список, а не слой (см. NetworkServer.hpp): он собирается
-    // заново на каждый снимок, поэтому здесь только очищается.
+    // Животные и гоблины — списки, а не слои (см. NetworkServer.hpp): они
+    // собираются заново на каждый снимок, поэтому здесь только очищаются.
     animals.clear();
+    goblins.clear();
 }
 
 NetworkServer::NetworkServer(const World& world, const PopulationHistory& history, const std::string& host, int port,
@@ -344,7 +347,118 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
               [](const LayerSnapshot::AnimalView& a, const LayerSnapshot::AnimalView& b) {
                   return a.id < b.id;
               });
+
+    // Гоблины — своим списком и по тем же правилам. В звериный они не
+    // попадают сами: тот выбирается по DesireComponent, которого у гоблина
+    // нет (см. GoblinDesireComponent.hpp).
+    registry
+        .view<const PositionComponent, const AnimalComponent, const AnimalGenomeComponent,
+              const GoblinDesireComponent>()
+        .each([&](const entt::entity entity, const PositionComponent& pos, const AnimalComponent& body,
+                   const AnimalGenomeComponent& genome, const GoblinDesireComponent& desire) {
+            const auto* identity = registry.try_get<const IdentityComponent>(entity);
+            // По имени поля, а не по порядку: полей восемь, половина из них
+            // int, и перепутанные местами племя с развитостью собрались бы
+            // молча.
+            out.goblins.push_back(LayerSnapshot::GoblinView{
+                .id = identity != nullptr ? identity->id : 0,
+                .x = pos.x,
+                .y = pos.y,
+                .growth = toWire(body.growth),
+                .health = toWire(body.health),
+                .desire = desire.current,
+                .tribe = genome.species,
+                .sex = body.sex});
+        });
+    std::sort(out.goblins.begin(), out.goblins.end(),
+              [](const LayerSnapshot::GoblinView& a, const LayerSnapshot::GoblinView& b) {
+                  return a.id < b.id;
+              });
 }
+
+namespace {
+
+// Имя желания на провод. Перегрузка, а не общая функция: перечисления у
+// зверя и у гоблина разные и общими быть не должны (см.
+// GoblinDesireComponent.hpp), а слиянию списков нужно одно имя на оба.
+const char* wireDesire(Desire desire) { return desireName(desire); }
+const char* wireDesire(GoblinDesire desire) { return goblinDesireName(desire); }
+
+// Слияние двух отсортированных по id списков — ОДИН закон на всех, у кого
+// есть список существ в протоколе.
+//
+// Списки у зверя и у гоблина разные (у одного диета, у другого племя), а вот
+// то, КАК из двух списков получается дельта, у них совпадает до последней
+// строки: ушедший есть только слева, родившийся — только справа, общий
+// сравнивается по полям, индекс — место в ПРЕЖНЕМ списке, порядок ключей
+// есть порядок применения. Скопировать это вторым разом значит завести два
+// закона там, где он один: разойдутся они молча, а увидеть это будет нечем
+// — существо просто окажется на карте не там, где оно есть в мире.
+//
+// От вида требуется ровно то, что сравнивается: id, x, y, growth, health,
+// desire. Всё остальное в дельту не входит по определению — оно не меняется
+// за жизнь.
+template <typename View, typename ToCard>
+nlohmann::json creaturesDeltaJson(const std::vector<View>& previous, const std::vector<View>& current,
+                                   ToCard&& toCard) {
+    auto gone = nlohmann::json::array();
+    auto born = nlohmann::json::array();
+    auto pos = nlohmann::json::array();
+    auto growth = nlohmann::json::array();
+    auto health = nlohmann::json::array();
+    auto desire = nlohmann::json::array();
+
+    std::size_t p = 0;
+    std::size_t c = 0;
+    while (p < previous.size() || c < current.size()) {
+        if (c == current.size() || (p < previous.size() && previous[p].id < current[c].id)) {
+            gone.push_back(p);
+            ++p;
+            continue;
+        }
+        if (p == previous.size() || current[c].id < previous[p].id) {
+            born.push_back(toCard(current[c]));
+            ++c;
+            continue;
+        }
+        const auto& was = previous[p];
+        const auto& now = current[c];
+        // Индекс — место в ПРЕЖНЕМ списке: клиент правит тот список,
+        // который у него уже есть, и делает это до удалений и вставок.
+        if (was.x != now.x || was.y != now.y) {
+            pos.push_back(p);
+            pos.push_back(now.x);
+            pos.push_back(now.y);
+        }
+        if (was.growth != now.growth) {
+            growth.push_back(p);
+            growth.push_back(now.growth);
+        }
+        if (was.health != now.health) {
+            health.push_back(p);
+            health.push_back(now.health);
+        }
+        if (was.desire != now.desire) {
+            desire.push_back(p);
+            desire.push_back(wireDesire(now.desire));
+        }
+        ++p;
+        ++c;
+    }
+
+    nlohmann::json message = nlohmann::json::object();
+    // Порядок ключей здесь и есть порядок применения на клиенте
+    // (правки -> удаления -> вставки), и он же описан в протоколе.
+    if (!pos.empty()) message["pos"] = std::move(pos);
+    if (!growth.empty()) message["growth"] = std::move(growth);
+    if (!health.empty()) message["health"] = std::move(health);
+    if (!desire.empty()) message["desire"] = std::move(desire);
+    if (!gone.empty()) message["gone"] = std::move(gone);
+    if (!born.empty()) message["born"] = std::move(born);
+    return message.empty() ? nlohmann::json{} : message;
+}
+
+} // namespace
 
 // Карточка одного животного — всё, что о нём знает клиент. Одна на
 // world_init и на "born" дельты: разойтись эти два места не должны.
@@ -370,66 +484,37 @@ nlohmann::json NetworkServer::animalsToJson(const std::vector<LayerSnapshot::Ani
 
 nlohmann::json NetworkServer::animalsDeltaJson(const std::vector<LayerSnapshot::AnimalView>& previous,
                                                 const std::vector<LayerSnapshot::AnimalView>& current) {
-    auto gone = nlohmann::json::array();
-    auto born = nlohmann::json::array();
-    auto pos = nlohmann::json::array();
-    auto growth = nlohmann::json::array();
-    auto health = nlohmann::json::array();
-    auto desire = nlohmann::json::array();
+    // Вид, диета и пол животного не меняются за всю его жизнь, поэтому в
+    // дельте их нет вовсе: они приезжают один раз, в карточке. Само слияние
+    // — общий закон (creaturesDeltaJson выше).
+    return creaturesDeltaJson(previous, current, animalToJson);
+}
 
-    // Оба списка отсортированы по id (см. captureLayers), поэтому сравнение
-    // — обычное слияние: ушедший есть только слева, родившийся — только
-    // справа, а тот, кто есть с обеих сторон, сравнивается по полям.
-    std::size_t p = 0;
-    std::size_t c = 0;
-    while (p < previous.size() || c < current.size()) {
-        if (c == current.size() || (p < previous.size() && previous[p].id < current[c].id)) {
-            gone.push_back(p);
-            ++p;
-            continue;
-        }
-        if (p == previous.size() || current[c].id < previous[p].id) {
-            born.push_back(animalToJson(current[c]));
-            ++c;
-            continue;
-        }
-        const auto& was = previous[p];
-        const auto& now = current[c];
-        // Индекс — место в ПРЕЖНЕМ списке: клиент правит тот список,
-        // который у него уже есть, и делает это до удалений и вставок.
-        if (was.x != now.x || was.y != now.y) {
-            pos.push_back(p);
-            pos.push_back(now.x);
-            pos.push_back(now.y);
-        }
-        if (was.growth != now.growth) {
-            growth.push_back(p);
-            growth.push_back(now.growth);
-        }
-        if (was.health != now.health) {
-            health.push_back(p);
-            health.push_back(now.health);
-        }
-        if (was.desire != now.desire) {
-            desire.push_back(p);
-            desire.push_back(desireName(now.desire));
-        }
-        // Вид, диета и пол животного не меняются за всю его жизнь, поэтому
-        // в дельте их нет вовсе: они приезжают один раз, в карточке.
-        ++p;
-        ++c;
+// Карточка одного гоблина. Племя вместо диеты, и "kind" здесь нет вовсе:
+// список у гоблинов свой, и что в нём лежат гоблины, видно по самому списку.
+nlohmann::json NetworkServer::goblinToJson(const LayerSnapshot::GoblinView& goblin) {
+    return {{"id", goblin.id},
+            {"x", goblin.x},
+            {"y", goblin.y},
+            {"tribe", goblin.tribe},
+            {"growth", goblin.growth},
+            {"health", goblin.health},
+            {"sex", sexName(goblin.sex)},
+            {"desire", goblinDesireName(goblin.desire)}};
+}
+
+nlohmann::json NetworkServer::goblinsToJson(const std::vector<LayerSnapshot::GoblinView>& goblins) {
+    auto array = nlohmann::json::array();
+    for (const auto& goblin : goblins) {
+        array.push_back(goblinToJson(goblin));
     }
+    return array;
+}
 
-    nlohmann::json message = nlohmann::json::object();
-    // Порядок ключей здесь и есть порядок применения на клиенте
-    // (правки -> удаления -> вставки), и он же описан в протоколе.
-    if (!pos.empty()) message["pos"] = std::move(pos);
-    if (!growth.empty()) message["growth"] = std::move(growth);
-    if (!health.empty()) message["health"] = std::move(health);
-    if (!desire.empty()) message["desire"] = std::move(desire);
-    if (!gone.empty()) message["gone"] = std::move(gone);
-    if (!born.empty()) message["born"] = std::move(born);
-    return message.empty() ? nlohmann::json{} : message;
+nlohmann::json NetworkServer::goblinsDeltaJson(const std::vector<LayerSnapshot::GoblinView>& previous,
+                                                const std::vector<LayerSnapshot::GoblinView>& current) {
+    // Племя и пол за жизнь не меняются — в дельту не входят.
+    return creaturesDeltaJson(previous, current, goblinToJson);
 }
 
 namespace {
@@ -672,7 +757,7 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
         std::lock_guard<std::mutex> lock(watchMutex_);
         target = watch_;
     }
-    if (target.kind != "animal" && target.kind != "plant") {
+    if (target.kind != "animal" && target.kind != "goblin" && target.kind != "plant") {
         return nlohmann::json{};
     }
 
@@ -685,8 +770,7 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
         // в этом и смысл слежения.
         // Гоблина по этому пути искать нельзя: карточка ниже читает
         // DesireComponent, которого у него нет вовсе (см.
-        // GoblinDesireComponent). Смотреть за гоблином — своя ветка, и она
-        // появится вместе с его протоколом.
+        // GoblinDesireComponent). За ним — своя ветка ниже.
         for (const auto entity :
              registry.view<const IdentityComponent, const AnimalComponent>(entt::exclude<GoblinComponent>)) {
             if (registry.get<const IdentityComponent>(entity).id != target.id) {
@@ -745,6 +829,54 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
         // Не нашлось — животное умерло или было съедено, пока за ним
         // следили. Это тоже ответ, и клиенту важно его получить: иначе он
         // показывал бы последнее известное состояние как текущее.
+        return nlohmann::json{{"kind", "gone"}};
+    }
+
+    if (target.kind == "goblin") {
+        // Своя ветка, а не третий случай в звериной: у гоблина другое
+        // перечисление желаний, племя вместо диеты и своя таблица черт. Тело
+        // же читается тем же самым способом — оно у них одно (core/Body.hpp),
+        // и Needs.hpp считает голод и жажду по одной формуле для обоих.
+        for (const auto entity : registry.view<const IdentityComponent, const AnimalComponent,
+                                               const GoblinDesireComponent>()) {
+            if (registry.get<const IdentityComponent>(entity).id != target.id) {
+                continue;
+            }
+            const auto& body = registry.get<const AnimalComponent>(entity);
+            const auto& genome = registry.get<const AnimalGenomeComponent>(entity);
+            const auto& position = registry.get<const PositionComponent>(entity);
+            const auto& desire = registry.get<const GoblinDesireComponent>(entity);
+
+            watched["kind"] = "goblin";
+            watched["id"] = target.id;
+            watched["x"] = position.x;
+            watched["y"] = position.y;
+            watched["tribe"] = genome.species;
+            watched["sex"] = sexName(body.sex);
+            watched["desire"] = goblinDesireName(desire.current);
+
+            auto groups = nlohmann::json::array();
+            // Хромоты у гоблина нет: увечья приходят от рогов, которых на
+            // него никто не наставляет (см. docs/10_Goblins.md, п.4).
+            groups.push_back(makeGroup("Body", {{"age", body.age},
+                                                 {"growth", body.growth},
+                                                 {"health", body.health},
+                                                 {"energy", body.energy},
+                                                 {"water", body.water},
+                                                 {"protein", body.protein},
+                                                 {"dung", body.dung},
+                                                 {"step_progress", body.stepProgress}}));
+            groups.push_back(makeGroup("Desires", {{"hunger", hungerOf(body, genome)},
+                                                    {"thirst", thirstOf(body, genome)},
+                                                    {"mating", desire.mating}}));
+            groups.push_back(makeGenomeGroup(goblinTraits(), genome));
+
+            // Дороги пока нет: её рисует appendRoad по звериным желаниям
+            // (охота, зов пары), а у гоблина они свои. Появится вместе с
+            // памятью места — тогда и рисовать будет что.
+            watched["groups"] = std::move(groups);
+            return watched;
+        }
         return nlohmann::json{{"kind", "gone"}};
     }
 
@@ -882,6 +1014,22 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["animal_species"] = {{"herbivores", speciesToJson(animalSpecies.herbivores, herbivoreTraits())},
                                   {"predators", speciesToJson(animalSpecies.predators, predatorTraits())}};
 
+    // Племена гоблинов — тем же способом, но списком одним: таблица черт у
+    // них одна (kGoblinTraits), и племя — это вид внутри неё. Ключ поля
+    // "tribe", а не "species": в мире это племя, и называть его видом
+    // клиенту незачем.
+    const auto& goblinTribes = world_.registry().get<const GoblinTribesComponent>(world_.worldEntity());
+    auto tribesJson = nlohmann::json::array();
+    for (const auto& archetype : goblinTribes.tribes) {
+        nlohmann::json record;
+        record["tribe"] = archetype.species;
+        for (const auto& trait : goblinTraits()) {
+            record[trait.name] = archetype.*trait.gene;
+        }
+        tribesJson.push_back(std::move(record));
+    }
+    message["goblin_tribes"] = std::move(tribesJson);
+
     // Сгенерирован ли мир вообще. Сервер поднимается с пустой Областью и
     // ждёт, пока мир создадут с панели генерации, — и клиент должен
     // отличать "мир, в котором ничего нет" от "мира ещё нет": в первом
@@ -890,6 +1038,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["generated"] = !world_.registry().view<const PositionComponent>().empty();
 
     message["animals"] = animalsToJson(layers.animals);
+    message["goblins"] = goblinsToJson(layers.goblins);
 
     // Подробности выбранного — в world_init тоже: подключившийся (или
     // переподключившийся) клиент должен увидеть открытую карточку
@@ -931,7 +1080,8 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     history["traits"] = {{"plants", traitsToJson(kGrassTraits)},
                           {"trees", traitsToJson(kTreeTraits)},
                           {"herbivores", traitsToJson(herbivoreTraits())},
-                          {"predators", traitsToJson(predatorTraits())}};
+                          {"predators", traitsToJson(predatorTraits())},
+                          {"goblins", traitsToJson(goblinTraits())}};
     message["history"] = std::move(history);
 
     message["layers"]["rockiness"] = layers.rockiness;
@@ -991,6 +1141,12 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
     if (!animals.is_null()) {
         anyChange = true;
         message["animals"] = std::move(animals);
+    }
+
+    auto goblins = goblinsDeltaJson(previous.goblins, current.goblins);
+    if (!goblins.is_null()) {
+        anyChange = true;
+        message["goblins"] = std::move(goblins);
     }
 
     // Летопись — только точки новее отправленных. Прореживание меняет все

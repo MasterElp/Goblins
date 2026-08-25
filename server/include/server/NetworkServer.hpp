@@ -16,6 +16,7 @@
 #include "core/World.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/DesireComponent.hpp"
+#include "core/components/GoblinDesireComponent.hpp"
 #include "server/PopulationHistory.hpp"
 #include "world/WorldSaveInfo.hpp"
 
@@ -44,7 +45,7 @@ struct SaveWorldRequest {
 // интерфейсы" (02_CorePrinciples.md) и границам модулей (07_TechStack.md,
 // п.6: core не знает о server, server не меняет core).
 //
-// Протокол (версия 25):
+// Протокол (версия 26):
 //   Состояние мира уходит клиенту двумя разными сообщениями, потому что
 //   оно состоит из двух разных по природе частей. Полный world_init —
 //   всё, включая то, что между регенерациями не меняется вообще
@@ -103,6 +104,20 @@ struct SaveWorldRequest {
 //              (IdentityComponent): по нему клиент узнаёт то же самое
 //              животное в следующем снимке и может следить за ним, пока
 //              оно ходит по карте
+//      "goblin_tribes": [{"tribe": N, <черты генома>}, ...]
+//              -- племена гоблинов: список один (в отличие от двух звериных),
+//              потому что таблица черт у них одна (core::kGoblinTraits), а
+//              племя — это вид внутри неё
+//      "goblins": [{"id", "x", "y", "tribe", "sex", "desire",
+//                    "growth", "health"}, ...]
+//              -- третий канал состояния, устроенный ровно как "animals" и
+//              по тем же причинам. Список СВОЙ, а не общий с животными, и
+//              это не удвоение: у гоблина вместо диеты племя, а желания у
+//              него свои (core::GoblinDesire — их станет вдвое больше:
+//              отдых, ноша, работа), и класть его в звериный список значило
+//              бы возить каждому зверю поля, которых у него нет. Тело при
+//              этом у них общее (core/Body.hpp), поэтому и набор полей
+//              здесь пока почти совпадает
 //      "watched": {...}  -- подробности того, за кем сейчас следит клиент
 //              (см. "watch" ниже). Отсутствует, пока никто не выбран
 //      "history": {"interval": N, "full": true,
@@ -190,6 +205,7 @@ struct SaveWorldRequest {
 //        {"gone": [индекс, ...], "born": [{карточка}, ...],
 //         "pos": [индекс, x, y, ...], "growth": [индекс, значение, ...],
 //         "health": [...], "desire": [индекс, "имя", ...]}
+//      Гоблины ("goblins") в дельте — такой же объект и с теми же ключами.
 //      Индекс — место животного в ПРЕЖНЕМ списке, том самом, который
 //      клиент уже держит; список с обеих сторон отсортирован по "id", и
 //      порядок этот сохраняется при любой правке. Отдельного ключа
@@ -492,6 +508,26 @@ private:
         // животное местом в списке, как слой — номером тайла.
         std::vector<AnimalView> animals;
 
+        // Гоблины — свой список, устроенный так же. Отдельный, а не общий с
+        // животными, потому что различаются они не телом (оно у них одно,
+        // core/Body.hpp), а тем, чем живут: у гоблина вместо диеты племя, и
+        // желания свои (GoblinDesire), которых у зверя быть не может.
+        // Сведи их в один список — и каждому зверю пришлось бы возить поля,
+        // которых у него нет, а дельта считала бы изменением их отсутствие.
+        struct GoblinView {
+            std::uint64_t id = 0;
+            // Меняется за жизнь и потому едет в дельте.
+            int x = 0;
+            int y = 0;
+            int growth = 0;
+            int health = 0;
+            GoblinDesire desire = GoblinDesire::Idle;
+            // Не меняется за всю жизнь и потому едет только в карточке.
+            int tribe = 0;
+            Sex sex = Sex::Female;
+        };
+        std::vector<GoblinView> goblins;
+
         void resize(int w, int h);
     };
 
@@ -507,6 +543,14 @@ private:
     // слиянием. Возвращает null, если ничего не изменилось.
     static nlohmann::json animalsDeltaJson(const std::vector<LayerSnapshot::AnimalView>& previous,
                                             const std::vector<LayerSnapshot::AnimalView>& current);
+    // То же самое для гоблинов. Три отдельные функции, а не три ветки в
+    // одной: карточка у них своя (племя вместо диеты), а вот СЛИЯНИЕ двух
+    // списков — закон общий, и он живёт одним шаблоном в .cpp. Копировать
+    // его вторым разом нельзя: разъедется молча и в самом неприятном месте.
+    static nlohmann::json goblinToJson(const LayerSnapshot::GoblinView& goblin);
+    static nlohmann::json goblinsToJson(const std::vector<LayerSnapshot::GoblinView>& goblins);
+    static nlohmann::json goblinsDeltaJson(const std::vector<LayerSnapshot::GoblinView>& previous,
+                                            const std::vector<LayerSnapshot::GoblinView>& current);
     // Подробности выбранного существа (см. "watch" в описании протокола):
     // тело, желания и геном парами "имя-число". Читает ECS registry —
     // только с потока GameLoop, как и captureLayers. Возвращает null,

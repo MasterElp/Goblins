@@ -31,11 +31,17 @@ struct Layers {
     // выключатель влияет и на неё: падаль — состояние тайла, и гасить её
     // надо вместе со зверями, а не вместе с травой.
     bool animals = true;
+    // Гоблины — свой выключатель, а не часть звериного: смотреть на мир без
+    // поселенцев и смотреть на мир без зверья — разные надобности. Текстуры
+    // он не касается вовсе (гоблин не оставляет следа на почве — пока), но
+    // лежит здесь же, чтобы все выключатели карты были в одном месте.
+    bool goblins = true;
 };
 
 inline bool operator==(const Layers& a, const Layers& b) {
     return a.rockiness == b.rockiness && a.moisture == b.moisture &&
-           a.minerals == b.minerals && a.height == b.height && a.plants == b.plants && a.animals == b.animals;
+           a.minerals == b.minerals && a.height == b.height && a.plants == b.plants &&
+           a.animals == b.animals && a.goblins == b.goblins;
 }
 inline bool operator!=(const Layers& a, const Layers& b) {
     return !(a == b);

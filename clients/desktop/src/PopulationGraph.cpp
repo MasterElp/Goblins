@@ -29,13 +29,14 @@ constexpr float kFooterHeight = 17.0f;
 
 using History = std::vector<WorldState::PopulationPoint>;
 
-enum class Kind { Plants, Trees, Herbivores, Predators };
+enum class Kind { Plants, Trees, Herbivores, Predators, Goblins };
 
 const std::vector<int>& valuesOf(const WorldState::PopulationPoint& point, Kind kind) {
     switch (kind) {
         case Kind::Plants: return point.plants;
         case Kind::Trees: return point.trees;
         case Kind::Predators: return point.predators;
+        case Kind::Goblins: return point.goblins;
         case Kind::Herbivores: break;
     }
     return point.herbivores;
@@ -61,6 +62,7 @@ Color seriesColor(Kind kind, int species) {
         case Kind::Plants: return TileColors::plantSpecies(species);
         case Kind::Trees: return TileColors::treeSpecies(species);
         case Kind::Predators: return TileColors::predatorSpecies(species);
+        case Kind::Goblins: return TileColors::goblinTribe(species);
         case Kind::Herbivores: break;
     }
     return TileColors::herbivoreSpecies(species);
@@ -328,7 +330,8 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     // ряд: панель узкая и высокая (она стоит справа от карты), и три
     // графика по трети её ширины были бы шириной с подпись.
     const float chartWidth = bounds.width - kPadding * 2.0f;
-    const float chartHeight = (bounds.height - desiresHeight - kPadding * 2.0f - kGap * 3.0f) / 4.0f;
+    // Пять панелей: трава, рощи, травоядные, хищники, гоблины.
+    const float chartHeight = (bounds.height - desiresHeight - kPadding * 2.0f - kGap * 4.0f) / 5.0f;
     if (chartWidth < kValueLabelWidth + 60.0f || chartHeight < kHeaderHeight + kFooterHeight + 30.0f) {
         DrawText("Population history: panel is too small", static_cast<int>(bounds.x) + 10,
                  static_cast<int>(bounds.y) + 10 + static_cast<int>(desiresHeight), kTitleFont, mutedColor);
@@ -338,6 +341,7 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     const Rectangle trees{plants.x, plants.y + chartHeight + kGap, chartWidth, chartHeight};
     const Rectangle herbivores{plants.x, trees.y + chartHeight + kGap, chartWidth, chartHeight};
     const Rectangle predators{plants.x, herbivores.y + chartHeight + kGap, chartWidth, chartHeight};
+    const Rectangle goblinsChart{plants.x, predators.y + chartHeight + kGap, chartWidth, chartHeight};
 
     // Курсор один на все панели: точка летописи общая, и вопрос, ради
     // которого на график вообще смотрят, — что было с травой в тот момент,
@@ -374,9 +378,13 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     // причина, по которой порознь стоят травоядные и хищники.
     drawChart(history, trees, Kind::Trees, "Trees -- standing", hasHover, hoverIndex, nullptr);
     drawChart(history, herbivores, Kind::Herbivores, "Herbivores -- animals", hasHover, hoverIndex, nullptr);
+    drawChart(history, predators, Kind::Predators, "Predators -- animals", hasHover, hoverIndex, nullptr);
+    // Гоблины — своей панелью и по той же причине, что деревья: их десятки
+    // там, где зверья сотни, и на общей шкале их кривая легла бы в ноль.
     // Подпись про число точек — под нижним графиком: она относится ко всей
-    // летописи, а не к одной панели, и повторять её трижды незачем.
-    drawChart(history, predators, Kind::Predators, "Predators -- animals", hasHover, hoverIndex, footerNote.c_str());
+    // летописи, а не к одной панели, и повторять её пять раз незачем.
+    drawChart(history, goblinsChart, Kind::Goblins, "Goblins -- by tribe", hasHover, hoverIndex,
+              footerNote.c_str());
 }
 
 } // namespace PopulationGraph

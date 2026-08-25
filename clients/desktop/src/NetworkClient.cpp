@@ -54,6 +54,110 @@ WorldState::Animal parseAnimal(const nlohmann::json& animal) {
     return parsed;
 }
 
+// Карточка гоблина. Своя, а не третий случай в звериной: у гоблина племя
+// вместо диеты, и "kind" в его карточке нет вовсе — что в списке лежат
+// гоблины, видно по самому списку.
+WorldState::Goblin parseGoblin(const nlohmann::json& goblin) {
+    WorldState::Goblin parsed;
+    parsed.id = goblin.value("id", static_cast<std::uint64_t>(0));
+    parsed.x = goblin.value("x", 0);
+    parsed.y = goblin.value("y", 0);
+    parsed.tribe = goblin.value("tribe", 0);
+    parsed.growth = goblin.value("growth", 0) * kFromHundredths;
+    parsed.health = goblin.value("health", 100) * kFromHundredths;
+    parsed.sex = goblin.value("sex", std::string{});
+    parsed.desire = goblin.value("desire", std::string{});
+    return parsed;
+}
+
+// Применение изменений к списку существ — ОДИН закон на всех, у кого такой
+// список есть.
+//
+// Списки у зверя и у гоблина разные, а вот КАК из дельты получается новый
+// список — совпадает до последней строки, и обязано совпадать: на той
+// стороне провода их собирает один и тот же шаблон
+// (creaturesDeltaJson в server/NetworkServer.cpp). Скопировать это вторым
+// разом значит завести два закона там, где он один, — а разъехавшись, они
+// поставят существо на карте не туда, где оно есть в мире, и заметить это
+// будет нечем.
+//
+// Порядок обязателен и он же порядок ключей в сообщении: сперва правки по
+// индексам, потом удаление ушедших (их индексы — в том же прежнем списке),
+// и только потом вставка родившихся.
+template <typename Card, typename Parse>
+void applyCreatureChanges(std::vector<Card>& list, const nlohmann::json& changes, Parse&& parse) {
+    // Пары "индекс - значение", как у тайловых слоёв, только правится не
+    // клетка, а существо. Индекс проверяется: сообщение приходит извне.
+    const auto applyPairs = [&](const char* key, auto&& write) {
+        if (!changes.contains(key) || !changes[key].is_array()) {
+            return;
+        }
+        const auto& pairs = changes[key];
+        for (std::size_t p = 0; p + 1 < pairs.size(); p += 2) {
+            const auto index = pairs[p].get<std::size_t>();
+            if (index < list.size()) {
+                write(list[index], pairs[p + 1]);
+            }
+        }
+    };
+
+    if (changes.contains("pos") && changes["pos"].is_array()) {
+        const auto& triples = changes["pos"];
+        for (std::size_t p = 0; p + 2 < triples.size(); p += 3) {
+            const auto index = triples[p].get<std::size_t>();
+            if (index < list.size()) {
+                list[index].x = triples[p + 1].get<int>();
+                list[index].y = triples[p + 2].get<int>();
+            }
+        }
+    }
+    applyPairs("growth", [](Card& c, const nlohmann::json& v) { c.growth = v.get<int>() * kFromHundredths; });
+    applyPairs("health", [](Card& c, const nlohmann::json& v) { c.health = v.get<int>() * kFromHundredths; });
+    applyPairs("desire", [](Card& c, const nlohmann::json& v) {
+        if (v.is_string()) {
+            c.desire = v.get<std::string>();
+        }
+    });
+
+    if (changes.contains("gone") && changes["gone"].is_array()) {
+        // Пометить и выбросить одним проходом: удалять по одному значило бы
+        // сдвигать хвост списка на каждом ушедшем, а индексы в сообщении
+        // считаны в списке до всяких удалений.
+        std::vector<bool> gone(list.size(), false);
+        for (const auto& index : changes["gone"]) {
+            const auto i = index.get<std::size_t>();
+            if (i < gone.size()) {
+                gone[i] = true;
+            }
+        }
+        std::vector<Card> kept;
+        kept.reserve(list.size());
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            if (!gone[i]) {
+                kept.push_back(std::move(list[i]));
+            }
+        }
+        list = std::move(kept);
+    }
+
+    if (changes.contains("born") && changes["born"].is_array()) {
+        // Родившиеся приходят полными карточками и в порядке id, остаток
+        // списка в том же порядке — значит слияние, а не сортировка.
+        std::vector<Card> born;
+        for (const auto& record : changes["born"]) {
+            if (record.is_object()) {
+                born.push_back(parse(record));
+            }
+        }
+        std::vector<Card> merged;
+        merged.reserve(list.size() + born.size());
+        std::merge(std::make_move_iterator(list.begin()), std::make_move_iterator(list.end()),
+                   std::make_move_iterator(born.begin()), std::make_move_iterator(born.end()),
+                   std::back_inserter(merged), [](const Card& a, const Card& b) { return a.id < b.id; });
+        list = std::move(merged);
+    }
+}
+
 // Плотный слой из world_init: сервер шлёт его целыми (в JSON это вчетверо
 // компактнее, чем double), клиент держит долями — так его читают
 // TileColors и подписи под курсором.
@@ -231,84 +335,27 @@ void NetworkClient::applyAnimalChanges(const nlohmann::json& message) {
     if (!message.contains("animals") || !message["animals"].is_object()) {
         return;
     }
-    const auto& changes = message["animals"];
-    auto& animals = working_.animals;
+    applyCreatureChanges(working_.animals, message["animals"], parseAnimal);
+}
 
-    // Пары "индекс - значение", как у тайловых слоёв, только правится не
-    // клетка, а животное. Индекс проверяется: сообщение приходит извне.
-    const auto applyPairs = [&](const char* key, auto&& write) {
-        if (!changes.contains(key) || !changes[key].is_array()) {
-            return;
-        }
-        const auto& pairs = changes[key];
-        for (std::size_t p = 0; p + 1 < pairs.size(); p += 2) {
-            const auto index = pairs[p].get<std::size_t>();
-            if (index < animals.size()) {
-                write(animals[index], pairs[p + 1]);
-            }
-        }
-    };
-
-    if (changes.contains("pos") && changes["pos"].is_array()) {
-        const auto& triples = changes["pos"];
-        for (std::size_t p = 0; p + 2 < triples.size(); p += 3) {
-            const auto index = triples[p].get<std::size_t>();
-            if (index < animals.size()) {
-                animals[index].x = triples[p + 1].get<int>();
-                animals[index].y = triples[p + 2].get<int>();
-            }
-        }
+void NetworkClient::applyGoblins(const nlohmann::json& message) {
+    if (!message.contains("goblins") || !message["goblins"].is_array()) {
+        return;
     }
-    applyPairs("growth", [](WorldState::Animal& a, const nlohmann::json& v) {
-        a.growth = v.get<int>() * kFromHundredths;
-    });
-    applyPairs("health", [](WorldState::Animal& a, const nlohmann::json& v) {
-        a.health = v.get<int>() * kFromHundredths;
-    });
-    applyPairs("desire", [](WorldState::Animal& a, const nlohmann::json& v) {
-        if (v.is_string()) {
-            a.desire = v.get<std::string>();
+    working_.goblins.clear();
+    for (const auto& goblin : message["goblins"]) {
+        if (!goblin.is_object()) {
+            continue;
         }
-    });
-
-    if (changes.contains("gone") && changes["gone"].is_array()) {
-        // Пометить и выбросить одним проходом: удалять по одному значило бы
-        // сдвигать хвост списка на каждом ушедшем, а индексы в сообщении
-        // считаны в списке до всяких удалений.
-        std::vector<bool> gone(animals.size(), false);
-        for (const auto& index : changes["gone"]) {
-            const auto i = index.get<std::size_t>();
-            if (i < gone.size()) {
-                gone[i] = true;
-            }
-        }
-        std::vector<WorldState::Animal> kept;
-        kept.reserve(animals.size());
-        for (std::size_t i = 0; i < animals.size(); ++i) {
-            if (!gone[i]) {
-                kept.push_back(std::move(animals[i]));
-            }
-        }
-        animals = std::move(kept);
+        working_.goblins.push_back(parseGoblin(goblin));
     }
+}
 
-    if (changes.contains("born") && changes["born"].is_array()) {
-        // Родившиеся приходят полными карточками и в порядке id, остаток
-        // списка в том же порядке — значит слияние, а не сортировка.
-        std::vector<WorldState::Animal> born;
-        for (const auto& record : changes["born"]) {
-            if (record.is_object()) {
-                born.push_back(parseAnimal(record));
-            }
-        }
-        std::vector<WorldState::Animal> merged;
-        merged.reserve(animals.size() + born.size());
-        std::merge(std::make_move_iterator(animals.begin()), std::make_move_iterator(animals.end()),
-                   std::make_move_iterator(born.begin()), std::make_move_iterator(born.end()),
-                   std::back_inserter(merged),
-                   [](const WorldState::Animal& a, const WorldState::Animal& b) { return a.id < b.id; });
-        animals = std::move(merged);
+void NetworkClient::applyGoblinChanges(const nlohmann::json& message) {
+    if (!message.contains("goblins") || !message["goblins"].is_object()) {
+        return;
     }
+    applyCreatureChanges(working_.goblins, message["goblins"], parseGoblin);
 }
 
 // Летопись численности — общий разбор для world_init и дельты (см.
@@ -370,6 +417,12 @@ void NetworkClient::applyPopulationHistory(const nlohmann::json& message, bool r
             point.trees = decodeIntArray(entry[7]);
             point.treeGenome = decodeIntArray(entry[8]);
         }
+        // Гоблины — десятым и одиннадцатым, тем же способом. Элемент в
+        // конец: имена полей у тысячи точек весили бы больше самих чисел.
+        if (entry.size() > 10) {
+            point.goblins = decodeIntArray(entry[9]);
+            point.goblinGenome = decodeIntArray(entry[10]);
+        }
         working_.populationHistory.push_back(std::move(point));
     }
 }
@@ -403,6 +456,7 @@ void NetworkClient::applyPopulationTraits(const nlohmann::json& history) {
     working_.treeTraits = read(traits.contains("trees") ? traits["trees"] : nlohmann::json{});
     working_.herbivoreTraits = read(traits.contains("herbivores") ? traits["herbivores"] : nlohmann::json{});
     working_.predatorTraits = read(traits.contains("predators") ? traits["predators"] : nlohmann::json{});
+    working_.goblinTraits = read(traits.contains("goblins") ? traits["goblins"] : nlohmann::json{});
 }
 
 // Карточка выбранного существа. Приходит только когда изменилась, поэтому
@@ -596,6 +650,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
             }
         }
         applyAnimals(json);
+        applyGoblins(json);
         // Летопись — заменой, а не дополнением: world_init означает, что
         // мир построен заново (регенерация, загрузка), и накопленное
         // относится к другому миру. Старый сервер её вовсе не пришлёт —
@@ -654,6 +709,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // Поголовье — изменениями, как и слои, только правится не клетка,
         // а животное (см. протокол в server/NetworkServer.hpp).
         applyAnimalChanges(json);
+        applyGoblinChanges(json);
         applyPopulationHistory(json, /*replace=*/false);
         applyWatched(json);
         publishState();

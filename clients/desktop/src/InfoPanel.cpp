@@ -119,12 +119,24 @@ const WorldState::Animal* findAnimal(const WorldState& state, std::uint64_t id) 
     return nullptr;
 }
 
+const WorldState::Goblin* findGoblin(const WorldState& state, std::uint64_t id) {
+    for (const auto& goblin : state.goblins) {
+        if (goblin.id == id) {
+            return &goblin;
+        }
+    }
+    return nullptr;
+}
+
 // Карточка сервера относится именно к этой цели? Между кликом и ответом
 // проходит одна рассылка, и всё это время в state.watched лежит карточка
 // предыдущего выбранного — показать её как текущую значило бы соврать.
 bool watchedMatches(const WorldState& state, const Target& target) {
     if (target.kind == Target::Kind::Animal) {
         return state.watched.kind == "animal" && state.watched.id == target.animalId;
+    }
+    if (target.kind == Target::Kind::Goblin) {
+        return state.watched.kind == "goblin" && state.watched.id == target.animalId;
     }
     if (target.kind == Target::Kind::Plant) {
         return state.watched.kind == "plant" && state.watched.x == target.x && state.watched.y == target.y;
@@ -198,6 +210,8 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
     // точку на карте можно было связать взглядом.
     const WorldState::Animal* animal =
         target.kind == Target::Kind::Animal ? findAnimal(state, target.animalId) : nullptr;
+    const WorldState::Goblin* goblin =
+        target.kind == Target::Kind::Goblin ? findGoblin(state, target.animalId) : nullptr;
 
     std::string title;
     Color swatch{0, 0, 0, 0};
@@ -214,6 +228,16 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
                 tileY = animal->y;
             } else {
                 title = "Creature is gone";
+            }
+            break;
+        case Target::Kind::Goblin:
+            if (goblin != nullptr) {
+                title = TextFormat("Goblin tribe %d", goblin->tribe);
+                swatch = TileColors::goblinTribe(goblin->tribe);
+                tileX = goblin->x;
+                tileY = goblin->y;
+            } else {
+                title = "Goblin is gone";
             }
             break;
         case Target::Kind::Plant:
@@ -281,11 +305,13 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
     // после них может прыгать сама с собой сколько угодно: ниже нет
     // ничего, чему бы это помешало.
     if (target.kind != Target::Kind::Soil) {
-        if (target.kind == Target::Kind::Animal && animal == nullptr) {
+        const bool creatureGone = (target.kind == Target::Kind::Animal && animal == nullptr) ||
+                                   (target.kind == Target::Kind::Goblin && goblin == nullptr);
+        if (creatureGone) {
             writer.group("Creature");
             writer.note("no longer in the world", Color{230, 130, 120, 255});
         } else if (state.watched.kind == "gone" || !watchedMatches(state, target)) {
-            writer.group(target.kind == Target::Kind::Animal ? "Creature" : "Plant");
+            writer.group(target.kind == Target::Kind::Plant ? "Plant" : "Creature");
             // "gone" — сервер уже ответил, что выбранного нет; иначе карточка
             // просто ещё едет (одна рассылка, до snapshot_interval_ms).
             writer.note(state.watched.kind == "gone" ? "no longer in the world" : "asking the server...",

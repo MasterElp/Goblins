@@ -4,10 +4,20 @@ set -e
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Самый свежий из найденных, а не первый попавшийся.
+#
+# В каталоге сборки их со временем заводится несколько: Debug рядом с
+# Release, остатки прежних конфигураций. Прежний "head -n 1" брал тот,
+# который первым отдала файловая система, — и это оказывался Debug
+# многодневной давности. Запускался мир без того, что было сделано за эти
+# дни, выглядел он при этом совершенно исправным миром, и искать причину
+# приходилось в коде, который к делу не относился вовсе.
 find_binary() {
     local search_dir="$1"
     local name="$2"
-    find "$search_dir" -type f \( -name "$name" -o -name "$name.exe" \) 2>/dev/null | head -n 1
+    find "$search_dir" -type f \( -name "$name" -o -name "$name.exe" \) -printf '%T@ %p
+' 2>/dev/null |
+        sort -rn | head -n 1 | cut -d' ' -f2-
 }
 
 SERVER_BIN="$(find_binary "$ROOT_DIR/build/server" "server")"

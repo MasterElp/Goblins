@@ -33,13 +33,14 @@ const Color kTitleColor{200, 200, 205, 255};
 const Color kGridColor{52, 52, 60, 255};
 const Color kCursorColor{255, 220, 90, 255};
 
-enum class Kind { Plants, Trees, Herbivores, Predators };
+enum class Kind { Plants, Trees, Herbivores, Predators, Goblins };
 
 const std::vector<int>& genomeOf(const WorldState::PopulationPoint& point, Kind kind) {
     switch (kind) {
         case Kind::Plants: return point.plantGenome;
         case Kind::Trees: return point.treeGenome;
         case Kind::Predators: return point.predatorGenome;
+        case Kind::Goblins: return point.goblinGenome;
         case Kind::Herbivores: break;
     }
     return point.herbivoreGenome;
@@ -256,7 +257,8 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     // травоядных и хищников свои таблицы черт, и одна общая легенда на
     // сорок линий не читалась бы вовсе.
     const float chartWidth = bounds.width - kPadding * 2.0f;
-    const float chartHeight = (bounds.height - kPadding * 2.0f - kGap * 3.0f) / 4.0f;
+    // Пять панелей: трава, рощи, травоядные, хищники, гоблины.
+    const float chartHeight = (bounds.height - kPadding * 2.0f - kGap * 4.0f) / 5.0f;
     if (chartWidth < kValueLabelWidth + 60.0f || chartHeight < kHeaderHeight + kFooterHeight + 24.0f) {
         DrawText("Genome history: panel is too small", static_cast<int>(bounds.x) + 10,
                  static_cast<int>(bounds.y) + 10, kTitleFont, kMutedColor);
@@ -266,6 +268,7 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     const Rectangle trees{plants.x, plants.y + chartHeight + kGap, chartWidth, chartHeight};
     const Rectangle herbivores{plants.x, trees.y + chartHeight + kGap, chartWidth, chartHeight};
     const Rectangle predators{plants.x, herbivores.y + chartHeight + kGap, chartWidth, chartHeight};
+    const Rectangle goblinsChart{plants.x, predators.y + chartHeight + kGap, chartWidth, chartHeight};
 
     // Курсор один на все панели: они стоят одна под другой, по
     // горизонтали совпадают, и вопрос к ним общий — что было со всеми
@@ -284,7 +287,7 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     }
 
     // Подпись про шкалу — под нижним графиком: она относится ко всем
-    // четырём, и повторять её четырежды незачем.
+    // пяти, и повторять её пять раз незачем.
     drawChart(history, state.plantTraits, plants, Kind::Plants, "Grass -- average genome", hasHover, hoverIndex,
               nullptr);
     // У дерева таблица черт своя (пределы те же черты меряют иначе:
@@ -295,6 +298,10 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     drawChart(history, state.herbivoreTraits, herbivores, Kind::Herbivores, "Herbivores -- average genome", hasHover,
               hoverIndex, nullptr);
     drawChart(history, state.predatorTraits, predators, Kind::Predators, "Predators -- average genome", hasHover,
+              hoverIndex, nullptr);
+    // У гоблина таблица черт своя, и трёх звериных черт в ней нет вовсе
+    // (зубы, рога, меткость рогов) — панель своя, со своей легендой.
+    drawChart(history, state.goblinTraits, goblinsChart, Kind::Goblins, "Goblins -- average genome", hasHover,
               hoverIndex, "0% = worst value of the trait, 100% = best");
 }
 
