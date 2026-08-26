@@ -80,6 +80,8 @@ goblins::PlantParams toPlantParams(const goblins::PlantConfig& config) {
     params.grassCoverage = config.grass_coverage;
     params.treeSpecies = config.tree_species;
     params.treeCoverage = config.tree_coverage;
+    params.bushSpecies = config.bush_species;
+    params.bushCoverage = config.bush_coverage;
     params.mutationRate = config.mutation_rate;
     params.humusDecayPeriod = config.humus_decay_period;
     return params;

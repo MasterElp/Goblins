@@ -13,6 +13,8 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/TimeComponent.hpp"
+#include "core/PlantKind.hpp"
+#include "core/components/BushComponent.hpp"
 #include "core/components/TreeComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/generation/PlantGenetics.hpp"
@@ -40,7 +42,9 @@ std::vector<int> countPlants(const World& world) {
     // травоядные и хищники считаются порознь.
     registry.view<const PlantComponent, const PlantGenomeComponent>().each(
         [&](const entt::entity entity, const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) {
-            if (registry.all_of<TreeComponent>(entity)) {
+            // Именно трава: и дерево, и куст считаются своими векторами, со
+            // своей нумерацией видов.
+            if (plantKindOf(registry, entity) != PlantKind::Grass) {
                 return;
             }
             if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
@@ -59,6 +63,21 @@ std::vector<int> countTrees(const World& world) {
     const auto& archetypes = registry.get<const PlantSpeciesComponent>(world.worldEntity()).trees;
     std::vector<int> counts(archetypes.size(), 0);
     registry.view<const TreeComponent, const PlantComponent, const PlantGenomeComponent>().each(
+        [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) {
+            if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
+                ++counts[static_cast<std::size_t>(genome.species)];
+            }
+        });
+    return counts;
+}
+
+// Кусты — своим вектором, как и деревья, и по той же причине: своя
+// нумерация видов.
+std::vector<int> countBushes(const World& world) {
+    const auto& registry = world.registry();
+    const auto& archetypes = registry.get<const PlantSpeciesComponent>(world.worldEntity()).bushes;
+    std::vector<int> counts(archetypes.size(), 0);
+    registry.view<const BushComponent, const PlantComponent, const PlantGenomeComponent>().each(
         [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) {
             if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
                 ++counts[static_cast<std::size_t>(genome.species)];
@@ -133,7 +152,13 @@ std::vector<int> averagePlantGenome(const World& world) {
     // countPlants: у лежащего семени геном есть, но на лугу его нет.
     return averageGenome(kGrassTraits, kGrassTraitCount, [&](auto&& visit) {
         registry.view<const PlantComponent, const PlantGenomeComponent>().each(
-            [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) { visit(genome); });
+            [&](const entt::entity entity, const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) {
+                // Только трава: у куста и дерева свои таблицы черт, и
+                // усреднять их вместе значило бы усреднять разные шкалы.
+                if (plantKindOf(registry, entity) == PlantKind::Grass) {
+                    visit(genome);
+                }
+            });
     });
 }
 
@@ -141,6 +166,14 @@ std::vector<int> averageTreeGenome(const World& world) {
     const auto& registry = world.registry();
     return averageGenome(kTreeTraits, kTreeTraitCount, [&](auto&& visit) {
         registry.view<const TreeComponent, const PlantComponent, const PlantGenomeComponent>().each(
+            [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) { visit(genome); });
+    });
+}
+
+std::vector<int> averageBushGenome(const World& world) {
+    const auto& registry = world.registry();
+    return averageGenome(kBushTraits, kBushTraitCount, [&](auto&& visit) {
+        registry.view<const BushComponent, const PlantComponent, const PlantGenomeComponent>().each(
             [&](const PlantComponent& /*plant*/, const PlantGenomeComponent& genome) { visit(genome); });
     });
 }
@@ -221,6 +254,10 @@ nlohmann::json encodePoint(const PopulationHistory::Point& point) {
     // Летописи миров, прожитых до них, короче на эти два элемента.
     entry.push_back(point.goblins);
     entry.push_back(point.goblinGenome);
+    // Кусты — тем же способом и по той же причине: элемент в конец.
+    // Летописи миров, прожитых до ягодников, короче на эти два элемента.
+    entry.push_back(point.bushes);
+    entry.push_back(point.bushGenome);
     return entry;
 }
 
@@ -260,10 +297,12 @@ void PopulationHistory::record(const World& world) {
     point.tick = tick;
     point.plants = countPlants(world);
     point.trees = countTrees(world);
+    point.bushes = countBushes(world);
     point.herbivores = countAnimals(world, /*wantPredators=*/false);
     point.predators = countAnimals(world, /*wantPredators=*/true);
     point.plantGenome = averagePlantGenome(world);
     point.treeGenome = averageTreeGenome(world);
+    point.bushGenome = averageBushGenome(world);
     point.herbivoreGenome = averageAnimalGenome(world, /*wantPredators=*/false);
     point.predatorGenome = averageAnimalGenome(world, /*wantPredators=*/true);
     point.goblins = countGoblins(world);
@@ -359,6 +398,16 @@ void PopulationHistory::fromJson(const nlohmann::json& json) {
         if (entry.size() > 8) {
             point.trees = readInts(entry[7]);
             point.treeGenome = readInts(entry[8]);
+        }
+        // Гоблины и кусты — ещё позже, и оговорка та же: их отсутствие у
+        // старой точки означает мир, в котором их не было.
+        if (entry.size() > 10) {
+            point.goblins = readInts(entry[9]);
+            point.goblinGenome = readInts(entry[10]);
+        }
+        if (entry.size() > 12) {
+            point.bushes = readInts(entry[11]);
+            point.bushGenome = readInts(entry[12]);
         }
         points_.push_back(std::move(point));
     }

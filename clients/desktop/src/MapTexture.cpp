@@ -50,6 +50,17 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
         if (layers.plants && state.plantSpeciesAt[i] >= 0) {
             color = TileColors::plant(color, state.plantSpeciesAt[i], state.plantGrowth[i]);
         }
+        // Куст — плотнее травы и прямо в текстуре, в отличие от дерева:
+        // дерево из клетки торчит вверх и потому рисуется фигурой поверх
+        // карты, а куст в клетке помещается целиком. Ягоды поверх куста:
+        // полный ягодник и обобранный — разные места, и различать их надо
+        // с одного взгляда.
+        if (layers.plants && !state.bushSpeciesAt.empty() && state.bushSpeciesAt[i] >= 0) {
+            color = TileColors::bush(color, state.bushSpeciesAt[i], state.plantGrowth[i]);
+            if (!state.berries.empty() && state.berries[i] > 0) {
+                color = TileColors::berries(color, state.berries[i]);
+            }
+        }
         // Вода — не полупрозрачный слой поверх, а готовый цвет тайла
         // (TileColors::water непрозрачен), поэтому просто заменяет
         // предыдущий.

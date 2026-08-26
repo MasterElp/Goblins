@@ -15,6 +15,8 @@ constexpr std::uint64_t kGrassSpeciesSalt = 0xD1CE5EEDA5510C11ull;
 // Своя соль у деревьев: при одном seed мира набор рощ не должен быть той же
 // последовательностью, что набор трав.
 constexpr std::uint64_t kTreeSpeciesSalt = 0x7BEE5EEDC0FFEE11ull;
+// И у кустов своя: набор ягодников не должен повторять набор рощ.
+constexpr std::uint64_t kBushSpeciesSalt = 0xB005EEDBEEEEF00Dull;
 
 std::span<const PlantTrait> traits() {
     return std::span<const PlantTrait>(kGrassTraits, kGrassTraitCount);
@@ -22,6 +24,10 @@ std::span<const PlantTrait> traits() {
 
 std::span<const PlantTrait> treeTraits() {
     return std::span<const PlantTrait>(kTreeTraits, kTreeTraitCount);
+}
+
+std::span<const PlantTrait> bushTraits() {
+    return std::span<const PlantTrait>(kBushTraits, kBushTraitCount);
 }
 
 } // namespace
@@ -36,6 +42,11 @@ std::vector<PlantGenomeComponent> makeTreeSpecies(int count, std::uint64_t seed)
     return genetics::makeSpecies(treeTraits(), count, seed, kTreeSpeciesSalt);
 }
 
+std::vector<PlantGenomeComponent> makeBushSpecies(int count, std::uint64_t seed) {
+    count = std::clamp(count, kMinBushSpecies, kMaxBushSpecies);
+    return genetics::makeSpecies(bushTraits(), count, seed, kBushSpeciesSalt);
+}
+
 PlantGenomeComponent mutateGenome(const PlantGenomeComponent& parent, const PlantGenomeComponent& archetype,
                                   float mutationRate, std::uint64_t seed) {
     return genetics::mutate(traits(), parent, archetype, mutationRate, seed);
@@ -44,6 +55,11 @@ PlantGenomeComponent mutateGenome(const PlantGenomeComponent& parent, const Plan
 PlantGenomeComponent mutateTreeGenome(const PlantGenomeComponent& parent, const PlantGenomeComponent& archetype,
                                        float mutationRate, std::uint64_t seed) {
     return genetics::mutate(treeTraits(), parent, archetype, mutationRate, seed);
+}
+
+PlantGenomeComponent mutateBushGenome(const PlantGenomeComponent& parent, const PlantGenomeComponent& archetype,
+                                       float mutationRate, std::uint64_t seed) {
+    return genetics::mutate(bushTraits(), parent, archetype, mutationRate, seed);
 }
 
 // Константы генетики — наружу только для чтения (core/Diagnostics.hpp).
@@ -63,6 +79,8 @@ void appendPlantGeneticsConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kMaxGrassSpecies", static_cast<float>(kMaxGrassSpecies)});
     out.push_back({g, "kMinTreeSpecies", static_cast<float>(kMinTreeSpecies)});
     out.push_back({g, "kMaxTreeSpecies", static_cast<float>(kMaxTreeSpecies)});
+    out.push_back({g, "kMinBushSpecies", static_cast<float>(kMinBushSpecies)});
+    out.push_back({g, "kMaxBushSpecies", static_cast<float>(kMaxBushSpecies)});
 }
 
 } // namespace goblins

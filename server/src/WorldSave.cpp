@@ -28,6 +28,9 @@
 #include "core/components/InjuryComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/ImpassableComponent.hpp"
+#include "core/PlantKind.hpp"
+#include "core/components/BerryComponent.hpp"
+#include "core/components/BushComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
@@ -144,6 +147,11 @@ struct ParsedEntity {
     // нумерация, своя таблица черт (PlantSpeciesComponent).
     bool hasTreeSpecies = false;
     std::vector<PlantGenomeComponent> treeSpecies;
+
+    // Виды кустов — третий список по той же причине, что и второй: своя
+    // нумерация и своя таблица черт (kBushTraits).
+    bool hasBushSpecies = false;
+    std::vector<PlantGenomeComponent> bushSpecies;
     bool hasAnimalSpecies = false;
     AnimalSpeciesComponent animalSpecies{};
     // Племена гоблинов — там же и по тем же правилам, своим списком: таблица
@@ -168,6 +176,15 @@ struct ParsedEntity {
     // законам (core/Trees.hpp) и читает свой геном по древесной таблице.
     // Лежит и на семени дерева, поэтому проверяется отдельно от hasPlant.
     bool tree = false;
+
+    // Метка куста — рядом с древесной и по той же причине: она решает, по
+    // какой таблице читается геном и чем растение станет при загрузке.
+    bool bush = false;
+    // Ягоды на кусте. Отдельным компонентом (BerryComponent), и в файле
+    // тоже отдельно: без них загруженный ягодник встретил бы гоблинов
+    // пустым, и весь дневной круг племени начался бы заново.
+    bool hasBerries = false;
+    BerryComponent berries{};
 
     // Живое животное — Entity с телом, геномом, желаниями, постоянным
     // идентификатором и тегом диеты. Всё это обязательно вместе: без
@@ -234,6 +251,11 @@ nlohmann::json buildEntitiesJson(const World& world) {
                 treeArchetypes.push_back(genomeToJson(archetype, kTreeTraits));
             }
             record["tree_species"] = std::move(treeArchetypes);
+            auto bushArchetypes = nlohmann::json::array();
+            for (const auto& archetype : plantSpecies->bushes) {
+                bushArchetypes.push_back(genomeToJson(archetype, kBushTraits));
+            }
+            record["bush_species"] = std::move(bushArchetypes);
         }
         if (const auto* animalSpecies = registry.try_get<AnimalSpeciesComponent>(entity)) {
             auto herbivores = nlohmann::json::array();
@@ -294,13 +316,23 @@ nlohmann::json buildEntitiesJson(const World& world) {
         if (const auto* seed = registry.try_get<SeedComponent>(entity)) {
             record["seed"] = {{"age", seed->age}};
         }
+        // Ягоды и ушедшие в них крупицы — состояние куста, а не его вида.
+        // Крупицы пишутся вместе с ягодами: они уже вынуты из земли, и
+        // потеряться при загрузке им нельзя — вещество в этом мире не
+        // появляется и не пропадает.
+        if (const auto* berries = registry.try_get<BerryComponent>(entity)) {
+            record["berries"] = {{"berries", berries->berries}, {"minerals", berries->minerals}};
+        }
         if (const auto* genome = registry.try_get<PlantGenomeComponent>(entity)) {
             // Таблица черт выбирается по метке дерева: имена черт у травы и
             // у дерева сейчас совпадают, но совпадают они случайно, а не по
             // договору — древесная черта, которой нет у травы, иначе молча
             // не доехала бы до файла.
-            record["genome"] = registry.all_of<TreeComponent>(entity) ? genomeToJson(*genome, kTreeTraits)
-                                                                       : genomeToJson(*genome, kGrassTraits);
+            switch (plantKindOf(registry, entity)) {
+                case PlantKind::Tree: record["genome"] = genomeToJson(*genome, kTreeTraits); break;
+                case PlantKind::Bush: record["genome"] = genomeToJson(*genome, kBushTraits); break;
+                case PlantKind::Grass: record["genome"] = genomeToJson(*genome, kGrassTraits); break;
+            }
         }
         // Гоблин носит то же тело, но записан как животное он быть не
         // может: при чтении ему достался бы тег диеты, и в мир вернулся бы
@@ -392,6 +424,11 @@ nlohmann::json buildEntitiesJson(const World& world) {
         if (registry.all_of<TreeComponent>(entity)) {
             record["tree"] = true;
         }
+        // Куст — такой же тег без данных. Стоит и на растении, и на его
+        // семени, если куст когда-нибудь начнёт сеять семенами.
+        if (registry.all_of<BushComponent>(entity)) {
+            record["bush"] = true;
+        }
         // Диета — такой же тег без данных, как impassable: сам факт
         // наличия и есть данные.
         if (registry.all_of<HerbivoreComponent>(entity)) {
@@ -410,6 +447,20 @@ nlohmann::json buildEntitiesJson(const World& world) {
 // Разбирает массив entities. Возвращает false и заполняет outError на
 // первой же несостыковке — битое сохранение лучше не открыть вовсе, чем
 // открыть наполовину.
+// Геном растения читается по таблице СВОЕГО рода: имена черт у травы, куста
+// и дерева сейчас совпадают, но совпадают случайно, а не по договору —
+// черта, которой нет у соседнего рода, иначе молча не доехала бы из файла.
+// Метки родов разбираются раньше генома именно поэтому.
+PlantGenomeComponent plantGenomeFromRecord(const nlohmann::json& genome, bool tree, bool bush) {
+    if (tree) {
+        return genomeFromJson<PlantGenomeComponent>(genome, kTreeTraits);
+    }
+    if (bush) {
+        return genomeFromJson<PlantGenomeComponent>(genome, kBushTraits);
+    }
+    return genomeFromJson<PlantGenomeComponent>(genome, kGrassTraits);
+}
+
 bool parseEntities(const nlohmann::json& json, int width, int height, std::vector<ParsedEntity>& outEntities,
                    std::string& outError) {
     if (!json.is_array()) {
@@ -462,6 +513,12 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.hasTreeSpecies = true;
             for (const auto& archetype : record["tree_species"]) {
                 parsed.treeSpecies.push_back(genomeFromJson<PlantGenomeComponent>(archetype, kTreeTraits));
+            }
+        }
+        if (record.contains("bush_species") && record["bush_species"].is_array()) {
+            parsed.hasBushSpecies = true;
+            for (const auto& archetype : record["bush_species"]) {
+                parsed.bushSpecies.push_back(genomeFromJson(archetype, kBushTraits));
             }
         }
         if (record.contains("plant_species") && record["plant_species"].is_array()) {
@@ -546,6 +603,12 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         }
         parsed.impassable = record.value("impassable", false);
         parsed.tree = record.value("tree", false);
+        parsed.bush = record.value("bush", false);
+        if (record.contains("berries")) {
+            parsed.hasBerries = true;
+            parsed.berries.berries = record["berries"].value("berries", 0);
+            parsed.berries.minerals = record["berries"].value("minerals", 0);
+        }
         parsed.waterSource = record.value("water_source", false);
         if (record.contains("humus")) {
             parsed.hasHumus = true;
@@ -569,9 +632,7 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 outError = "plant entity has no genome";
                 return false;
             }
-            parsed.genome = parsed.tree
-                                 ? genomeFromJson<PlantGenomeComponent>(record["genome"], kTreeTraits)
-                                 : genomeFromJson<PlantGenomeComponent>(record["genome"], kGrassTraits);
+            parsed.genome = plantGenomeFromRecord(record["genome"], parsed.tree, parsed.bush);
         }
         if (record.contains("seed")) {
             parsed.hasSeed = true;
@@ -583,9 +644,7 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 outError = "seed entity has no genome";
                 return false;
             }
-            parsed.genome = parsed.tree
-                                 ? genomeFromJson<PlantGenomeComponent>(record["genome"], kTreeTraits)
-                                 : genomeFromJson<PlantGenomeComponent>(record["genome"], kGrassTraits);
+            parsed.genome = plantGenomeFromRecord(record["genome"], parsed.tree, parsed.bush);
         }
         // Диета — тег, как impassable. Отдельная сложность только одна: в
         // файлах, сохранённых до появления хищников, под ключом "herbivore"
@@ -1271,7 +1330,7 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
     std::uint64_t tick = info.tick;
     for (const auto& parsed : entities) {
         if (parsed.hasTime || parsed.hasWorldProperties || parsed.hasPlantSpecies || parsed.hasTreeSpecies ||
-            parsed.hasAnimalSpecies) {
+            parsed.hasBushSpecies || parsed.hasAnimalSpecies) {
             // World Entity уже существует (создан в reset, со значениями
             // по умолчанию для свойств мира) — у мира он один, поэтому
             // эта запись просто уточняет его данные, а не создаёт второй
@@ -1287,6 +1346,9 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             }
             if (parsed.hasTreeSpecies) {
                 world.registry().get<PlantSpeciesComponent>(world.worldEntity()).trees = parsed.treeSpecies;
+            }
+            if (parsed.hasBushSpecies) {
+                world.registry().get<PlantSpeciesComponent>(world.worldEntity()).bushes = parsed.bushSpecies;
             }
             if (parsed.hasAnimalSpecies) {
                 world.registry().get<AnimalSpeciesComponent>(world.worldEntity()) = parsed.animalSpecies;
@@ -1325,6 +1387,18 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         // читается травой, каким и был.
         if (parsed.tree) {
             world.registry().emplace<TreeComponent>(entity);
+        }
+        // Метка куста — так же, как древесная. У файлов, записанных до
+        // появления кустов, её нет, и весь их растительный мир читается
+        // травой, каким и был.
+        if (parsed.bush) {
+            world.registry().emplace<BushComponent>(entity);
+        }
+        // Ягоды кладутся, даже если их ноль: пустой BerryComponent — это
+        // "куст стоит, но обобран", и отличается он от отсутствия куста. У
+        // старых файлов ягод нет вовсе, и куст в них появиться не мог.
+        if (parsed.hasBerries) {
+            world.registry().emplace<BerryComponent>(entity, parsed.berries);
         }
         if (parsed.hasAnimal && parsed.goblin) {
             // Гоблин: то же тело и тот же тип генома, но своё желание и свой

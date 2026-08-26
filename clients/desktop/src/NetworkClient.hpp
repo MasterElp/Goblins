@@ -74,6 +74,12 @@ struct WorldState {
     // (см. treeSpecies ниже) — "sp2" травы и "tr2" дерева разные вещи.
     // Растение на клетке при этом одно: где дерево, там нет травы.
     std::vector<int> treeSpeciesAt;
+    // Кусты: индекс вида куста, стоящего в клетке, или -1, — и сколько на
+    // нём висит ягод. Третий массив родов по той же причине, что и второй:
+    // у кустов своя нумерация видов. Ягоды считаются штуками, а не долей, и
+    // приходят целыми: ноль ягод — не пустая клетка, а обобранный куст.
+    std::vector<int> bushSpeciesAt;
+    std::vector<int> berries;
     // Падаль — такое же состояние тайла, как перегной: сколько мяса на нём
     // лежит (0 — туши нет).
     std::vector<float> carcass;
@@ -88,6 +94,9 @@ struct WorldState {
     // Виды деревьев — тем же способом и по той же причине, отдельным
     // списком: у них своя нумерация и своя таблица черт.
     std::vector<std::vector<std::pair<std::string, int>>> treeSpecies;
+
+    // Виды кустов — тем же способом и по той же причине.
+    std::vector<std::vector<std::pair<std::string, int>>> bushSpecies;
     // Виды животных — тем же способом и по той же причине. Списка два:
     // у травоядных и хищников свои таблицы черт, и индекс вида у каждой
     // диеты свой.
@@ -214,6 +223,9 @@ struct WorldState {
         // них своя, и вид 0 на общем графике оказался бы то травой, то
         // рощей. Пусто у точек из мира, прожитого до появления деревьев.
         std::vector<int> trees;
+        // Кусты — своим вектором по той же причине, что и деревья. Пусто у
+        // точек из мира, прожитого до появления ягодников.
+        std::vector<int> bushes;
         std::vector<int> herbivores;
         // У точек из мира, прожитого до появления хищников, этого поля в
         // файле нет — оно остаётся пустым, и на графике такая часть кривой
@@ -233,6 +245,7 @@ struct WorldState {
         // смысла, и нулём его рисовать нельзя.
         std::vector<int> plantGenome;
         std::vector<int> treeGenome;
+        std::vector<int> bushGenome;
         std::vector<int> herbivoreGenome;
         std::vector<int> predatorGenome;
         std::vector<int> goblinGenome;
@@ -252,6 +265,7 @@ struct WorldState {
     };
     std::vector<PopulationTrait> plantTraits;
     std::vector<PopulationTrait> treeTraits;
+    std::vector<PopulationTrait> bushTraits;
     std::vector<PopulationTrait> herbivoreTraits;
     std::vector<PopulationTrait> predatorTraits;
     std::vector<PopulationTrait> goblinTraits;

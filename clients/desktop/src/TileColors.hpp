@@ -77,6 +77,41 @@ inline Color plant(Color soilColor, int species, float growth) {
     return lerp(soilColor, plantSpecies(species), 0.12f + 0.28f * std::clamp(growth, 0.0f, 1.0f));
 }
 
+// Цвета видов кустов — своей палитрой, между травяной и древесной: куст
+// плотнее травы и ниже дерева, и на карте он должен читаться как гуща на
+// лугу, а не как ещё один оттенок луга. Четыре — верхний предел числа видов
+// (core::kMaxBushSpecies).
+inline Color bushSpecies(int species) {
+    static const Color palette[4] = {
+        {74, 118, 72, 255}, {96, 124, 64, 255}, {66, 110, 92, 255}, {104, 112, 60, 255},
+    };
+    if (species < 0) {
+        return palette[0];
+    }
+    return palette[species % 4];
+}
+
+// Куст поверх почвы — подмешка сильнее травяной: куст землю закрывает, а
+// трава её лишь красит. Слабее единицы всё же намеренно: под кустом видно,
+// сухо ему или мокро, а это и решает, вырастет ли там ягодник.
+inline Color bush(Color soilColor, int species, float growth) {
+    return lerp(soilColor, bushSpecies(species), 0.45f + 0.45f * std::clamp(growth, 0.0f, 1.0f));
+}
+
+// Ягоды на кусте — красная искра тем ярче, чем их больше. Считаются штуками
+// (core::kBerryMax — полный куст), поэтому доля берётся здесь, а не
+// приходит готовой: сам слой счётный.
+//
+// Видеть их обязательно: обобранный ягодник и полный — разные места, и по
+// карте должно быть понятно, к какому из них гоблин идёт.
+constexpr float kBerriesVisualCap = 12.0f;
+
+inline Color berries(Color bushColor, int count) {
+    static const Color berry{188, 62, 74, 255};
+    const float share = std::clamp(static_cast<float>(count) / kBerriesVisualCap, 0.0f, 1.0f);
+    return lerp(bushColor, berry, 0.25f + 0.45f * share);
+}
+
 // Семя в клетке — тёмная крапина цвета своего вида: оно лежит В земле, а
 // не стоит на ней, поэтому цвет вида сперва притемняется и только потом
 // подмешивается к почве. Так семя не путается с проростком (тот уже

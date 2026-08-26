@@ -3,6 +3,7 @@
 #include "core/generation/AnimalSeeding.hpp"
 #include "core/generation/BoulderScatter.hpp"
 #include "core/generation/GoblinSeeding.hpp"
+#include "core/generation/BushSeeding.hpp"
 #include "core/generation/GrassSeeding.hpp"
 #include "core/generation/TreeSeeding.hpp"
 #include "core/systems/AnimalSystem.hpp"
@@ -21,6 +22,7 @@ namespace {
 constexpr unsigned kBoulderSeedOffset = 1000;
 constexpr unsigned kPlantSeedOffset = 2000;
 constexpr unsigned kTreeSeedOffset = 2500;
+constexpr unsigned kBushSeedOffset = 2700;
 constexpr unsigned kAnimalSeedOffset = 3000;
 constexpr unsigned kGoblinSeedOffset = 3500;
 
@@ -43,7 +45,12 @@ GenerationStats generateWorld(World& world, int width, int height, const WorldGe
     //    Деревья — первыми: кто занимает место раньше, тот его и получает, а
     //    луг зарастает всюду, где ему хватает влаги, и дереву после него не
     //    осталось бы ни одной свободной клетки (см. TreeSeeding.hpp).
+    //    Кусты — между ними, и по той же причине с обеих сторон: дереву
+    //    нужна целая площадь крупиц под корнями, поэтому оно раньше, а луг
+    //    зарастает всюду и не оставил бы ягоднику ни клетки, поэтому он
+    //    позже (см. BushSeeding.hpp).
     seedTrees(world, params.plants, params.seed + kTreeSeedOffset);
+    seedBushes(world, params.plants, params.seed + kBushSeedOffset);
     seedGrass(world, params.plants, params.seed + kPlantSeedOffset);
 
     // 4. Появление животных — последним: травоядное выпускается туда, где
@@ -54,7 +61,7 @@ GenerationStats generateWorld(World& world, int width, int height, const WorldGe
 
     // 5. Появление разумных существ — последним (02_CorePrinciples.md, п.5):
     //    разум возникает в уже сложившемся мире, а не вместе с ним. Гоблин
-    //    выпускается туда, где растёт трава, а падаль к этому моменту ещё не
+    //    выпускается туда, где есть ягодник, а падаль к этому моменту ещё не
     //    появилась — умирать было некому.
     seedGoblins(world, params.goblins, params.seed + kGoblinSeedOffset);
 

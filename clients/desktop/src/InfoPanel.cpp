@@ -177,6 +177,13 @@ void drawTileGroup(const WorldState& state, ColumnWriter& writer, int x, int y) 
     }
     // Дерево — своей строкой и со своей нумерацией видов ("tr", а не "sp"):
     // список видов у него отдельный, и спутать их было бы легко.
+    if (index < state.bushSpeciesAt.size() && state.bushSpeciesAt[index] >= 0) {
+        // Ягоды — рядом с самим кустом: без них строка говорила бы только,
+        // что куст стоит, а вопрос к нему всегда один — есть ли что рвать.
+        const int berries = index < state.berries.size() ? state.berries[index] : 0;
+        writer.line("bush", TextFormat("bu%d  %.0f%%  berries %d", state.bushSpeciesAt[index],
+                                        state.plantGrowth[index] * 100.0f, berries));
+    }
     if (index < state.treeSpeciesAt.size() && state.treeSpeciesAt[index] >= 0) {
         writer.line("tree", TextFormat("tr%d  %.0f%%", state.treeSpeciesAt[index], state.plantGrowth[index] * 100.0f));
     }
@@ -249,6 +256,9 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
                 if (cell < state.treeSpeciesAt.size() && state.treeSpeciesAt[cell] >= 0) {
                     title = TextFormat("Tree tr%d", state.treeSpeciesAt[cell]);
                     swatch = TileColors::treeSpecies(state.treeSpeciesAt[cell]);
+                } else if (cell < state.bushSpeciesAt.size() && state.bushSpeciesAt[cell] >= 0) {
+                    title = TextFormat("Bush bu%d", state.bushSpeciesAt[cell]);
+                    swatch = TileColors::bushSpecies(state.bushSpeciesAt[cell]);
                 } else if (state.plantSpeciesAt[cell] >= 0) {
                     title = TextFormat("Grass sp%d", state.plantSpeciesAt[cell]);
                     swatch = TileColors::plantSpecies(state.plantSpeciesAt[cell]);

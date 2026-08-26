@@ -119,6 +119,8 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     ops.intRow("Initial coverage (per mille)", edited.plants.grass_coverage, 0, 400);
     ops.intRow("Tree species", edited.plants.tree_species, 1, 5);
     ops.intRow("Tree coverage (per mille)", edited.plants.tree_coverage, 0, 60);
+    ops.intRow("Bush species", edited.plants.bush_species, 1, 4);
+    ops.intRow("Bush coverage (per mille)", edited.plants.bush_coverage, 0, 120);
 
     ops.section("Herbivores");
     // Число видов — 1..8 (ядро обрежет к этим границам): один вид — вполне

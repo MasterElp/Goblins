@@ -42,6 +42,10 @@ public:
         // тем, кто её ест.
         std::vector<int> plants;
         std::vector<int> trees;
+        // Кусты — своим вектором по той же причине, что и деревья: у них
+        // своя нумерация видов, и вид 0 на общем графике оказался бы то
+        // травой, то ягодником.
+        std::vector<int> bushes;
         std::vector<int> herbivores;
         std::vector<int> predators;
         // И третий вектор — гоблины по племенам. Отдельный по той же
@@ -66,6 +70,7 @@ public:
         // (см. протокол в NetworkServer.hpp).
         std::vector<int> plantGenome;
         std::vector<int> treeGenome;
+        std::vector<int> bushGenome;
         std::vector<int> herbivoreGenome;
         std::vector<int> predatorGenome;
         std::vector<int> goblinGenome;

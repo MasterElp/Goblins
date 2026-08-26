@@ -29,6 +29,10 @@ namespace goblins {
 struct PlantSpeciesComponent {
     std::vector<PlantGenomeComponent> grasses;
     std::vector<PlantGenomeComponent> trees;
+    // Третий список — по той же причине, что и второй: у куста своя таблица
+    // черт (kBushTraits) и свой бюджет, и вложения его видов сравнивать с
+    // травяными незачем.
+    std::vector<PlantGenomeComponent> bushes;
 };
 
 } // namespace goblins

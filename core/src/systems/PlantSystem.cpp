@@ -17,6 +17,10 @@
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/TreeComponent.hpp"
+#include "core/Berries.hpp"
+#include "core/PlantKind.hpp"
+#include "core/components/BerryComponent.hpp"
+#include "core/components/BushComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/PlantGenetics.hpp"
@@ -136,10 +140,11 @@ struct SeedIntent {
     std::size_t targetCell;
     std::uint64_t priority;
     PlantGenomeComponent child;
-    // Дерево не сажает проросток сразу: оно кладёт в клетку семя, которое
-    // дождётся просвета в траве (см. kTreeSeedWaitTicks). Разрешение спора
-    // за клетку при этом одно на обоих — спорят они за одно и то же место.
-    bool tree = false;
+    // Род потомка. Дерево не сажает проросток сразу: оно кладёт в клетку
+    // семя, которое дождётся просвета в траве (см. kTreeSeedWaitTicks);
+    // куст и трава сажают проросток. Разрешение спора за клетку при этом
+    // одно на всех — спорят они за одно и то же место.
+    PlantKind kind = PlantKind::Grass;
 };
 
 } // namespace
@@ -300,7 +305,8 @@ void PlantSystem(World& world, CommandQueue& commands) {
             continue;
         }
         auto& soil = registry.get<SoilComponent>(terrain[i]);
-        const bool isTree = registry.all_of<TreeComponent>(entity);
+        const PlantKind kind = plantKindOf(registry, entity);
+        const bool isTree = kind == PlantKind::Tree;
 
         // Тонет растение или нет, решает не факт наличия воды, а её
         // глубина против переносимой этим геномом (water_tolerance).
@@ -388,6 +394,21 @@ void PlantSystem(World& world, CommandQueue& commands) {
             }
         }
 
+        // Ягоды на кусте. Закон один на всех, кто их спрашивает
+        // (core/Berries.hpp): здесь они зреют, в GoblinSystem их рвут, в
+        // наблюдателе рисуют.
+        //
+        // Зреют сроком со сдвигом по клетке — все кусты мира не должны
+        // наливаться в один тик, — и стоят кусту крупицы из его же клетки.
+        // Оттого ягодники и оказываются на богатой земле: на бедной куст
+        // упирается в первую платную ягоду и дальше не зреет. Ни того, ни
+        // другого специально никто не назначал.
+        if (kind == PlantKind::Bush && berryDue(tick, i)) {
+            if (auto* berries = registry.try_get<BerryComponent>(entity)) {
+                ripenBerry(*berries, plant.growth, soil.minerals);
+            }
+        }
+
         // Под водой идёт счёт, на суше он обнуляется: пережитый разлив не
         // висит на растении и не убивает его вторым разливом полгода
         // спустя.
@@ -446,17 +467,23 @@ void PlantSystem(World& world, CommandQueue& commands) {
             continue;
         }
 
-        // Индекс вида — в СВОЁМ списке: у травы и у деревьев свои архетипы
-        // и свои таблицы черт (PlantSpeciesComponent).
-        const auto& archetypes = isTree ? speciesLists.trees : speciesLists.grasses;
+        // Индекс вида — в СВОЁМ списке: у травы, у кустов и у деревьев свои
+        // архетипы и свои таблицы черт (PlantSpeciesComponent).
+        const auto& archetypes = kind == PlantKind::Tree    ? speciesLists.trees
+                                  : kind == PlantKind::Bush ? speciesLists.bushes
+                                                            : speciesLists.grasses;
         const auto& archetype =
             (genome.species >= 0 && static_cast<std::size_t>(genome.species) < archetypes.size())
                 ? archetypes[static_cast<std::size_t>(genome.species)]
                 : genome;
         const std::uint64_t childSeed = mixSeed(random, static_cast<std::uint64_t>(i));
-        const PlantGenomeComponent child = isTree
-                                                ? mutateTreeGenome(genome, archetype, mutationRate, childSeed)
-                                                : mutateGenome(genome, archetype, mutationRate, childSeed);
+        // Мутировать надо по СВОЕЙ таблице: перепутать — значит молча
+        // получить куст, живущий триста тиков, или дерево-однолетку
+        // (PlantGenetics.hpp).
+        const PlantGenomeComponent child =
+            kind == PlantKind::Tree   ? mutateTreeGenome(genome, archetype, mutationRate, childSeed)
+            : kind == PlantKind::Bush ? mutateBushGenome(genome, archetype, mutationRate, childSeed)
+                                      : mutateGenome(genome, archetype, mutationRate, childSeed);
 
         // --- Семя дерева: летит за несколько клеток и ложится ждать ---
         // Не проросток, а именно семя: под рощей всё занято травой, и
@@ -519,7 +546,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
             seedIntents.push_back(SeedIntent{
                 entity, treeTarget,
                 mixSeed(plantSeed, mixSeed(tick, treeTarget * 1000003ull + static_cast<std::uint64_t>(i))), child,
-                /*tree=*/true});
+                PlantKind::Tree});
             continue;
         }
 
@@ -622,7 +649,8 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // за потомка, которого не будет.
         seedIntents.push_back(SeedIntent{
             entity, targetCell,
-            mixSeed(plantSeed, mixSeed(tick, targetCell * 1000003ull + static_cast<std::uint64_t>(i))), child});
+            mixSeed(plantSeed, mixSeed(tick, targetCell * 1000003ull + static_cast<std::uint64_t>(i))), child,
+            kind});
     }
 
     // --- 2b. Разрешение споров за клетку и собственно посев ---
@@ -650,7 +678,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         auto& parent = registry.get<PlantComponent>(intent.parent);
         parent.growth = std::max(0, parent.growth - kSeedGrowthCost);
 
-        if (intent.tree) {
+        if (intent.kind == PlantKind::Tree) {
             // Дерево кладёт семя, а не проросток: клетка почти наверняка под
             // травой, и ждать просвета будет семя (см. §2c). Метка дерева
             // ложится на семя сразу — по ней оно и прорастёт деревом, а не
@@ -667,8 +695,9 @@ void PlantSystem(World& world, CommandQueue& commands) {
 
         PlantComponent seedling;
         seedling.growth = kSeedlingGrowth;
+        const bool bush = intent.kind == PlantKind::Bush;
 
-        commands.enqueue([child, seedling, targetX, targetY](World& w) {
+        commands.enqueue([child, seedling, bush, targetX, targetY](World& w) {
             // Пока команда ждала своей очереди, тик успел доработать:
             // например, воду на клетке мог добавить HydrologySystem
             // (его команды встали в очередь раньше). Команда не имеет
@@ -688,6 +717,13 @@ void PlantSystem(World& world, CommandQueue& commands) {
             const auto entity = w.registry().create();
             w.registry().emplace<PlantComponent>(entity, seedling);
             w.registry().emplace<PlantGenomeComponent>(entity, child);
+            if (bush) {
+                // Куст сеет проростком, как трава, а не семенем, как дерево:
+                // купа растёт вширь от родителя, и ждать просвета ей незачем
+                // — её и сажают туда, где просвет уже есть.
+                w.registry().emplace<BushComponent>(entity);
+                w.registry().emplace<BerryComponent>(entity);
+            }
             w.place(entity, targetX, targetY);
         });
     }
@@ -888,6 +924,16 @@ void appendPlantSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kTreeRootRadius", kTreeRootRadius});
     out.push_back({g, "kTreeSpacing", kTreeSpacing});
     out.push_back({g, "kTreeSeedRange", kTreeSeedRange});
+
+    // Ягоды — своей группой (core/Berries.hpp): эти числа решают, стоит ли
+    // ходить к ягоднику, и смотреть на них надо рядом друг с другом, а не
+    // вперемешку со сроками семян.
+    constexpr const char* b = "Plants (berries)";
+    out.push_back({b, "kBerryMass", static_cast<float>(kBerryMass)});
+    out.push_back({b, "kBerryMax", static_cast<float>(kBerryMax)});
+    out.push_back({b, "kBerryMaturity", static_cast<float>(kBerryMaturity)});
+    out.push_back({b, "kBerryPeriod", static_cast<float>(kBerryPeriod)});
+    out.push_back({b, "kBerriesPerGrain", static_cast<float>(kBerriesPerGrain)});
 }
 
 } // namespace goblins

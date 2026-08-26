@@ -6,6 +6,8 @@
 #include <entt/entt.hpp>
 
 #include "core/World.hpp"
+#include "core/PlantKind.hpp"
+#include "core/components/BerryComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
@@ -47,9 +49,22 @@ struct TileSnapshot {
     // Глубина воды; 0 — воды нет. Для ноги это стена (см. standableAt в
     // core/Path.hpp).
     std::vector<int> waterAt;
-    // Растение на клетке и его развитость — она же съедобная биомасса.
+    // ТРАВА на клетке и её развитость — она же съедобная биомасса.
+    //
+    // Только трава, и это не мелочь: раньше здесь лежало любое растение, и
+    // травоядное щипало заодно крону дерева — то самое, про которое ниже
+    // написано "не еда". Комментарий говорил одно, код делал другое; теперь
+    // деревья и кусты лежат своими массивами, и объесть их отсюда нельзя
+    // никак.
     std::vector<entt::entity> plantAt;
     std::vector<int> plantGrowth;
+    // КУСТ на клетке и сколько на нём висит ягод.
+    //
+    // Куст не пасут: с него рвут ягоды, а сам он остаётся стоять
+    // (core/Berries.hpp). Поэтому у него не развитость, а счёт ягод — только
+    // они и съедобны, и только их и ищут глазами.
+    std::vector<entt::entity> bushAt;
+    std::vector<int> berriesAt;
     // Мясо лежащей туши.
     std::vector<int> carcassMeat;
     // Влажность и каменистость почвы. Ходьбе они не мешают ничем, а вот
@@ -81,6 +96,8 @@ struct TileSnapshot {
         waterAt.assign(cells, 0);
         plantAt.assign(cells, entt::null);
         plantGrowth.assign(cells, 0);
+        bushAt.assign(cells, entt::null);
+        berriesAt.assign(cells, 0);
         carcassMeat.assign(cells, 0);
         moisture.assign(cells, 0);
         rockiness.assign(cells, 0);
@@ -117,10 +134,23 @@ struct TileSnapshot {
                 continue;
             }
             const std::size_t i = index(position.x, position.y);
-            plantAt[i] = entity;
-            plantGrowth[i] = plantView.get<const PlantComponent>(entity).growth;
-            if (registry.all_of<TreeComponent>(entity)) {
-                treeAt[i] = 1;
+            // Род растения — одной функцией на весь проект (core/PlantKind.hpp):
+            // спрашивают его здесь, в файле мира и в сетевом слое, и разъехаться
+            // этим ответам нельзя.
+            switch (plantKindOf(registry, entity)) {
+                case PlantKind::Grass:
+                    plantAt[i] = entity;
+                    plantGrowth[i] = plantView.get<const PlantComponent>(entity).growth;
+                    break;
+                case PlantKind::Bush:
+                    bushAt[i] = entity;
+                    if (const auto* berries = registry.try_get<const BerryComponent>(entity)) {
+                        berriesAt[i] = berries->berries;
+                    }
+                    break;
+                case PlantKind::Tree:
+                    treeAt[i] = 1;
+                    break;
             }
         }
     }

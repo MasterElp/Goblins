@@ -20,6 +20,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
+#include "core/generation/Nest.hpp"
 #include "core/Diagnostics.hpp"
 
 namespace goblins {
@@ -32,10 +33,15 @@ namespace {
 // найдёт воду).
 constexpr int kInitialReserveShare = 600;
 
-// Ограничение попыток, как в BoulderScatter и GrassSeeding: на карте, где
-// почти всё — вода и камень, случайный поиск свободной клетки не должен
-// уйти в бесконечный цикл.
-constexpr int kAttemptMultiplier = 40;
+// Докуда стадо расходится от своего центра. Широко: стадо кормится на ходу
+// и за первую же сотню тиков разбредается само, поэтому число здесь — не
+// размер стада, а лишь предел, за который расстановка не выходит. Теснее
+// племени (kTribeRadius в GoblinSeeding) впятеро с лишним, и это верно по
+// сути: гоблины живут местом, а стадо — пастбищем.
+//
+// Перебора попыток рядом больше нет: поиск клетки теперь внутри гнезда
+// (core/generation/Nest.hpp), и ограничен он там.
+constexpr int kHerdRadius = 20;
 
 // Терраформирующий Entity тайла (PositionComponent + SoilComponent) — тот,
 // у кого и почва, и, если есть, вода.
@@ -88,102 +94,117 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
         return;
     }
 
-    const int width = world.area().width();
-    const int height = world.area().height();
+    // Каждый вид выпускается СВОИМ стадом, а не рассыпается по карте
+    // поодиночке. Рассыпанное животное живёт в мире, где его сородичи —
+    // редкая случайность: пару ему искать некого (core/Mating.hpp видит
+    // только то, что рядом), стада как явления не возникает вовсе, а вид
+    // держится лишь на том, что кто-то случайно набрёл на кого-то.
+    //
+    // Раскладка — общий закон гнезда (core/generation/Nest.hpp), тот же, что
+    // у рощи, ягодника и племени. Здесь остаётся своё: чем годен центр (еда
+    // этой диеты в пределах видимости) и как выпускается одна особь.
+    const int perSpecies = std::max(1, count / static_cast<int>(species.size()));
+    int born = 0;
+    for (const auto& archetype : species) {
+        // Годность клетки под ЦЕНТР стада строже, чем под соседнюю особь:
+        // от центра зависит, где вид живёт всю первую сотню тиков, поэтому
+        // еда рядом с ним обязательна.
+        const auto suitableCenter = [&](int x, int y) {
+            if (world.area().isBlocked(x, y)) {
+                return false;
+            }
+            const auto terrain = terrainEntityAt(world, x, y);
+            if (terrain == entt::null || world.registry().all_of<WaterComponent>(terrain)) {
+                return false;
+            }
+            return foodInSight<Food>(world, x, y, std::max(1, archetype.perception));
+        };
 
-    int placed = 0;
-    int attempts = 0;
-    const int maxAttempts = count * kAttemptMultiplier;
-    while (placed < count && attempts < maxAttempts) {
-        ++attempts;
+        const auto release = [&](int x, int y) {
+            // Непроходимый Entity занимает тайл полностью (04_WorldModel.md,
+            // п.4). А вот другое животное и трава клетку не занимают: животных
+            // на одной клетке может быть сколько угодно, и трава под ними
+            // продолжает расти.
+            if (world.area().isBlocked(x, y)) {
+                return false;
+            }
+            const auto terrain = terrainEntityAt(world, x, y);
+            if (terrain == entt::null) {
+                return false;
+            }
+            // В воду не ставим — животное туда и само не пойдёт: вода для него
+            // такая же стена, как булыжник (AnimalSystem.cpp, standable).
+            // Разойдись эти две проверки, и стадо оказалось бы расставленным
+            // там, откуда оно не может сойти.
+            if (world.registry().all_of<WaterComponent>(terrain)) {
+                return false;
+            }
 
-        const int x = static_cast<int>(randomUnit(state) * static_cast<float>(width)) % width;
-        const int y = static_cast<int>(randomUnit(state) * static_cast<float>(height)) % height;
+            const AnimalGenomeComponent genome = mutateGenome(
+                traits, archetype, archetype, mutationRate, mixSeed(state, static_cast<std::uint64_t>(born)));
 
-        // Непроходимый Entity занимает тайл полностью (04_WorldModel.md,
-        // п.4). А вот другое животное и трава клетку не занимают: животных
-        // на одной клетке может быть сколько угодно, и трава под ними
-        // продолжает расти.
-        if (world.area().isBlocked(x, y)) {
-            continue;
-        }
-        const auto terrain = terrainEntityAt(world, x, y);
-        if (terrain == entt::null) {
-            continue;
-        }
-        // В воду не ставим — животное туда и само не пойдёт: вода для него
-        // такая же стена, как булыжник (AnimalSystem.cpp, standable).
-        // Разойдись эти две проверки, и стадо оказалось бы расставленным
-        // там, откуда оно не может сойти.
-        if (world.registry().all_of<WaterComponent>(terrain)) {
-            continue;
-        }
+            if (!foodInSight<Food>(world, x, y, genome.perception)) {
+                return false;
+            }
 
-        const std::size_t speciesIndex =
-            static_cast<std::size_t>(randomUnit(state) * static_cast<float>(species.size())) % species.size();
-        const auto& archetype = species[speciesIndex];
+            AnimalComponent animal;
+            // Стартовое поголовье не должно быть строем ровесников: возраст
+            // случайный в пределах до первой половины жизни, размер — тот, до
+            // которого животное успело бы дорасти к этому возрасту. Иначе оно
+            // взрослело, размножалось и умирало синхронными волнами.
+            animal.age =
+                static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maxAge / 2))));
+            animal.sex = randomBelow(state, 2) == 0 ? Sex::Female : Sex::Male;
+            animal.energy = genome.energyCapacity * kInitialReserveShare / kFull;
+            animal.water = genome.waterCapacity * kInitialReserveShare / kFull;
 
-        const AnimalGenomeComponent genome = mutateGenome(
-            traits, archetype, archetype, mutationRate, mixSeed(state, static_cast<std::uint64_t>(placed)));
+            const int grownTo =
+                genome.maturityAge > 0 ? std::min(kFull, animal.age * kFull / genome.maturityAge) : kFull;
+            const int wanted = (grownTo * genome.proteinNeed + kFull - 1) / kFull;
+            // Белок первого поголовья — не из воздуха: ровно столько, сколько
+            // есть в клетке, и ровно столько же вернётся в мир падалью.
+            //
+            // Если клетка бедна и тела не хватает, ищем другую, а не выпускаем
+            // недоросля: животное, родившееся с третью нужного белка, так и
+            // остаётся мелким, не может ни охотиться, ни принести потомство, и
+            // всю жизнь доедает чужое. Это не событие мира, а неудачная
+            // расстановка.
+            auto& soil = world.registry().get<SoilComponent>(terrain);
+            if (soil.minerals < wanted) {
+                return false;
+            }
+            animal.protein = std::max(0, wanted);
+            soil.minerals -= animal.protein;
+            animal.growth = genome.proteinNeed > 0
+                                 ? std::min(grownTo, animal.protein * kFull / genome.proteinNeed)
+                                 : grownTo;
 
-        if (!foodInSight<Food>(world, x, y, genome.perception)) {
-            continue;
-        }
+            // Желания в момент рождения мира — те, что следуют из тела: сытое
+            // и напоенное животное ничего не хочет, и первый же тик пересчитает
+            // их заново (AnimalSystem). Единственное, что действительно
+            // задаётся здесь, — разброс готовности к размножению: иначе всё
+            // поголовье потянулось бы искать пару в один и тот же тик.
+            DesireComponent desire;
+            desire.mating = static_cast<int>(randomBelow(state, kFull));
 
-        AnimalComponent animal;
-        // Стартовое поголовье не должно быть строем ровесников: возраст
-        // случайный в пределах до первой половины жизни, размер — тот, до
-        // которого животное успело бы дорасти к этому возрасту. Иначе оно
-        // взрослело, размножалось и умирало синхронными волнами.
-        animal.age =
-            static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maxAge / 2))));
-        animal.sex = randomBelow(state, 2) == 0 ? Sex::Female : Sex::Male;
-        animal.energy = genome.energyCapacity * kInitialReserveShare / kFull;
-        animal.water = genome.waterCapacity * kInitialReserveShare / kFull;
+            const auto entity = world.registry().create();
+            world.registry().emplace<IdentityComponent>(
+                entity, IdentityComponent{mixSeed(state, static_cast<std::uint64_t>(born) + 1ull)});
+            world.registry().emplace<AnimalComponent>(entity, animal);
+            world.registry().emplace<AnimalGenomeComponent>(entity, genome);
+            world.registry().emplace<DesireComponent>(entity, desire);
+            // Память ног пуста: расставленное животное ещё никуда не ходило.
+            world.registry().emplace<MovementComponent>(entity);
+            // И увечий у него ещё нет: первое поголовье выходит в мир целым.
+            world.registry().emplace<InjuryComponent>(entity);
+            world.registry().emplace<Diet>(entity);
+            world.place(entity, x, y);
 
-        const int grownTo =
-            genome.maturityAge > 0 ? std::min(kFull, animal.age * kFull / genome.maturityAge) : kFull;
-        const int wanted = (grownTo * genome.proteinNeed + kFull - 1) / kFull;
-        // Белок первого поголовья — не из воздуха: ровно столько, сколько
-        // есть в клетке, и ровно столько же вернётся в мир падалью.
-        //
-        // Если клетка бедна и тела не хватает, ищем другую, а не выпускаем
-        // недоросля: животное, родившееся с третью нужного белка, так и
-        // остаётся мелким, не может ни охотиться, ни принести потомство, и
-        // всю жизнь доедает чужое. Это не событие мира, а неудачная
-        // расстановка.
-        auto& soil = world.registry().get<SoilComponent>(terrain);
-        if (soil.minerals < wanted) {
-            continue;
-        }
-        animal.protein = std::max(0, wanted);
-        soil.minerals -= animal.protein;
-        animal.growth = genome.proteinNeed > 0
-                             ? std::min(grownTo, animal.protein * kFull / genome.proteinNeed)
-                             : grownTo;
+            ++born;
+            return true;
+        };
 
-        // Желания в момент рождения мира — те, что следуют из тела: сытое
-        // и напоенное животное ничего не хочет, и первый же тик пересчитает
-        // их заново (AnimalSystem). Единственное, что действительно
-        // задаётся здесь, — разброс готовности к размножению: иначе всё
-        // поголовье потянулось бы искать пару в один и тот же тик.
-        DesireComponent desire;
-        desire.mating = static_cast<int>(randomBelow(state, kFull));
-
-        const auto entity = world.registry().create();
-        world.registry().emplace<IdentityComponent>(
-            entity, IdentityComponent{mixSeed(state, static_cast<std::uint64_t>(placed) + 1ull)});
-        world.registry().emplace<AnimalComponent>(entity, animal);
-        world.registry().emplace<AnimalGenomeComponent>(entity, genome);
-        world.registry().emplace<DesireComponent>(entity, desire);
-        // Память ног пуста: расставленное животное ещё никуда не ходило.
-        world.registry().emplace<MovementComponent>(entity);
-        // И увечий у него ещё нет: первое поголовье выходит в мир целым.
-        world.registry().emplace<InjuryComponent>(entity);
-        world.registry().emplace<Diet>(entity);
-        world.place(entity, x, y);
-
-        ++placed;
+        seedNest(world.area(), perSpecies, kHerdRadius, suitableCenter, release, state);
     }
 }
 
@@ -226,7 +247,7 @@ void seedAnimals(World& world, const AnimalParams& params, unsigned seed) {
 void appendAnimalSeedingConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* g = "Animal seeding";
     out.push_back({g, "kInitialReserveShare", static_cast<float>(kInitialReserveShare)});
-    out.push_back({g, "kAttemptMultiplier", static_cast<float>(kAttemptMultiplier)});
+    out.push_back({g, "kHerdRadius", static_cast<float>(kHerdRadius)});
 }
 
 } // namespace goblins

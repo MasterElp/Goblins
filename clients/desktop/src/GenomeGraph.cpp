@@ -33,11 +33,12 @@ const Color kTitleColor{200, 200, 205, 255};
 const Color kGridColor{52, 52, 60, 255};
 const Color kCursorColor{255, 220, 90, 255};
 
-enum class Kind { Plants, Trees, Herbivores, Predators, Goblins };
+enum class Kind { Plants, Bushes, Trees, Herbivores, Predators, Goblins };
 
 const std::vector<int>& genomeOf(const WorldState::PopulationPoint& point, Kind kind) {
     switch (kind) {
         case Kind::Plants: return point.plantGenome;
+        case Kind::Bushes: return point.bushGenome;
         case Kind::Trees: return point.treeGenome;
         case Kind::Predators: return point.predatorGenome;
         case Kind::Goblins: return point.goblinGenome;
@@ -257,15 +258,16 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     // травоядных и хищников свои таблицы черт, и одна общая легенда на
     // сорок линий не читалась бы вовсе.
     const float chartWidth = bounds.width - kPadding * 2.0f;
-    // Пять панелей: трава, рощи, травоядные, хищники, гоблины.
-    const float chartHeight = (bounds.height - kPadding * 2.0f - kGap * 4.0f) / 5.0f;
+    // Шесть панелей: трава, ягодники, рощи, травоядные, хищники, гоблины.
+    const float chartHeight = (bounds.height - kPadding * 2.0f - kGap * 5.0f) / 6.0f;
     if (chartWidth < kValueLabelWidth + 60.0f || chartHeight < kHeaderHeight + kFooterHeight + 24.0f) {
         DrawText("Genome history: panel is too small", static_cast<int>(bounds.x) + 10,
                  static_cast<int>(bounds.y) + 10, kTitleFont, kMutedColor);
         return;
     }
     const Rectangle plants{bounds.x + kPadding, bounds.y + kPadding, chartWidth, chartHeight};
-    const Rectangle trees{plants.x, plants.y + chartHeight + kGap, chartWidth, chartHeight};
+    const Rectangle bushes{plants.x, plants.y + chartHeight + kGap, chartWidth, chartHeight};
+    const Rectangle trees{plants.x, bushes.y + chartHeight + kGap, chartWidth, chartHeight};
     const Rectangle herbivores{plants.x, trees.y + chartHeight + kGap, chartWidth, chartHeight};
     const Rectangle predators{plants.x, herbivores.y + chartHeight + kGap, chartWidth, chartHeight};
     const Rectangle goblinsChart{plants.x, predators.y + chartHeight + kGap, chartWidth, chartHeight};
@@ -293,6 +295,11 @@ void draw(const WorldState& state, Rectangle bounds, bool allowHover) {
     // У дерева таблица черт своя (пределы те же черты меряют иначе:
     // max_age травы — сотни тиков, дерева — десятки тысяч), поэтому и
     // панель своя, со своей легендой.
+    // У куста таблица черт своя — те же имена черт, другие пределы
+    // (kBushTraits), — поэтому и панель своя: наложить его геном на
+    // травяную шкалу значило бы сравнить несравнимое.
+    drawChart(history, state.bushTraits, bushes, Kind::Bushes, "Bushes -- average genome", hasHover, hoverIndex,
+              nullptr);
     drawChart(history, state.treeTraits, trees, Kind::Trees, "Trees -- average genome", hasHover, hoverIndex,
               nullptr);
     drawChart(history, state.herbivoreTraits, herbivores, Kind::Herbivores, "Herbivores -- average genome", hasHover,

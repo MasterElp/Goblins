@@ -11,6 +11,7 @@ add_library(core STATIC
     src/generation/PlantGenetics.cpp
     src/generation/GrassSeeding.cpp
     src/generation/TreeSeeding.cpp
+    src/generation/BushSeeding.cpp
     src/generation/AnimalGenetics.cpp
     src/generation/AnimalSeeding.cpp
     src/generation/GoblinGenetics.cpp

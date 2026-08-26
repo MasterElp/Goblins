@@ -433,6 +433,12 @@ void NetworkClient::applyPopulationHistory(const nlohmann::json& message, bool r
             point.goblins = decodeIntArray(entry[9]);
             point.goblinGenome = decodeIntArray(entry[10]);
         }
+        // Кусты — двенадцатым и тринадцатым, тем же способом и с той же
+        // оговоркой: у точек из мира без ягодников их нет.
+        if (entry.size() > 12) {
+            point.bushes = decodeIntArray(entry[11]);
+            point.bushGenome = decodeIntArray(entry[12]);
+        }
         working_.populationHistory.push_back(std::move(point));
     }
 }
@@ -464,6 +470,7 @@ void NetworkClient::applyPopulationTraits(const nlohmann::json& history) {
     const auto& traits = history["traits"];
     working_.plantTraits = read(traits.contains("plants") ? traits["plants"] : nlohmann::json{});
     working_.treeTraits = read(traits.contains("trees") ? traits["trees"] : nlohmann::json{});
+    working_.bushTraits = read(traits.contains("bushes") ? traits["bushes"] : nlohmann::json{});
     working_.herbivoreTraits = read(traits.contains("herbivores") ? traits["herbivores"] : nlohmann::json{});
     working_.predatorTraits = read(traits.contains("predators") ? traits["predators"] : nlohmann::json{});
     working_.goblinTraits = read(traits.contains("goblins") ? traits["goblins"] : nlohmann::json{});
@@ -626,6 +633,10 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.seedSpeciesAt = decodeInts(layers, "seeds", cellCount, -1);
         // Деревья — тем же способом: -1 значит "дерева в клетке нет".
         working_.treeSpeciesAt = decodeInts(layers, "trees", cellCount, -1);
+        working_.bushSpeciesAt = decodeInts(layers, "bushes", cellCount, -1);
+        // Ягоды — счётные штуки, как минералы и перегной: ни округления
+        // показа, ни перевода долей (shared/protocol/WirePrecision.hpp).
+        working_.berries = decodeInts(layers, "berries", cellCount, 0);
         working_.carcass = decodeScaled(layers, "carcass", cellCount, kFromHundredths);
 
         // Виды растений: два списка, у травы и у деревьев своя нумерация.
@@ -652,6 +663,9 @@ void NetworkClient::handleMessage(const std::string& payload) {
         }
         if (json.contains("tree_species")) {
             working_.treeSpecies = readPlantSpecies(json["tree_species"]);
+        }
+        if (json.contains("bush_species")) {
+            working_.bushSpecies = readPlantSpecies(json["bush_species"]);
         }
 
         // Виды животных и само поголовье — тем же способом, что и трава
@@ -738,6 +752,8 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
         applyChangedCells(json, "seeds", working_.seedSpeciesAt, [](int raw) { return raw; });
         applyChangedCells(json, "trees", working_.treeSpeciesAt, [](int raw) { return raw; });
+        applyChangedCells(json, "bushes", working_.bushSpeciesAt, [](int raw) { return raw; });
+        applyChangedCells(json, "berries", working_.berries, [](int raw) { return raw; });
         // Поголовье — изменениями, как и слои, только правится не клетка,
         // а животное (см. протокол в server/NetworkServer.hpp).
         applyAnimalChanges(json);

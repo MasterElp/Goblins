@@ -25,6 +25,9 @@
 #include "core/components/ImpassableComponent.hpp"
 #include "core/components/InjuryComponent.hpp"
 #include "core/components/MovementComponent.hpp"
+#include "core/PlantKind.hpp"
+#include "core/components/BerryComponent.hpp"
+#include "core/components/BushComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
@@ -93,6 +96,7 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     carcass.assign(count, 0);
     growth.assign(count, 0);
     rockiness.assign(count, 0);
+    berries.assign(count, 0);
     // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
     // массиве выражается значением-заглушкой. Семена — отдельным слоем и
     // тем же способом: семя лежит в той же клетке, где стоит растение
@@ -101,6 +105,7 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     species.assign(count, -1);
     seeds.assign(count, -1);
     trees.assign(count, -1);
+    bushes.assign(count, -1);
     // Животные и гоблины — списки, а не слои (см. NetworkServer.hpp): они
     // собираются заново на каждый снимок, поэтому здесь только очищаются.
     animals.clear();
@@ -301,10 +306,22 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
             const PlantGenomeComponent& genome) {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
             out.growth[i] = toWire(plant.growth);
-            if (registry.all_of<TreeComponent>(entity)) {
-                out.trees[i] = genome.species;
-            } else {
-                out.species[i] = genome.species;
+            // Род растения — одной функцией на весь проект
+            // (core/PlantKind.hpp): её же спрашивают снимок клеток и файл
+            // мира, и разъехаться этим ответам нельзя.
+            switch (plantKindOf(registry, entity)) {
+                case PlantKind::Tree:
+                    out.trees[i] = genome.species;
+                    break;
+                case PlantKind::Bush:
+                    out.bushes[i] = genome.species;
+                    if (const auto* berries = registry.try_get<const BerryComponent>(entity)) {
+                        out.berries[i] = berries->berries;
+                    }
+                    break;
+                case PlantKind::Grass:
+                    out.species[i] = genome.species;
+                    break;
             }
         });
 
@@ -1118,6 +1135,18 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     }
     message["tree_species"] = treeSpeciesJson;
 
+    // Виды кустов — третьим списком по той же причине.
+    auto bushSpeciesJson = nlohmann::json::array();
+    for (const auto& archetype : plantSpecies.bushes) {
+        nlohmann::json record;
+        record["species"] = archetype.species;
+        for (const auto& trait : kBushTraits) {
+            record[trait.name] = archetype.*trait.gene;
+        }
+        bushSpeciesJson.push_back(std::move(record));
+    }
+    message["bush_species"] = bushSpeciesJson;
+
     // Виды животных — по тем же правилам, что и виды травы: клиенту нужны
     // и цвет по индексу, и сами числа, а перечисляет их таблица черт, а не
     // этот код. Списка два, потому что и таблицы черт две.
@@ -1203,6 +1232,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     };
     history["traits"] = {{"plants", traitsToJson(kGrassTraits)},
                           {"trees", traitsToJson(kTreeTraits)},
+                          {"bushes", traitsToJson(kBushTraits)},
                           {"herbivores", traitsToJson(herbivoreTraits())},
                           {"predators", traitsToJson(predatorTraits())},
                           {"goblins", traitsToJson(goblinTraits())}};
@@ -1219,6 +1249,8 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["layers"]["growth"] = layers.growth;
     message["layers"]["seeds"] = layers.seeds;
     message["layers"]["trees"] = layers.trees;
+    message["layers"]["bushes"] = layers.bushes;
+    message["layers"]["berries"] = layers.berries;
 
     return message.dump();
 }
@@ -1249,6 +1281,8 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
         {"growth", {&previous.growth, &current.growth}},
         {"seeds", {&previous.seeds, &current.seeds}},
         {"trees", {&previous.trees, &current.trees}},
+        {"bushes", {&previous.bushes, &current.bushes}},
+        {"berries", {&previous.berries, &current.berries}},
     };
     for (const auto& [name, arrays] : layers) {
         auto pairs = changedCells(*arrays.first, *arrays.second);

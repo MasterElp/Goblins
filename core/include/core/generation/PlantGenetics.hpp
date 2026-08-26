@@ -167,6 +167,49 @@ inline constexpr PlantTrait kTreeTraits[] = {
 
 inline constexpr std::size_t kTreeTraitCount = sizeof(kTreeTraits) / sizeof(kTreeTraits[0]);
 
+// --- Кусты ---
+//
+// Таблица третья, и тип генома тот же. Куст отличается от травы и от дерева
+// не устройством, а сроком и повадкой: живёт дольше травы и заметно короче
+// дерева, растёт медленнее травы, сеет реже, а кормится, как трава, со своей
+// клетки — корней с площади у него нет, и соседу вплотную он не мешает.
+// Именно поэтому ягодник выходит купой, а роща — россыпью одиночек.
+//
+// Ягод в этой таблице НЕТ, и это осознанно. Таблица черт — бюджет
+// ПРЕИМУЩЕСТВ (core/generation/Genetics.hpp): каждая её строка описывает то,
+// чем вид выигрывает, платя за это остальными строками. Частое плодоношение
+// кусту ничего не даёт — ягоды у него забирают, и вместе с ними уходит
+// вещество из его же клетки; купить такое за бюджет значило бы заплатить
+// преимуществом за убыток. Срок созревания поэтому один на все кусты и
+// живёт законом (kBerryPeriod, core/Berries.hpp), а не геном.
+// Появится у ягоды польза для самого куста (съевший разносит семена) — она
+// станет чертой в тот же день.
+inline constexpr PlantTrait kBushTraits[] = {
+    // Созревание позже травяного: куст сперва обживает место. Верх
+    // диапазона держится ниже kBerryMaturity по смыслу — плодоносить он
+    // начинает не раньше, чем становится способен сеять.
+    {"maturity_age", &PlantGenomeComponent::maturityAge, 700, 150, 1.25f},
+    // Между травой (300..2500) и деревом (4000..30000). Куст обязан
+    // пережить несколько поколений травы под собой: ягодник, исчезающий
+    // быстрее, чем к нему протаптывают дорогу, не место, а случайность.
+    {"max_age", &PlantGenomeComponent::maxAge, 1500, 8000, 1.5f},
+    // Тысячных развитости за тик. Медленнее травы, быстрее дерева.
+    {"growth_rate", &PlantGenomeComponent::growthRate, 1, 10, 1.0f},
+    // Пределы влажности те же, что у травы и дерева: карта одна, и мерка у
+    // всех троих одна.
+    {"moisture_need", &PlantGenomeComponent::moistureNeed, 850, 300, 1.25f},
+    // Разлив куст пережидает лучше травы и хуже дерева.
+    {"water_tolerance", &PlantGenomeComponent::waterTolerance, 50, 500, 1.0f},
+    // Вчетверо реже травяного, вдвое чаще древесного, и цена та же тройная:
+    // плодовитость — самое сильное преимущество в мире, где свободные
+    // клетки кончаются.
+    {"seed_chance", &PlantGenomeComponent::seedChance, 2, 20, 3.0f},
+    // Покой семени — длиннее травяного: куст ждёт своего места дольше.
+    {"seed_dormancy", &PlantGenomeComponent::seedDormancy, 800, 100, 1.0f},
+};
+
+inline constexpr std::size_t kBushTraitCount = sizeof(kBushTraits) / sizeof(kBushTraits[0]);
+
 // Сколько видов травы может быть в мире. Нижняя граница — чтобы вообще
 // было кому конкурировать, верхняя — чтобы при фиксированном бюджете
 // виды оставались различимыми (см. genetics::kMinSpeciesDistance).
@@ -179,6 +222,11 @@ inline constexpr int kMaxGrassSpecies = 12;
 // бюджете. Верхняя — чтобы виды оставались различимы на глаз.
 inline constexpr int kMinTreeSpecies = 1;
 inline constexpr int kMaxTreeSpecies = 5;
+
+// Видов кустов — как деревьев, и по той же причине: ягодников на карте
+// немного, и десяток видов на них означал бы по виду на купу.
+inline constexpr int kMinBushSpecies = 1;
+inline constexpr int kMaxBushSpecies = 4;
 
 // Случайность (mixSeed/randomUnit) — общая для всего проекта, см.
 // core/Random.hpp: системе запрещено хранить генератор между тиками
@@ -196,6 +244,10 @@ std::vector<PlantGenomeComponent> makeGrassSpecies(int count, std::uint64_t seed
 // [kMinTreeSpecies, kMaxTreeSpecies]) по таблице kTreeTraits.
 std::vector<PlantGenomeComponent> makeTreeSpecies(int count, std::uint64_t seed);
 
+// И для кустов: count видов (обрезается до [kMinBushSpecies,
+// kMaxBushSpecies]) по таблице kBushTraits.
+std::vector<PlantGenomeComponent> makeBushSpecies(int count, std::uint64_t seed);
+
 // Геном потомка: геном родителя, слегка сдвинутый случайной мутацией
 // (mutationRate — доля вложения, на которую может съехать каждая черта),
 // прижатый к полосе вокруг архетипа вида и пересчитанный обратно на тот
@@ -211,6 +263,12 @@ PlantGenomeComponent mutateGenome(const PlantGenomeComponent& parent, const Plan
 // признаком значило бы позволить перепутать (мутировать дерево по травяным
 // пределам — молча получить дерево, живущее триста тиков).
 PlantGenomeComponent mutateTreeGenome(const PlantGenomeComponent& parent, const PlantGenomeComponent& archetype,
+                                       float mutationRate, std::uint64_t seed);
+
+// Мутация по кустовой таблице. Отдельная по той же причине, что и древесная:
+// таблица черт и есть ответ на вопрос "чей потомок", и мутировать куст по
+// травяным пределам значило бы молча получить куст, живущий триста тиков.
+PlantGenomeComponent mutateBushGenome(const PlantGenomeComponent& parent, const PlantGenomeComponent& archetype,
                                        float mutationRate, std::uint64_t seed);
 
 // Функции "насколько почва подходит этому геному" (habitatFit) здесь

@@ -175,9 +175,20 @@ struct PlantConfig {
     // прокормит, решают минералы в земле (core/Trees.hpp), а не эта
     // настройка.
     int tree_coverage = 10;
+
+    // Сколько видов кустов в мире. Ядро обрежет значение до 1..4
+    // (core::kMinBushSpecies/kMaxBushSpecies).
+    int bush_species = 2;
+
+    // Какую долю карты занять кустами при генерации, в тысячных. Между
+    // травяной долей и древесной, и это не вкус: ягодник — единственная еда
+    // собирателя, которая растёт сама (core/Berries.hpp), но стать фоном он
+    // не должен. Еда, которая везде, не место, и возвращаться к ней незачем.
+    int bush_coverage = 20;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PlantConfig, grass_species, grass_coverage, mutation_rate,
-                                    humus_decay_period, tree_species, tree_coverage)
+                                    humus_decay_period, tree_species, tree_coverage, bush_species,
+                                    bush_coverage)
 
 // Зеркало core::AnimalParams (core/generation/AnimalParams.hpp) — по той же
 // причине, что TerrainConfig и PlantConfig выше. Имена и значения по

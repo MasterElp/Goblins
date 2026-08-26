@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Body.hpp"
+#include "core/Berries.hpp"
 #include "core/Carcass.hpp"
 #include "core/Desires.hpp"
 #include "core/Diagnostics.hpp"
@@ -22,6 +23,7 @@
 #include "core/Walk.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
+#include "core/components/BerryComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinDesireComponent.hpp"
@@ -77,6 +79,17 @@ constexpr int kFatigueStep = 3;
 // Прибывает при этом и во время отдыха (kFatigueTick вычитается из этого
 // числа, а не отменяется): гоблин отдыхает, но не перестаёт жить.
 constexpr int kRestRelief = 8;
+
+// Сколько ягод срывает за тик взрослый гоблин (у мелкого — доля от размера
+// тела, как и укус). Три штуки: полный куст (kBerryMax = 12,
+// core/Berries.hpp) обирается за четыре тика — быстро, потому что рвут
+// руками, а не жуют.
+//
+// Из этого и берётся весь смысл ягодника: обирается он за считанные тики, а
+// наливается обратно тысячами. Значит, наевшийся уходит, а вернуться сюда
+// имеет смысл не раньше, чем куст успеет завязать новые, — и между уходом и
+// возвращением как раз и лежит всё остальное: вода, отдых, тропа.
+constexpr int kBerryPick = 3;
 
 // С какой вероятностью ничего не желающий гоблин всё-таки делает шаг.
 // Постоянно бродящий выглядит нервным и зря жжёт энергию, полностью
@@ -236,9 +249,12 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     const std::vector<int>& waterAt = tiles.waterAt;
     const std::vector<entt::entity>& plantAt = tiles.plantAt;
     const std::vector<int>& plantGrowth = tiles.plantGrowth;
+    const std::vector<entt::entity>& bushAt = tiles.bushAt;
+    const std::vector<int>& berriesAt = tiles.berriesAt;
     const std::vector<int>& carcassMeat = tiles.carcassMeat;
 
     std::vector<ShareIntent> bites;  // трава
+    std::vector<ShareIntent> picks;  // ягоды
     std::vector<ShareIntent> meals;  // падаль
     std::vector<ShareIntent> drinks;
     std::vector<StepIntent> steps;
@@ -431,10 +447,27 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     busy = true;
                     break;
                 }
+                // Ягоды с куста под ногами. Рвать, а не объедать: куст от
+                // сбора не убывает и останется стоять (core/Berries.hpp).
+                // Сколько ягод за тик — от размера тела, как и укус: рук у
+                // взрослого больше, чем у ребёнка.
+                if (bushAt[here] != entt::null && berriesAt[here] > 0) {
+                    picks.push_back(ShareIntent{here, static_cast<int>(g), goblin.id,
+                                                 std::max(1, kBerryPick * size / kFull)});
+                    // Помнится то, что ПРИГОДИЛОСЬ, а не то, что попалось на
+                    // глаза (core/Knowledge.hpp).
+                    remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
+                    busy = true;
+                    break;
+                }
+                // Трава — голодный запас, и только он. Гоблин щиплет её,
+                // раз уж стоит на ней, но НЕ ЗАПОМИНАЕТ этого места: голова
+                // у него на восемь мест (core/Knowledge.hpp), трава растёт
+                // везде, и первая же съеденная травинка вытеснила бы из
+                // памяти ягодник — единственное, к чему стоит возвращаться.
                 if (plantAt[here] != entt::null && plantGrowth[here] > kMinBiteGrowth) {
                     bites.push_back(
                         ShareIntent{here, static_cast<int>(g), goblin.id, genome.biteSize * size / kFull});
-                    remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
                     busy = true;
                     break;
                 }
@@ -463,10 +496,42 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     }
                 }
 
-                // Травы в мире много, и упираться в берег ради одного
-                // конкретного куста незачем: к ней идут напрямик, а преграду
-                // обходят вслепую памятью ног. Тот же выбор, что у
-                // травоядного, и по той же причине.
+                // Потом ягодник — и к нему тоже ДОРОГОЙ, по той же причине,
+                // что и к падали: куст стоит в одной точке, их на карте
+                // мало, и увиденный через реку увёл бы гоблина на берег
+                // ждать. За травой так не ходят, а за ягодами ходят — в этом
+                // и разница между фоном и местом.
+                if (!hasTarget) {
+                    int berryX = goblin.x;
+                    int berryY = goblin.y;
+                    const bool berriesSeen =
+                        findNearest([&](std::size_t cell, int nx, int ny) {
+                            return bushAt[cell] != entt::null && berriesAt[cell] > 0 && standable(nx, ny);
+                        }, berryX, berryY) >= 0;
+                    if (berriesSeen) {
+                        reachOf.build(world.area(), goblin.x, goblin.y, reach, standable);
+                        if (reachOf.reached(berryX, berryY)) {
+                            reachOf.roadTo(berryX, berryY, road);
+                            if (!road.empty()) {
+                                targetX = road.front().x;
+                                targetY = road.front().y;
+                                hasTarget = true;
+                            }
+                        }
+                    }
+                }
+
+                // Вспомненный ягодник — раньше видимой травы, и это главное
+                // в диете собирателя. Трава под ногами голод перебьёт, но
+                // ИДТИ за ней незачем: она везде, и ушедший за ней гоблин
+                // просто перестал бы возвращаться куда бы то ни было.
+                if (!hasTarget) {
+                    hasTarget = goByMemory(PlaceKind::Food);
+                }
+
+                // Трава — последняя и только та, что видно рядом. Идут к ней
+                // напрямик, а преграду обходят вслепую памятью ног: упираться
+                // в берег ради пучка травы незачем.
                 if (!hasTarget) {
                     hasTarget = findNearest(
                                     [&](std::size_t cell, int nx, int ny) {
@@ -474,9 +539,6 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                                standable(nx, ny);
                                     },
                                     targetX, targetY) >= 0;
-                }
-                if (!hasTarget) {
-                    hasTarget = goByMemory(PlaceKind::Food);
                 }
                 break;
             }
@@ -701,6 +763,45 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         n = m;
     }
 
+    // --- 5b. Сбор ягод: один куст на всех, кто до него дотянулся ---
+    // Дележ тот же, что у травы и туши (core/Share.hpp), а вот последствие
+    // другое: сам куст не убывает ни на тысячную. Луг объедают, ягодник
+    // обирают — и он остаётся стоять, чтобы налиться снова.
+    std::sort(picks.begin(), picks.end(), sortByCellThenId);
+    for (std::size_t n = 0; n < picks.size();) {
+        std::size_t m = n;
+        int demand = 0;
+        while (m < picks.size() && picks[m].cell == picks[n].cell) {
+            demand += picks[m].want;
+            ++m;
+        }
+
+        const entt::entity bushEntity = bushAt[picks[n].cell];
+        auto* berries = registry.valid(bushEntity) ? registry.try_get<BerryComponent>(bushEntity) : nullptr;
+        if (berries == nullptr || demand <= 0) {
+            n = m;
+            continue;
+        }
+
+        const int berriesBefore = berries->berries;
+        for (std::size_t k = n; k < m; ++k) {
+            const int share = shareOf(picks[k].want, berriesBefore, demand);
+            if (share <= 0) {
+                continue;
+            }
+            auto& state = *goblins[static_cast<std::size_t>(picks[k].claimant)].state;
+            const auto& genome = *goblins[static_cast<std::size_t>(picks[k].claimant)].genome;
+
+            // Крупицы уходят вместе с ягодами — тем же путём, каким они
+            // уходят из травы в травоядное, и вернутся в мир навозом и
+            // падалью съевшего (core/Berries.hpp).
+            const BerryPick got = pickBerries(*berries, share);
+            feedBody(state, genome, got.berries * kBerryMass);
+            takeProtein(state, genome, got.minerals);
+        }
+        n = m;
+    }
+
     // --- 6. Кормёжка падалью: одна туша на всех, кто до неё добрался ---
     std::sort(meals.begin(), meals.end(), sortByCellThenId);
     for (std::size_t n = 0; n < meals.size();) {
@@ -884,6 +985,7 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kCalmNeed", kCalmNeed});
     out.push_back({g, "kMateDesire", kMateDesire});
     out.push_back({g, "kWanderChance", kWanderChance});
+    out.push_back({g, "kBerryPick", kBerryPick});
     out.push_back({g, "kRoamTicks", static_cast<float>(kRoamTicks)});
     out.push_back({g, "kFatigueTick", kFatigueTick});
     out.push_back({g, "kFatigueStep", kFatigueStep});
