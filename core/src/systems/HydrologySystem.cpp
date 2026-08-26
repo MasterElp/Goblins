@@ -12,6 +12,7 @@
 #include "core/components/HeightComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
+#include "core/Trample.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
@@ -645,6 +646,20 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         // "не менялась". Снять оба комментария разом.
         //soil.moisture = std::clamp(nextMoisture[i], 0, kFull);
         soil.minerals = std::max(0, nextMinerals[i]);
+
+        // Тропа зарастает. Место ей здесь, а не в системе тех, кто ходит:
+        // это земля отходит сама — дождём, морозом и корнями, — и
+        // происходит это с каждой клеткой, а не с теми, по которым сегодня
+        // прошли. Ровно поэтому проход по всей почве, который у этой
+        // системы и так есть, оказался единственным местом, где закон
+        // ничего не стоит (core/Trample.hpp).
+        //
+        // Выключенное топтание гасит и зарастание: иначе тропы, набитые до
+        // выключения, продолжали бы таять — и замер "с тропами и без"
+        // сравнивал бы не то.
+        if (toggles.trampling && soil.trampled > 0 && trampleFades(tick, i)) {
+            --soil.trampled;
+        }
         registry.get<HeightComponent>(entity).height = nextTerrainHeight[i];
 
         const int depth = std::max(0, nextWaterDepth[i]);
@@ -692,6 +707,15 @@ void appendHydrologyConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kMineralSlopeThreshold", static_cast<float>(kMineralSlopeThreshold)});
     out.push_back({g, "kRainDurationTicks", static_cast<float>(kRainDurationTicks)});
     out.push_back({g, "kRainDropsPerTick", static_cast<float>(kRainDropsPerTick)});
+
+    // Утоптанность (core/Trample.hpp) — своей группой: её числа подбирают
+    // друг против друга (как быстро набивается против того, как быстро
+    // зарастает), и смотреть на них надо рядом. Тяга к натоптанному лежит
+    // не здесь, а среди весов шага: там её сравнивают с тягой к цели.
+    constexpr const char* t = "Soil (trampling)";
+    out.push_back({t, "kTrampleStep", static_cast<float>(kTrampleStep)});
+    out.push_back({t, "kTrampleRecoverPeriod", static_cast<float>(kTrampleRecoverPeriod)});
+    out.push_back({t, "kTrampleGrowthPenalty", static_cast<float>(kTrampleGrowthPenalty)});
 }
 
 } // namespace goblins

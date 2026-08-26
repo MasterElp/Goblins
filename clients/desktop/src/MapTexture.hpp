@@ -23,6 +23,9 @@ namespace MapTexture {
 // влажностью (вода на тайле и есть источник его влажности).
 struct Layers {
     bool rockiness = true;
+    // Тропы — свой выключатель, а не часть каменистости: смотреть на мир
+    // без троп надо ровно затем, чтобы увидеть, где они появились.
+    bool trampled = true;
     bool moisture = true;
     bool minerals = true;
     bool height = true;
@@ -32,14 +35,15 @@ struct Layers {
     // надо вместе со зверями, а не вместе с травой.
     bool animals = true;
     // Гоблины — свой выключатель, а не часть звериного: смотреть на мир без
-    // поселенцев и смотреть на мир без зверья — разные надобности. Текстуры
-    // он не касается вовсе (гоблин не оставляет следа на почве — пока), но
-    // лежит здесь же, чтобы все выключатели карты были в одном месте.
+    // поселенцев и смотреть на мир без зверья — разные надобности. Значков
+    // на карте он касается, а текстуры — нет: след ноги гоблина живёт в
+    // своём слое (trampled выше) и гаснет вместе с ним, потому что тропа
+    // остаётся в земле и после того, как её набивший умер.
     bool goblins = true;
 };
 
 inline bool operator==(const Layers& a, const Layers& b) {
-    return a.rockiness == b.rockiness && a.moisture == b.moisture &&
+    return a.rockiness == b.rockiness && a.trampled == b.trampled && a.moisture == b.moisture &&
            a.minerals == b.minerals && a.height == b.height && a.plants == b.plants &&
            a.animals == b.animals && a.goblins == b.goblins;
 }

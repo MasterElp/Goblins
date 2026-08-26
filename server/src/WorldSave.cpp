@@ -289,6 +289,7 @@ nlohmann::json buildEntitiesJson(const World& world) {
         if (const auto* soil = registry.try_get<SoilComponent>(entity)) {
             record["soil"] = {{"moisture", soil->moisture},
                               {"rockiness", soil->rockiness},
+                              {"trampled", soil->trampled},
                               {"minerals", soil->minerals}};
         }
         if (const auto* heightComponent = registry.try_get<HeightComponent>(entity)) {
@@ -589,6 +590,9 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.hasSoil = true;
             parsed.soil.moisture = record["soil"].value("moisture", 0.0f);
             parsed.soil.rockiness = record["soil"].value("rockiness", 0.0f);
+            // Утоптанность: у файлов, записанных до появления троп, её нет,
+            // и мир открывается нехоженым — это верно, троп в нём и не было.
+            parsed.soil.trampled = record["soil"].value("trampled", 0);
             parsed.soil.minerals = record["soil"].value("minerals", 0);
         }
         parsed.height = record.value("height", 0);

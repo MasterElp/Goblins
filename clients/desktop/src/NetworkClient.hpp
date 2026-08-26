@@ -42,6 +42,10 @@ struct WorldState {
     // целое количество (SoilComponent.minerals), не нормализовано.
     std::vector<float> moisture;
     std::vector<float> rockiness;
+    // Утоптанность земли, 0..1: её набивают ноги и она зарастает сама
+    // (core/Trample.hpp). В отличие от каменистости — меняется каждый тик и
+    // приходит дельтами.
+    std::vector<float> trampled;
     std::vector<int> minerals;
     std::vector<float> waterDepth;
 

@@ -20,6 +20,7 @@
 #include "core/Scale.hpp"
 #include "core/Share.hpp"
 #include "core/TileSnapshot.hpp"
+#include "core/Trample.hpp"
 #include "core/Walk.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
@@ -33,6 +34,7 @@
 #include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/SoilComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
@@ -699,7 +701,14 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // траву настолько, чтобы обходить его стороной, а хищника он не
         // видит. Поэтому WalkShy пустой — но он есть, и в него встанет
         // первая же причина держаться подальше.
-        const WalkStep step = chooseStep(*goblin.memory, goblin.x, goblin.y, aim, WalkShy{}, standable, random);
+        // Седьмое слагаемое шага: по натоптанному идти легче
+        // (core/Walk.hpp). Читается из снимка тика, как и всё остальное,
+        // чтобы решения всех гоблинов принимались по одному состоянию мира.
+        const auto trodden = [&](int nx, int ny) {
+            return world.area().inBounds(nx, ny) ? tiles.trampled[index(nx, ny)] : 0;
+        };
+        const WalkStep step =
+            chooseStep(*goblin.memory, goblin.x, goblin.y, aim, WalkShy{}, standable, trodden, random);
         if (!step.moved) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
@@ -870,6 +879,24 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             continue;
         }
         world.moveTo(goblins[s].entity, step.x, step.y);
+
+        // Нога умяла землю там, КУДА встали (core/Trample.hpp). Здесь, а не
+        // при выборе шага: намерение шагнуть — ещё не шаг, а следа не
+        // оставляет тот, кто до клетки не дошёл.
+        //
+        // Порядок исполнения намерений на итог не влияет: сложение с
+        // потолком коммутативно, и двое, ступившие на одну клетку в один
+        // тик, дают одно и то же в любом порядке (04_WorldModel.md, п.8).
+        if (!worldProperties.toggles.trampling) {
+            continue;
+        }
+        const entt::entity tile = terrain[index(step.x, step.y)];
+        if (tile == entt::null || !registry.valid(tile)) {
+            continue;
+        }
+        if (auto* soil = registry.try_get<SoilComponent>(tile)) {
+            trampleBy(soil->trampled, bodySize(goblins[s].state->growth));
+        }
     }
 
     // --- 9. Встречи: кто с кем сошёлся ---

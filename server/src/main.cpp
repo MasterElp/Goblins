@@ -69,6 +69,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     // переключатель, и новый добавляется одной строкой сюда.
     params.toggles.mineralsSpread = config.toggles.minerals_spread;
     params.toggles.erosionDeposition = config.toggles.erosion_deposition;
+    params.toggles.trampling = config.toggles.trampling;
     return params;
 }
 

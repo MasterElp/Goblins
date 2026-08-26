@@ -46,8 +46,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AreaSize, width, height)
 struct TerrainToggles {
     bool minerals_spread = true;
     bool erosion_deposition = true;
+    bool trampling = true;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainToggles, minerals_spread, erosion_deposition)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainToggles, minerals_spread, erosion_deposition, trampling)
 
 // Пределы стороны Области. Общие для клиента (ползунки размера на панели
 // генерации) и сервера (проверка присланного запроса): расходись они, и
@@ -405,6 +406,7 @@ struct ClientConfig {
     bool show_plants = true;
     bool show_animals = true;
     bool show_goblins = true;
+    bool show_trampled = true;
     float zoom = 1.0f;
 
     // Какая вкладка открыта в правой панели экрана мира: "info"
@@ -424,7 +426,8 @@ struct ClientConfig {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ClientConfig, host, port, tile_size, window_width, window_height,
                                     fullscreen, show_rockiness, show_moisture, show_minerals,
-                                    show_height, show_plants, show_animals, show_goblins, zoom, panel_tab)
+                                    show_height, show_plants, show_animals, show_goblins, show_trampled,
+                                    zoom, panel_tab)
 
 namespace detail {
 

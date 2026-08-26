@@ -43,7 +43,7 @@ PROBE = {
         "mountain_hardness": 430, "river_count": 4, "river_width": 44,
         "river_sinuosity": 310, "river_depth": 1234, "pond_depth": 1700,
         "minerals_average": 17,
-        "toggles": {"minerals_spread": False, "erosion_deposition": False},
+        "toggles": {"minerals_spread": False, "erosion_deposition": False, "trampling": False},
         "water_source_count": 6, "water_source_depth": 3300,
         "water_evaporation_rate": 77, "rain_interval_ticks": 555, "rain_amount": 66,
         "soil_erosion_rate": 88,

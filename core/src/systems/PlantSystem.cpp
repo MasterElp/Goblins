@@ -18,6 +18,7 @@
 #include "core/components/TimeComponent.hpp"
 #include "core/components/TreeComponent.hpp"
 #include "core/Berries.hpp"
+#include "core/Trample.hpp"
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
 #include "core/components/BushComponent.hpp"
@@ -336,7 +337,16 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // влагой), поэтому неделящийся остаток остаётся в growthProgress —
         // целым, а не дробью. Без него растение при малой обеспеченности
         // не росло бы вовсе: целое деление отбросило бы весь прирост.
-        const int vitality = drowning ? 0 : supply;
+        // Утоптанность — вторая помеха росту после воды, и единственная,
+        // которую в мир приносит чужое поведение, а не погода
+        // (core/Trample.hpp). Тропа, на которой растёт трава, — не тропа, а
+        // полоса на карте; поэтому связь, однажды убранная вместе с
+        // habitatFit, вернулась вместе с теми, кто ходит.
+        //
+        // Дерева и куста это не касается: их корни глубже следа ноги, и
+        // вытоптать рощу подошвами нельзя.
+        const int trampled = kind == PlantKind::Grass ? soil.trampled : 0;
+        const int vitality = drowning ? 0 : trampledGrowth(supply, trampled);
         plant.growthProgress += genome.growthRate * vitality;
         const int reach = std::min(kFull, plant.growth + plant.growthProgress / kFull);
         plant.growthProgress %= kFull;

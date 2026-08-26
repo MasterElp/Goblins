@@ -24,8 +24,18 @@
 Считается по дельтам, тем же способом, каким клиент держит список
 (`goblins.pos`), — то есть по тем самым шагам, которые видит наблюдатель.
 
+С появлением троп (core/Trample.hpp) сюда добавились три числа про саму
+землю. Главное из них — **доля шагов по утоптанному**: она отвечает на
+вопрос, держит ли тропа сама себя. Если по натоптанному ходят не чаще, чем
+его вообще есть на карте, значит притяжение не работает и тропа — просто
+след, а не дорога.
+
+Замер троп — это ПАРА прогонов одного бинарника: `toggles.trampling`
+выключен и включён. Двумя разными сборками мерить нельзя — сравнивалось бы
+заодно всё, что успело измениться в ядре.
+
 Запуск:
-    python3 tools/watch_goblin_routes.py [тиков]
+    python3 tools/watch_goblin_routes.py [тиков] [on|off]
 """
 import collections
 import json
@@ -43,6 +53,10 @@ from ws_probe import WebSocketProbe
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 9109
 TICKS = 6000
+# С какой утоптанности клетка считается тропой, в сотых (слой приходит
+# сотыми, shared/protocol/WirePrecision.hpp). Десятая доля — это два прохода
+# взрослого: ниже неё след ещё не отличим от случайной прогулки.
+TRAIL = 10
 
 
 def concentration(visits):
@@ -67,6 +81,7 @@ def concentration(visits):
 
 def main():
     ticks = int(sys.argv[1]) if len(sys.argv) > 1 else TICKS
+    trampling = (sys.argv[2].lower() != "off") if len(sys.argv) > 2 else True
     server_binary = find_server(ROOT)
     if server_binary is None:
         print("Сервер не собран: ./build.sh")
@@ -80,6 +95,9 @@ def main():
     # check_animal_delta.py), а наблюдателю здесь надо не отстать ни на шаг —
     # пропущенная дельта это пропущенные посещения.
     config["area"] = {"width": 96, "height": 96}
+    # Тропы включаются и выключаются здесь, а не пересборкой: замер обязан
+    # сравнивать один и тот же бинарник с собой (core/WorldToggles.hpp).
+    config.setdefault("terrain", {}).setdefault("toggles", {})["trampling"] = trampling
     config["tick_interval_ms"] = 5
     config["snapshot_interval_ms"] = 1
     config_path = os.path.join(workdir, "config.json")
@@ -104,6 +122,13 @@ def main():
         tick = 0
         visits = collections.Counter()
         steps = 0
+        # Слой утоптанности целиком, как его держит клиент: приходит один раз
+        # в world_init и правится дельтами. Держать его надо ЖИВЫМ, а не
+        # смотреть в конце: вопрос "по утоптанному ли шёл гоблин" задаётся о
+        # том тике, когда он шагнул, а не о том, что осталось к концу прогона.
+        trampled = []
+        width = 0
+        trail_steps = 0
         seen = {}       # id -> клетки, где он уже был
         walked = {}     # id -> сколько шагов сделал
         returned = {}   # id -> сколько из них были возвратами
@@ -116,10 +141,19 @@ def main():
             if kind == "world_init":
                 goblins = sorted(message.get("goblins") or [], key=lambda g: g["id"])
                 tick = message.get("tick", tick)
+                width = (message.get("area") or {}).get("width", width)
+                trampled = list((message.get("layers") or {}).get("trampled") or [])
                 continue
             if kind != "world_delta":
                 continue
             tick = message.get("tick", tick)
+            # Слой правится ДО разбора шагов этого же сообщения: и то, и
+            # другое случилось в одном тике, а утоптанность, которую гоблин
+            # видел, выбирая шаг, — та, что была к его началу.
+            pairs = message.get("trampled") or []
+            for i in range(0, len(pairs) - 1, 2):
+                if pairs[i] < len(trampled):
+                    trampled[pairs[i]] = pairs[i + 1]
             changes = message.get("goblins")
             if goblins is None or not changes:
                 continue
@@ -134,6 +168,10 @@ def main():
                     goblin["x"], goblin["y"] = cell
                     visits[cell] += 1
                     steps += 1
+                    if width and trampled:
+                        flat = cell[1] * width + cell[0]
+                        if flat < len(trampled) and trampled[flat] >= TRAIL:
+                            trail_steps += 1
                     # Свой след, по каждому отдельно: возврат — это шаг на
                     # клетку, где ЭТОТ гоблин уже был.
                     own = seen.setdefault(goblin["id"], set())
@@ -168,6 +206,17 @@ def main():
               f"(медиана {median:.1f}%, считано по {len(rates)} гоблинам)")
         print(f"  справка — сосредоточенность: половина шагов на {share:.1f}% клеток "
               f"(зависит от численности, сравнивать осторожно)")
+
+        # Тропы. Сравнивать надо ДВЕ доли между собой: сколько земли
+        # утоптано и какая доля шагов по ней сделана. Если вторая не выше
+        # первой — притяжение не работает, и тропа осталась следом.
+        land = sum(1 for value in trampled if value is not None)
+        beaten = sum(1 for value in trampled if value >= TRAIL)
+        deep = sum(1 for value in trampled if value >= 50)
+        if land:
+            print(f"ТРОПЫ: утоптано {beaten * 100.0 / land:.2f}% клеток "
+                  f"(из них крепко, выше половины: {deep}), "
+                  f"шагов по утоптанному {trail_steps * 100.0 / max(1, steps):.1f}%")
         top = visits.most_common(5)
         print("  самые хоженые: " + ", ".join(f"({x},{y}):{n}" for (x, y), n in top))
         return 0

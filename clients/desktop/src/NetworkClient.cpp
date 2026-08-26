@@ -608,6 +608,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // только здесь: дальше по клиенту ходит доля 0..1.
         working_.moisture = decodeScaled(layers, "moisture", cellCount, kFromHundredths);
         working_.rockiness = decodeScaled(layers, "rockiness", cellCount, kFromHundredths);
+        working_.trampled = decodeScaled(layers, "trampled", cellCount, kFromHundredths);
         working_.height = decodeScaled(layers, "height", cellCount, kFromHundredths);
         // Диапазон подсветки рельефа считается один раз здесь, а не на
         // каждую пересборку текстуры (MapTexture) — иначе эрозия,
@@ -743,6 +744,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
 
         const auto toFraction = [](int raw) { return static_cast<float>(raw) * kFromHundredths; };
         applyChangedCells(json, "moisture", working_.moisture, toFraction);
+        applyChangedCells(json, "trampled", working_.trampled, toFraction);
         applyChangedCells(json, "height", working_.height, toFraction);
         applyChangedCells(json, "water", working_.waterDepth, toFraction);
         applyChangedCells(json, "growth", working_.plantGrowth, toFraction);

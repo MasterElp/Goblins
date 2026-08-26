@@ -47,7 +47,7 @@ namespace goblins {
 //    "history": {"interval": N,
 //                "points": [[тик, [трава по видам], [животные по видам]], ...]},
 //    "entities": [ {"position": {"x","y"},
-//                   "soil": {"moisture","rockiness","minerals"},
+//                   "soil": {"moisture","rockiness","trampled","minerals"},
 //                   "height": H,
 //                   "water": {"depth","flow_remainder"},
 //                   "water_source": true,

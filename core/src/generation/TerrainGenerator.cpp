@@ -981,7 +981,14 @@ GenerationStats generateTerrain(World& world, unsigned seed, const TerrainParams
             // считать дробями и удобно, и правильно — это способ получить
             // мир, а не сам мир (core/Scale.hpp).
             const auto entity = world.registry().create();
-            world.registry().emplace<SoilComponent>(entity, SoilComponent{moisture, soilRockiness, minerals});
+            // По именам, а не по порядку. Позиционная запись уже подвела
+            // однажды: у почвы появилось поле утоптанности (core/Trample.hpp),
+            // встало третьим — и минералы всего мира молча уехали в него.
+            // Мир при этом выглядел исправным: типы те, диапазоны те, просто
+            // в земле не было ни крупицы, и никто в нём не рождался
+            // (CLAUDE.md, про величины).
+            world.registry().emplace<SoilComponent>(
+                entity, SoilComponent{.moisture = moisture, .rockiness = soilRockiness, .minerals = minerals});
             world.registry().emplace<HeightComponent>(
                 entity, HeightComponent{static_cast<int>(std::lround(elevation[i]))});
             const int depth = static_cast<int>(std::lround(waterDepth[i]));

@@ -158,6 +158,9 @@ void drawTileGroup(const WorldState& state, ColumnWriter& writer, int x, int y) 
     writer.group(TextFormat("Tile (%d,%d)", x, y));
     writer.line("moisture", formatValue(state.moisture[index]));
     writer.line("rockiness", formatValue(state.rockiness[index]));
+    if (index < state.trampled.size()) {
+        writer.line("trampled", formatValue(state.trampled[index]));
+    }
     writer.line("minerals", formatValue(static_cast<float>(state.minerals[index])));
     writer.line("height", formatValue(state.height[index]));
     if (state.waterDepth[index] > 0.0f) {

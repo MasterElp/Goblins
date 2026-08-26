@@ -71,6 +71,10 @@ struct TileSnapshot {
     // лежанию мешают обе (core/Rest.hpp): мокро и жёстко.
     std::vector<int> moisture;
     std::vector<int> rockiness;
+    // Утоптанность: насколько землю умяли ногами (core/Trample.hpp). Ходьбе
+    // она, в отличие от тех двух, как раз помогает — по натоптанному идти
+    // легче (седьмое слагаемое шага, core/Walk.hpp).
+    std::vector<int> trampled;
     // Дерево — не еда (объедать крону травоядное не умеет), а укрытие: под
     // ним добычу не высматривают (kCoverSight, core/Hunting.hpp), и к нему
     // же бежит испуганный.
@@ -101,6 +105,7 @@ struct TileSnapshot {
         carcassMeat.assign(cells, 0);
         moisture.assign(cells, 0);
         rockiness.assign(cells, 0);
+        trampled.assign(cells, 0);
         treeAt.assign(cells, 0);
         if (cells == 0) {
             return;
@@ -119,6 +124,7 @@ struct TileSnapshot {
             const auto& soil = terrainView.get<const SoilComponent>(entity);
             moisture[i] = soil.moisture;
             rockiness[i] = soil.rockiness;
+            trampled[i] = soil.trampled;
             if (const auto* water = registry.try_get<const WaterComponent>(entity)) {
                 waterAt[i] = water->depth;
             }

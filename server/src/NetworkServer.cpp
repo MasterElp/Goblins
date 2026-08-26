@@ -96,6 +96,7 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     carcass.assign(count, 0);
     growth.assign(count, 0);
     rockiness.assign(count, 0);
+    trampled.assign(count, 0);
     berries.assign(count, 0);
     // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
     // массиве выражается значением-заглушкой. Семена — отдельным слоем и
@@ -268,6 +269,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
             // они счётные, а не доля (shared/protocol/WirePrecision.hpp).
             out.moisture[i] = toWire(soil.moisture);
             out.rockiness[i] = toWire(soil.rockiness);
+            out.trampled[i] = toWire(soil.trampled);
             out.minerals[i] = soil.minerals;
         });
 
@@ -1239,6 +1241,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["history"] = std::move(history);
 
     message["layers"]["rockiness"] = layers.rockiness;
+    message["layers"]["trampled"] = layers.trampled;
     message["layers"]["moisture"] = layers.moisture;
     message["layers"]["minerals"] = layers.minerals;
     message["layers"]["height"] = layers.terrainHeight;
@@ -1272,6 +1275,7 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
     // рассылает новый world_init.
     const std::pair<const char*, std::pair<const std::vector<int>*, const std::vector<int>*>> layers[] = {
         {"moisture", {&previous.moisture, &current.moisture}},
+        {"trampled", {&previous.trampled, &current.trampled}},
         {"minerals", {&previous.minerals, &current.minerals}},
         {"height", {&previous.terrainHeight, &current.terrainHeight}},
         {"water", {&previous.water, &current.water}},

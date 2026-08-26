@@ -1092,7 +1092,15 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const WalkShy shy =
             hasRival[a] ? WalkShy{walkDirectionTo(animal.x, animal.y, rivalX[a], rivalY[a]), kRivalShyness}
                         : WalkShy{};
-        const WalkStep step = chooseStep(*animal.memory, animal.x, animal.y, aim, shy, standable, random);
+        // Утоптанность зверю пока ноль: топчут и притягиваются к тропам
+        // сегодня только гоблины (docs/plan/10_Goblins_roadmap.md, шаг 4).
+        // Закон при этом общий и написан для всех, кто ходит
+        // (core/Trample.hpp), поэтому подключить сюда стадо — это заменить
+        // ноль на tiles.trampled[index(nx, ny)] здесь и добавить trampleBy
+        // в фазу шагов ниже. Две строки, и ни одной больше.
+        const auto trodden = [](int, int) { return 0; };
+        const WalkStep step =
+            chooseStep(*animal.memory, animal.x, animal.y, aim, shy, standable, trodden, random);
         if (!step.moved) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
@@ -1512,6 +1520,7 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({w, "kAimPull", kAimPull});
     out.push_back({w, "kInertiaPull", kInertiaPull});
     out.push_back({w, "kTrailPenalty", kTrailPenalty});
+    out.push_back({w, "kTroddenPull", kTroddenPull});
     out.push_back({w, "kBlockedPenalty", kBlockedPenalty});
     out.push_back({w, "kBlockedFade", kBlockedFade});
     out.push_back({w, "kStepNoise", kStepNoise});

@@ -23,15 +23,24 @@ inline Color lerp(Color a, Color b, float t) {
 // mineralsFraction — уже нормализованная доля (0..1), см.
 // mineralsFraction(int) ниже: сам SoilComponent.minerals — счётное целое,
 // не доля, поэтому нормализация вынесена отдельно, а не в этот блендер.
-inline Color soil(float moisture, float rockiness, float mineralsFraction) {
+inline Color soil(float moisture, float rockiness, float mineralsFraction, float trampled) {
     static const Color dirt{101, 67, 33, 255};
     static const Color rock{132, 130, 124, 255};
     static const Color wet{40, 46, 38, 255};
     static const Color mineral{196, 168, 62, 255};
+    // Утоптанная земля — светлее и суше на вид: голая утоптанная тропа
+    // выбита до песка. Светлее, а не темнее, намеренно: тропа обязана
+    // читаться поверх тёмной сырой поймы и тёмной травы, а тёмное на
+    // тёмном не видно вовсе — та же причина, по которой луг держат светлым,
+    // а рощи тёмными.
+    static const Color path{168, 142, 104, 255};
 
     Color c = lerp(dirt, rock, rockiness);
     c = lerp(c, wet, moisture * 0.6f);
     c = lerp(c, mineral, mineralsFraction * 0.5f);
+    // Последней: тропа — то, что поверх всего остального, и она тем ярче,
+    // чем сильнее умята.
+    c = lerp(c, path, std::clamp(trampled, 0.0f, 1.0f) * 0.75f);
     return c;
 }
 

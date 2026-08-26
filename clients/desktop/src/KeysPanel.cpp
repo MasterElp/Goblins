@@ -71,6 +71,7 @@ void draw(Rectangle bounds, const MapTexture::Layers& layers, bool watching) {
     layerRow("5", "Grass + humus + seeds", layers.plants);
     layerRow("6", "Animals + carcasses", layers.animals);
     layerRow("7", "Goblins", layers.goblins);
+    layerRow("8", "Trails -- trampled ground", layers.trampled);
 
     group("World");
     row("Space", "pause / resume (the world stops)");
