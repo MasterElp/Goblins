@@ -46,6 +46,21 @@ constexpr int kDisappointLoss = 250;
 // дороге.
 constexpr int kRecallDistance = 4;
 
+// С какой оценки вспомненное место побеждает УВИДЕННОЕ.
+//
+// Порог этот — вся разница между ночёвкой и лагерем, и без него шаг "места
+// притяжения" сводится к слагаемому в сумме. Пока гоблин ложится на первой
+// же годной клетке, какая попалась на глаза, возвращаться ему не к чему:
+// годных клеток на карте много, и та же самая выпадает лишь по совпадению.
+// Стоит же ему предпочесть ОБЖИТОЕ место годному — и место, к которому он
+// уже приходил, начинает притягивать его снова, а дорога туда — набиваться.
+//
+// Половина полной твёрдости: при kRecallDistance = 4 это значит, что за
+// обжитым местом гоблин вернётся шагов за сто, а за случайно запомненным —
+// не пойдёт вовсе. Место становится обжитым не по названию, а по числу
+// приходов: kRememberGain за раз, то есть дюжина возвращений.
+constexpr int kRestReturn = 500;
+
 // Запомнить (или укрепить) место. Вызывать тогда, когда место ПРИГОДИЛОСЬ, —
 // не когда его увидели: помнить надо то, что помогло, а не то, что попалось
 // на глаза.
@@ -114,11 +129,17 @@ inline void disappoint(KnowledgeComponent& mind, PlaceKind kind, int x, int y) {
 }
 
 // Лучшее вспомненное место этого вида: твёрдость минус расстояние. Возвращает
-// nullptr, если такого вида гоблин не помнит вовсе.
+// nullptr, если такого вида гоблин не помнит вовсе или если лучшее из
+// вспомненного не дотянуло до minScore.
+//
+// Порог — не отсечка "плохих" мест, а способ спросить у памяти иначе: "есть
+// ли место, ради которого стоит идти МИМО того, что видно". Без порога
+// (minScore = 0) вопрос прежний — "помню ли я хоть что-нибудь".
 //
 // Расстояние — в шагах (восемь соседей, диагональ стоит столько же, сколько
 // прямая), а не по прямой: гоблин ходит ногами.
-inline const KnownPlace* recall(const KnowledgeComponent& mind, PlaceKind kind, int fromX, int fromY) {
+inline const KnownPlace* recall(const KnowledgeComponent& mind, PlaceKind kind, int fromX, int fromY,
+                                 int minScore = 0) {
     const KnownPlace* best = nullptr;
     int bestScore = 0;
     for (const auto& place : mind.places) {
@@ -127,6 +148,9 @@ inline const KnownPlace* recall(const KnowledgeComponent& mind, PlaceKind kind, 
         }
         const int steps = std::max(std::abs(place.x - fromX), std::abs(place.y - fromY));
         const int score = place.strength - steps * kRecallDistance;
+        if (score < minScore) {
+            continue;
+        }
         if (best == nullptr || score > bestScore) {
             best = &place;
             bestScore = score;

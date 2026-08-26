@@ -798,6 +798,11 @@ std::optional<RestPlace> restPlaceAt(const World& world, int x, int y) {
         RestPlace place;
         place.moisture = soil->moisture;
         place.rockiness = soil->rockiness;
+        // Утоптанность — слагаемое того же закона (core/Rest.hpp): наложение
+        // на карте обязано показывать ровно ту годность, по которой гоблин
+        // принимает решение, иначе по нему нельзя понять, почему он лёг
+        // именно здесь.
+        place.trodden = soil->trampled;
         if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
             place.carcassMeat = carcass->meat;
         }

@@ -419,8 +419,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // вспомненное место лежит дальше. Гоблин помнит, ГДЕ, но не помнит,
         // КАК, — преграду он обойдёт вслепую памятью ног, как делает это,
         // идя за травой.
-        const auto goByMemory = [&](PlaceKind kind) {
-            if (const auto* known = recall(*goblin.mind, kind, goblin.x, goblin.y)) {
+        const auto goByMemory = [&](PlaceKind kind, int minScore = 0) {
+            if (const auto* known = recall(*goblin.mind, kind, goblin.x, goblin.y, minScore)) {
                 if (known->x == goblin.x && known->y == goblin.y) {
                     // Пришли, а нужного нет: место обмануло.
                     disappoint(*goblin.mind, kind, goblin.x, goblin.y);
@@ -629,7 +629,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // наблюдатель рисует эту пригодность на карте.
                 const auto placeAt = [&](std::size_t cell, int nx, int ny) {
                     return RestPlace{tiles.moisture[cell], tiles.rockiness[cell], tiles.treeAt[cell] != 0,
-                                      carcassMeat[cell]};
+                                      carcassMeat[cell], tiles.trampled[cell]};
                 };
                 if (restQualityOf(placeAt(here, goblin.x, goblin.y)) >= kRestGood) {
                     // Лёг. Отдых — единственное занятие, которое НИЧЕГО не
@@ -641,15 +641,32 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     busy = true;
                     break;
                 }
+                // ОБЖИТОЕ место — раньше любого годного в виду, и это
+                // главное решение всего шага "места притяжения".
+                //
+                // Пока гоблин ложился на первой попавшейся годной клетке,
+                // возвращаться ему было не к чему: годных клеток много, и та
+                // же самая выпадала лишь по совпадению. Спросив сначала
+                // память — и только твёрдую (kRestReturn, core/Knowledge.hpp),
+                // — он идёт мимо годного к тому, где уже спал. Оттуда и
+                // берётся лагерь: место, к которому возвращаются несколько
+                // соседей, а не место, которое кто-то назначил.
+                hasTarget = goByMemory(PlaceKind::Rest, kRestReturn);
+
                 // Ближайшая годная, а не лучшая в округе: гоблин идёт к
                 // тому, что видит рядом и что ему подходит. Выбирать лучшее
                 // из всего круга видимости значило бы знать округу целиком.
-                hasTarget = findNearest(
-                                [&](std::size_t cell, int nx, int ny) {
-                                    return standable(nx, ny) &&
-                                           restQualityOf(placeAt(cell, nx, ny)) >= kRestGood;
-                                },
-                                targetX, targetY) >= 0;
+                if (!hasTarget) {
+                    hasTarget = findNearest(
+                                    [&](std::size_t cell, int nx, int ny) {
+                                        return standable(nx, ny) &&
+                                               restQualityOf(placeAt(cell, nx, ny)) >= kRestGood;
+                                    },
+                                    targetX, targetY) >= 0;
+                }
+                // Ничего не вспомнилось и ничего не видно — идти по слабой
+                // памяти лучше, чем брести наугад: место, к которому ходили
+                // мало, всё же вероятнее годного случайного.
                 if (!hasTarget) {
                     hasTarget = goByMemory(PlaceKind::Rest);
                 }
@@ -1026,6 +1043,7 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({r, "kRestShelter", kRestShelter});
     out.push_back({r, "kRestRockPenalty", kRestRockPenalty});
     out.push_back({r, "kRestCarcassPenalty", kRestCarcassPenalty});
+    out.push_back({r, "kRestTrodden", kRestTrodden});
     out.push_back({r, "kRestGood", kRestGood});
 
     // Память места (core/Knowledge.hpp) — своей группой: эти числа решают,
@@ -1036,6 +1054,7 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({m, "kForgetRate", kForgetRate});
     out.push_back({m, "kDisappointLoss", kDisappointLoss});
     out.push_back({m, "kRecallDistance", kRecallDistance});
+    out.push_back({m, "kRestReturn", kRestReturn});
 }
 
 } // namespace goblins
