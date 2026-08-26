@@ -35,6 +35,15 @@ enum class GoblinDesire : std::uint8_t {
     // МЕСТОМ, а не веществом: его нельзя съесть и унести с собой, к нему
     // можно только прийти — и прийти второй раз (см. GoblinComponent).
     Rest = 4,
+    // Запасать: набрать еды в руки и отнести домой (core/Carry.hpp,
+    // core/Store.hpp). Первое желание, которое не про сейчас, — гоблин
+    // тратит силы на то, что пригодится потом, и делает это, когда его
+    // больше ничто не гонит.
+    //
+    // Занят им гоблин целиком: и дорога к ягоднику, и сбор, и путь домой, и
+    // сама укладка — одно занятие с двумя половинами, а не два желания.
+    // Разделять их значило бы позволить бросить полные руки на полдороге.
+    Haul = 5,
 };
 
 // Имя желания — не логика, а имя значения (см. desireName в
@@ -46,6 +55,7 @@ inline const char* goblinDesireName(GoblinDesire desire) {
         case GoblinDesire::Water: return "water";
         case GoblinDesire::Mate: return "mate";
         case GoblinDesire::Rest: return "rest";
+        case GoblinDesire::Haul: return "haul";
         case GoblinDesire::Idle: break;
     }
     return "idle";
@@ -59,6 +69,7 @@ inline GoblinDesire goblinDesireFromName(const std::string& name) {
     if (name == "water") return GoblinDesire::Water;
     if (name == "mate") return GoblinDesire::Mate;
     if (name == "rest") return GoblinDesire::Rest;
+    if (name == "haul") return GoblinDesire::Haul;
     return GoblinDesire::Idle;
 }
 

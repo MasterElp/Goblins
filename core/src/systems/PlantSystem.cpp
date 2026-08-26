@@ -19,6 +19,8 @@
 #include "core/components/TreeComponent.hpp"
 #include "core/Berries.hpp"
 #include "core/Trample.hpp"
+#include "core/Store.hpp"
+#include "core/components/StoreComponent.hpp"
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
 #include "core/components/BushComponent.hpp"
@@ -888,6 +890,42 @@ void PlantSystem(World& world, CommandQueue& commands) {
     // целого. Отсчёт сдвинут на номер тайла, иначе весь перегной мира
     // отдавал бы свою крупицу одним и тем же тиком, а между этими тиками
     // почва не менялась бы вовсе.
+    // Куча принесённой еды гниёт здесь же, и это не соседство ради удобства.
+    // Гниль уходит в перегной той же клетки: ягода -> куча -> перегной ->
+    // минералы в почву, тот же круг, которым возвращается в мир падаль.
+    //
+    // Место выбрано так, а не в GoblinSystem, по причине, которую иначе
+    // заметить было бы нечем: та система возвращается сразу, если гоблинов в
+    // мире не осталось, — и куча, набранная последним из них, лежала бы
+    // нетленной до конца времён. Земля же гниёт независимо от того, есть ли
+    // кому на неё смотреть.
+    auto storeView = registry.view<StoreComponent, PositionComponent>();
+    for (const auto entity : storeView) {
+        auto& store = storeView.get<StoreComponent>(entity);
+        const auto& storePosition = storeView.get<PositionComponent>(entity);
+        if (store.food > 0) {
+            // Гниёт доля еды, а крупицы уходят с ней той же долей
+            // (core/Portion.hpp) — вещество не пропадает, оно переезжает.
+            const Portion rotted = takeFromStore(store, kStoreRot);
+            if (rotted.minerals > 0) {
+                commands.enqueue([x = storePosition.x, y = storePosition.y, minerals = rotted.minerals](World& w) {
+                    depositHumus(w, x, y, minerals);
+                });
+            }
+        }
+        if (store.food <= 0) {
+            commands.enqueue([entity](World& w) {
+                // Проверяем заново: пока команда ждала очереди, на эту клетку
+                // могли положить новую горсть (GoblinSystem идёт позже), и
+                // снять компонент сейчас значило бы выбросить её из мира.
+                auto* storeComponent = w.registry().try_get<StoreComponent>(entity);
+                if (storeComponent != nullptr && storeComponent->food <= 0) {
+                    w.registry().remove<StoreComponent>(entity);
+                }
+            });
+        }
+    }
+
     auto humusView = registry.view<HumusComponent, SoilComponent, PositionComponent>();
     for (const auto entity : humusView) {
         auto& humus = humusView.get<HumusComponent>(entity);
@@ -944,6 +982,10 @@ void appendPlantSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({b, "kBerryMaturity", static_cast<float>(kBerryMaturity)});
     out.push_back({b, "kBerryPeriod", static_cast<float>(kBerryPeriod)});
     out.push_back({b, "kBerriesPerGrain", static_cast<float>(kBerriesPerGrain)});
+
+    // Гниение кучи — здесь же, потому что здесь оно и происходит: куча лежит
+    // на земле рядом с перегноем и уходит в него же (core/Store.hpp).
+    out.push_back({b, "kStoreRot", static_cast<float>(kStoreRot)});
 }
 
 } // namespace goblins

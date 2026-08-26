@@ -30,6 +30,7 @@
 #include "core/components/ImpassableComponent.hpp"
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
+#include "core/components/CarriedComponent.hpp"
 #include "core/components/BushComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
@@ -42,6 +43,7 @@
 #include "core/components/PredatorComponent.hpp"
 #include "core/components/SeedComponent.hpp"
 #include "core/components/SoilComponent.hpp"
+#include "core/components/StoreComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/TreeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -186,6 +188,16 @@ struct ParsedEntity {
     bool hasBerries = false;
     BerryComponent berries{};
 
+    // Куча принесённой еды на тайле (core/Store.hpp) — состояние земли, как
+    // перегной и падаль.
+    bool hasStore = false;
+    StoreComponent store{};
+
+    // Что существо несёт в руках. Ноша — общее свойство живого, поэтому
+    // разбирается рядом с телом, а не внутри гоблинской ветки.
+    bool hasCarried = false;
+    CarriedComponent carried{};
+
     // Живое животное — Entity с телом, геномом, желаниями, постоянным
     // идентификатором и тегом диеты. Всё это обязательно вместе: без
     // генома животное не смогло бы ни расти, ни принести потомство, без
@@ -321,6 +333,13 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // Крупицы пишутся вместе с ягодами: они уже вынуты из земли, и
         // потеряться при загрузке им нельзя — вещество в этом мире не
         // появляется и не пропадает.
+        // Куча — принесённое, а не выросшее: потеряться ей нельзя тем более,
+        // что восстановиться сама она не может. Крупицы пишутся вместе с
+        // едой: они уже вынуты из земли и вернутся в неё либо через
+        // съевшего, либо гниением (core/Store.hpp).
+        if (const auto* store = registry.try_get<StoreComponent>(entity)) {
+            record["store"] = {{"food", store->food}, {"minerals", store->minerals}};
+        }
         if (const auto* berries = registry.try_get<BerryComponent>(entity)) {
             record["berries"] = {{"berries", berries->berries}, {"minerals", berries->minerals}};
         }
@@ -352,6 +371,14 @@ nlohmann::json buildEntitiesJson(const World& world) {
             // значило бы вернуть из файла поселенца, который только что
             // выспался, где бы он ни был застигнут сохранением.
             record["goblin"] = {{"fatigue", goblinState->fatigue}};
+        }
+        // Ноша — рядом с телом, а не внутри метки гоблина: нести может всякий
+        // живой (docs/10_Goblins.md, п.1a). Пустые руки не пишутся: их
+        // незачем возить.
+        if (const auto* carried = registry.try_get<CarriedComponent>(entity)) {
+            if (carried->food > 0 || carried->minerals > 0) {
+                record["carried"] = {{"food", carried->food}, {"minerals", carried->minerals}};
+            }
         }
         if (const auto* mind = registry.try_get<KnowledgeComponent>(entity)) {
             // Память — состояние мира, а не походка: гоблин, забывший при
@@ -608,6 +635,16 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         parsed.impassable = record.value("impassable", false);
         parsed.tree = record.value("tree", false);
         parsed.bush = record.value("bush", false);
+        if (record.contains("store")) {
+            parsed.hasStore = true;
+            parsed.store.food = record["store"].value("food", 0);
+            parsed.store.minerals = record["store"].value("minerals", 0);
+        }
+        if (record.contains("carried")) {
+            parsed.hasCarried = true;
+            parsed.carried.food = record["carried"].value("food", 0);
+            parsed.carried.minerals = record["carried"].value("minerals", 0);
+        }
         if (record.contains("berries")) {
             parsed.hasBerries = true;
             parsed.berries.berries = record["berries"].value("berries", 0);
@@ -1404,6 +1441,9 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         if (parsed.hasBerries) {
             world.registry().emplace<BerryComponent>(entity, parsed.berries);
         }
+        if (parsed.hasStore) {
+            world.registry().emplace<StoreComponent>(entity, parsed.store);
+        }
         if (parsed.hasAnimal && parsed.goblin) {
             // Гоблин: то же тело и тот же тип генома, но своё желание и свой
             // тег. Диеты у него нет — он всеяден, и тега для этого не нужно
@@ -1418,6 +1458,11 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             world.registry().emplace<MovementComponent>(entity);
             world.registry().emplace<GoblinComponent>(entity, parsed.goblinState);
             world.registry().emplace<KnowledgeComponent>(entity, parsed.goblinMind);
+            // Руки нужны ВСЕГДА, даже пустые: GoblinSystem выбирает существ
+            // по компонентам, и гоблин без рук просто перестал бы жить —
+            // молча, и в мире, открытом из старого файла, где ноши ещё не
+            // было вовсе.
+            world.registry().emplace<CarriedComponent>(entity, parsed.carried);
         } else if (parsed.hasAnimal) {
             world.registry().emplace<AnimalComponent>(entity, parsed.animal);
             world.registry().emplace<AnimalGenomeComponent>(entity, parsed.animalGenome);

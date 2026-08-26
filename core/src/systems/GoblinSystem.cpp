@@ -7,6 +7,7 @@
 
 #include "core/Body.hpp"
 #include "core/Berries.hpp"
+#include "core/Carry.hpp"
 #include "core/Carcass.hpp"
 #include "core/Desires.hpp"
 #include "core/Diagnostics.hpp"
@@ -19,12 +20,14 @@
 #include "core/Rest.hpp"
 #include "core/Scale.hpp"
 #include "core/Share.hpp"
+#include "core/Store.hpp"
 #include "core/TileSnapshot.hpp"
 #include "core/Trample.hpp"
 #include "core/Walk.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/BerryComponent.hpp"
+#include "core/components/CarriedComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinDesireComponent.hpp"
@@ -35,6 +38,7 @@
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
+#include "core/components/StoreComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
@@ -93,6 +97,19 @@ constexpr int kRestRelief = 8;
 // возвращением как раз и лежит всё остальное: вода, отдых, тропа.
 constexpr int kBerryPick = 3;
 
+// Насколько сильно гоблина гонит запасать. Число постоянное, а не растущее
+// от чего-либо, и лежит оно между порогом желаний (kDesireFloor) и голодом:
+// **запасается тот, кого больше ничто не гонит**.
+//
+// Постоянным оно и должно быть. Голод растёт от пустого желудка, усталость —
+// от пройденного пути, а запасать хочется ровно тогда, когда есть силы и
+// время; сделать эту срочность растущей значило бы завести гоблину тревогу о
+// будущем, которой у него нет и которой закон мира не требует.
+//
+// Это первая работа в мире: труд, который не кормит сейчас. На шаге
+// "постройки" из него вырастет настоящая.
+constexpr int kHaulUrge = 400;
+
 // С какой вероятностью ничего не желающий гоблин всё-таки делает шаг.
 // Постоянно бродящий выглядит нервным и зря жжёт энергию, полностью
 // неподвижный — мёртвым.
@@ -146,6 +163,9 @@ struct Goblin {
     GoblinComponent* own = nullptr;
     // Память мест. Единственное, чего у зверя нет вовсе.
     KnowledgeComponent* mind = nullptr;
+    // Руки. Общее для всего живого (core/Carry.hpp), просто носит пока
+    // только гоблин.
+    CarriedComponent* hands = nullptr;
 
     // Голод и жажда живут здесь, в снимке тика, а не в компоненте: оба
     // пересчитываются из тела заново каждый тик (core/Needs.hpp), и
@@ -162,9 +182,13 @@ struct Goblin {
 // некого — хищник его не видит (см. GoblinSystem.hpp). Появится опасность —
 // появится и желание, и встанет оно последним, чтобы побеждать при
 // равенстве.
-GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate) {
+GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool hasHome) {
     const GoblinDesireComponent& desire = *goblin.desire;
     const int mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0;
+    // Запасать некуда — незачем и начинать. Гейт стоит здесь, а не в самой
+    // ветке: желание, которое нельзя исполнить, не должно даже побеждать
+    // (иначе гоблин "занят" тем, чего не делает).
+    const int hauling = hasHome ? kHaulUrge : 0;
 
     // Порядок — приоритет при равенстве, побеждает последний. Отдых стоит
     // первым и потому проигрывает всем: усталость никого не убивает, а
@@ -173,6 +197,10 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate) {
     // отдых отличается от еды.
     const Urgency candidates[] = {
         {static_cast<int>(GoblinDesire::Rest), goblin.own->fatigue},
+        // Запасание — сразу после отдыха и раньше всего остального в списке,
+        // то есть проигрывает и голоду, и жажде, и паре: набирать впрок имеет
+        // смысл только сытым.
+        {static_cast<int>(GoblinDesire::Haul), hauling},
         {static_cast<int>(GoblinDesire::Food), goblin.hunger},
         {static_cast<int>(GoblinDesire::Water), goblin.thirst},
         {static_cast<int>(GoblinDesire::Mate), mating},
@@ -184,6 +212,7 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate) {
         case GoblinDesire::Water: currentUrgency = goblin.thirst; break;
         case GoblinDesire::Mate: currentUrgency = mating; break;
         case GoblinDesire::Rest: currentUrgency = goblin.own->fatigue; break;
+        case GoblinDesire::Haul: currentUrgency = hauling; break;
         case GoblinDesire::Idle: break;
     }
 
@@ -219,7 +248,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     std::vector<Goblin> goblins;
     auto goblinView =
         registry.view<AnimalComponent, AnimalGenomeComponent, GoblinDesireComponent, IdentityComponent,
-                       MovementComponent, PositionComponent, GoblinComponent, KnowledgeComponent>();
+                       MovementComponent, PositionComponent, GoblinComponent, KnowledgeComponent,
+                       CarriedComponent>();
     for (const auto entity : goblinView) {
         const auto& position = goblinView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
@@ -231,7 +261,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                   &goblinView.get<GoblinDesireComponent>(entity),
                                   &goblinView.get<MovementComponent>(entity),
                                   &goblinView.get<GoblinComponent>(entity),
-                                  &goblinView.get<KnowledgeComponent>(entity)});
+                                  &goblinView.get<KnowledgeComponent>(entity),
+                                  &goblinView.get<CarriedComponent>(entity)});
     }
     // Гоблинов нет — делать системе нечего. В отличие от AnimalSystem, за
     // которой числится ещё и гниение падали, у этой своих обязанностей перед
@@ -253,10 +284,12 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     const std::vector<int>& plantGrowth = tiles.plantGrowth;
     const std::vector<entt::entity>& bushAt = tiles.bushAt;
     const std::vector<int>& berriesAt = tiles.berriesAt;
+    const std::vector<int>& storeFood = tiles.storeFood;
     const std::vector<int>& carcassMeat = tiles.carcassMeat;
 
     std::vector<ShareIntent> bites;  // трава
     std::vector<ShareIntent> picks;  // ягоды
+    std::vector<ShareIntent> scoops; // куча
     std::vector<ShareIntent> meals;  // падаль
     std::vector<ShareIntent> drinks;
     std::vector<StepIntent> steps;
@@ -310,7 +343,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         if (adult && content) {
             desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
         }
-        desire.current = chooseGoblinDesire(goblin, adult && content);
+        // Дом — вспомненное место отдыха. Спрашивается здесь, до выбора
+        // занятия: без дома запасать некуда, и желание не должно побеждать.
+        const bool hasHome = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y) != nullptr;
+        desire.current = chooseGoblinDesire(goblin, adult && content, hasHome);
     }
 
     // Возможная пара в том виде, в каком её видно со стороны
@@ -435,6 +471,29 @@ void GoblinSystem(World& world, CommandQueue& commands) {
 
         switch (desire.current) {
             case GoblinDesire::Food: {
+                // Еда В РУКАХ — раньше всего остального, потому что она уже
+                // в руках: за ней не надо ни идти, ни делить её с соседом.
+                //
+                // Отсюда и честная плата за дорогу: несущий добычу через
+                // полкарты рискует съесть её сам, и доносит запас тот, кто
+                // вышел сытым. Ничего специально для этого не написано —
+                // просто голод сильнее желания запасать (см. kHaulUrge).
+                if (goblin.hands->food > 0) {
+                    const Portion bite = takeFromHands(*goblin.hands, genome.biteSize * size / kFull);
+                    feedBody(state, genome, bite.amount);
+                    takeProtein(state, genome, bite.minerals);
+                    busy = true;
+                    break;
+                }
+                // Куча под ногами — вторая: она в известном месте и никуда не
+                // денется, но за ней всё же надо было дойти.
+                if (storeFood[here] > kMinBiteGrowth) {
+                    scoops.push_back(
+                        ShareIntent{here, static_cast<int>(g), goblin.id, genome.biteSize * size / kFull});
+                    remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
+                    busy = true;
+                    break;
+                }
                 // Мясо под ногами — раньше травы под ногами: туша это
                 // десяток кустов разом (kMeatPerSize, core/Carcass.hpp), и
                 // пренебречь ею ради пучка травы значило бы оставить её
@@ -672,6 +731,80 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 }
                 break;
             }
+            case GoblinDesire::Haul: {
+                // Дом — вспомненное место отдыха. Он здесь есть заведомо: без
+                // него желание не побеждает вовсе (см. chooseGoblinDesire).
+                const auto* home = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y);
+                if (home == nullptr) {
+                    break;
+                }
+
+                // Руки полны — домой. Пришёл — положил.
+                if (carryRoom(*goblin.hands, size) <= 0) {
+                    if (goblin.x == home->x && goblin.y == home->y) {
+                        const int food = goblin.hands->food;
+                        const int minerals = goblin.hands->minerals;
+                        goblin.hands->food = 0;
+                        goblin.hands->minerals = 0;
+                        // Класть — через очередь: компонент кучи может
+                        // появиться, а это структурное изменение
+                        // (05_Entity.md, п.5).
+                        commands.enqueue([x = goblin.x, y = goblin.y, food, minerals](World& w) {
+                            depositStore(w, x, y, food, minerals);
+                        });
+                        // Куча — это ЕДА, лежащая в известном месте, и
+                        // помнится она именно так. Никакого "склада" как
+                        // отдельного понятия в голове гоблина нет: голодный
+                        // вспомнит это место наравне с ягодником и придёт
+                        // сюда. Оттого лагерь и становится местом, куда
+                        // возвращаются и спать, и есть.
+                        remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
+                        busy = true;
+                        break;
+                    }
+                    targetX = home->x;
+                    targetY = home->y;
+                    hasTarget = true;
+                    break;
+                }
+
+                // Руки не полны — набирать. Ягоды под ногами идут в руки, а
+                // не в рот: тем и отличается запасающий от голодного, что он
+                // не ест.
+                if (bushAt[here] != entt::null && berriesAt[here] > 0) {
+                    picks.push_back(ShareIntent{here, static_cast<int>(g), goblin.id,
+                                                 std::max(1, kBerryPick * size / kFull)});
+                    remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
+                    busy = true;
+                    break;
+                }
+
+                // Ягодника не видно — идти к нему дорогой, как за едой:
+                // ягодник редок и стоит в одной точке.
+                int berryX = goblin.x;
+                int berryY = goblin.y;
+                const bool berriesSeen =
+                    findNearest([&](std::size_t cell, int nx, int ny) {
+                        return bushAt[cell] != entt::null && berriesAt[cell] > 0 && standable(nx, ny);
+                    }, berryX, berryY) >= 0;
+                if (berriesSeen) {
+                    reachOf.build(world.area(), goblin.x, goblin.y, reach, standable);
+                    if (reachOf.reached(berryX, berryY)) {
+                        reachOf.roadTo(berryX, berryY, road);
+                        if (!road.empty()) {
+                            targetX = road.front().x;
+                            targetY = road.front().y;
+                            hasTarget = true;
+                        }
+                    }
+                }
+                // Не видно — вспомнить, где еда была. С пустыми руками идти
+                // домой незачем, а вот к ягоднику — затем и затевалось.
+                if (!hasTarget) {
+                    hasTarget = goByMemory(PlaceKind::Food);
+                }
+                break;
+            }
             case GoblinDesire::Idle: break;
         }
 
@@ -730,7 +863,12 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
 
-        state.energy = std::max(0, state.energy - kStepEnergy * size / kFull);
+        // Шаг с ношей дороже пустого (core/Carry.hpp). Без этой платы носить
+        // всегда было бы выгоднее, чем не носить, и решать тут было бы
+        // нечего; с ней дальний ягодник окупается хуже ближнего — а решает
+        // это не гоблин, а мир.
+        state.energy =
+            std::max(0, state.energy - carryStepEnergy(kStepEnergy * size / kFull, *goblin.hands, size));
         // Шаг стоит не только энергии, но и сил: ходьба утомляет сильнее,
         // чем стояние, и именно это отличает обошедшего полкарты от того,
         // кто простоял у куста.
@@ -815,14 +953,70 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             if (share <= 0) {
                 continue;
             }
-            auto& state = *goblins[static_cast<std::size_t>(picks[k].claimant)].state;
-            const auto& genome = *goblins[static_cast<std::size_t>(picks[k].claimant)].genome;
+            const Goblin& picker = goblins[static_cast<std::size_t>(picks[k].claimant)];
+            auto& state = *picker.state;
+            const auto& genome = *picker.genome;
 
             // Крупицы уходят вместе с ягодами — тем же путём, каким они
-            // уходят из травы в травоядное, и вернутся в мир навозом и
-            // падалью съевшего (core/Berries.hpp).
+            // уходят из травы в травоядное (core/Berries.hpp).
             const BerryPick got = pickBerries(*berries, share);
-            feedBody(state, genome, got.berries * kBerryMass);
+            int food = got.amount * kBerryMass;
+            int minerals = got.minerals;
+
+            // В рот или в руки — решает занятие, а не отдельный признак у
+            // намерения: желание и есть ответ на вопрос, чем гоблин сейчас
+            // занят (см. GoblinDesireComponent). Запасающий не ест.
+            if (picker.desire->current == GoblinDesire::Haul) {
+                putInHands(*picker.hands, food, minerals, food, bodySize(state.growth));
+                // Не влезшее остаётся сорванным и падает под ноги: класть
+                // ягоду обратно на куст мир не умеет, а терять вещество ему
+                // нельзя. Кладётся оно кучей — той же, что у лагеря, и это
+                // не поблажка: рассыпанное у ягодника тоже кто-нибудь
+                // подберёт.
+                if (food > 0 || minerals > 0) {
+                    commands.enqueue([x = picker.x, y = picker.y, food, minerals](World& w) {
+                        depositStore(w, x, y, food, minerals);
+                    });
+                }
+                continue;
+            }
+            feedBody(state, genome, food);
+            takeProtein(state, genome, minerals);
+        }
+        n = m;
+    }
+
+    // --- 5c. Еда из кучи: один запас на всех, кто до него дошёл ---
+    // Дележ тот же (core/Share.hpp). Куча от еды убывает — в отличие от
+    // куста и в точности как туша: принесённое кончается.
+    std::sort(scoops.begin(), scoops.end(), sortByCellThenId);
+    for (std::size_t n = 0; n < scoops.size();) {
+        std::size_t m = n;
+        int demand = 0;
+        while (m < scoops.size() && scoops[m].cell == scoops[n].cell) {
+            demand += scoops[m].want;
+            ++m;
+        }
+
+        const entt::entity tile = terrain[scoops[n].cell];
+        auto* store =
+            tile != entt::null && registry.valid(tile) ? registry.try_get<StoreComponent>(tile) : nullptr;
+        if (store == nullptr || demand <= 0) {
+            n = m;
+            continue;
+        }
+
+        const int foodBefore = store->food;
+        for (std::size_t k = n; k < m; ++k) {
+            const int share = shareOf(scoops[k].want, foodBefore, demand);
+            if (share <= 0) {
+                continue;
+            }
+            auto& state = *goblins[static_cast<std::size_t>(scoops[k].claimant)].state;
+            const auto& genome = *goblins[static_cast<std::size_t>(scoops[k].claimant)].genome;
+
+            const Portion got = takeFromStore(*store, share);
+            feedBody(state, genome, got.amount);
             takeProtein(state, genome, got.minerals);
         }
         n = m;
@@ -1010,6 +1204,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             // Наследовать память было бы наследованием опыта — а он берётся
             // жизнью, не рождением (02_CorePrinciples.md, п.6).
             w.registry().emplace<KnowledgeComponent>(entity);
+            // Руки пусты: новорождённый ничего не несёт.
+            w.registry().emplace<CarriedComponent>(entity);
             // Проверять клетку не нужно: существо не занимает тайл
             // (04_WorldModel.md, п.4), поэтому ребёнок всегда помещается
             // рядом с матерью.
@@ -1030,6 +1226,13 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kMateDesire", kMateDesire});
     out.push_back({g, "kWanderChance", kWanderChance});
     out.push_back({g, "kBerryPick", kBerryPick});
+    out.push_back({g, "kHaulUrge", kHaulUrge});
+
+    // Ноша (core/Carry.hpp) — своей парой: ёмкость рук и цена шага с ними
+    // подбираются друг против друга.
+    constexpr const char* c = "Goblins (carry)";
+    out.push_back({c, "kCarryPerSize", static_cast<float>(kCarryPerSize)});
+    out.push_back({c, "kCarryStepCost", static_cast<float>(kCarryStepCost)});
     out.push_back({g, "kRoamTicks", static_cast<float>(kRoamTicks)});
     out.push_back({g, "kFatigueTick", kFatigueTick});
     out.push_back({g, "kFatigueStep", kFatigueStep});

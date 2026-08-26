@@ -9,6 +9,7 @@
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
+#include "core/components/StoreComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -67,6 +68,10 @@ struct TileSnapshot {
     std::vector<int> berriesAt;
     // Мясо лежащей туши.
     std::vector<int> carcassMeat;
+    // Еда в куче, принесённой сюда чьими-то руками (core/Store.hpp). Лежит
+    // рядом с падалью не случайно: и то, и другое — съедобное состояние
+    // земли, которое кончается, когда его съедают.
+    std::vector<int> storeFood;
     // Влажность и каменистость почвы. Ходьбе они не мешают ничем, а вот
     // лежанию мешают обе (core/Rest.hpp): мокро и жёстко.
     std::vector<int> moisture;
@@ -103,6 +108,7 @@ struct TileSnapshot {
         bushAt.assign(cells, entt::null);
         berriesAt.assign(cells, 0);
         carcassMeat.assign(cells, 0);
+        storeFood.assign(cells, 0);
         moisture.assign(cells, 0);
         rockiness.assign(cells, 0);
         trampled.assign(cells, 0);
@@ -130,6 +136,9 @@ struct TileSnapshot {
             }
             if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
                 carcassMeat[i] = carcass->meat;
+            }
+            if (const auto* store = registry.try_get<const StoreComponent>(entity)) {
+                storeFood[i] = store->food;
             }
         }
 

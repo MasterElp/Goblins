@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "core/Portion.hpp"
 #include "core/Scale.hpp"
 #include "core/components/BerryComponent.hpp"
 
@@ -99,10 +100,9 @@ inline bool ripenBerry(BerryComponent& bush, int growth, int& cellMinerals) {
 }
 
 // Сколько ягод и сколько крупиц вместе с ними досталось тому, кто рвал.
-struct BerryPick {
-    int berries = 0;
-    int minerals = 0;
-};
+// Это Portion (core/Portion.hpp) под своим именем: у ягод счёт в штуках, и
+// называть их "amount" в законе про ягоды было бы хуже, чем дать имя.
+using BerryPick = Portion;
 
 // Сорвать до want ягод. Развитость куста при этом НЕ меняется — в этом всё
 // отличие ягодника от луга, и ради него закон и написан отдельно от
@@ -111,15 +111,10 @@ struct BerryPick {
 // Крупицы уходят долей от сорванного: сколько ягод взяли, столько вещества
 // с ними и ушло.
 inline BerryPick pickBerries(BerryComponent& bush, int want) {
-    BerryPick picked;
-    if (want <= 0 || bush.berries <= 0) {
-        return picked;
-    }
-    picked.berries = std::min(want, bush.berries);
-    picked.minerals = bush.minerals * picked.berries / bush.berries;
-    bush.berries -= picked.berries;
-    bush.minerals -= picked.minerals;
-    return picked;
+    // Отделение доли вместе с её веществом — общий закон на троих: ягоды,
+    // руки и куча (core/Portion.hpp). Здесь остаётся только то, что про
+    // ягоды: сам куст от сбора не убывает.
+    return takePortion(bush.berries, bush.minerals, want);
 }
 
 } // namespace goblins

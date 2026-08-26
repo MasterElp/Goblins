@@ -27,6 +27,7 @@
 #include "core/components/MovementComponent.hpp"
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
+#include "core/components/CarriedComponent.hpp"
 #include "core/components/BushComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
@@ -39,6 +40,7 @@
 #include "core/components/SeedComponent.hpp"
 #include "core/components/TreeComponent.hpp"
 #include "core/components/SoilComponent.hpp"
+#include "core/components/StoreComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
@@ -97,6 +99,7 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     growth.assign(count, 0);
     rockiness.assign(count, 0);
     trampled.assign(count, 0);
+    store.assign(count, 0);
     berries.assign(count, 0);
     // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
     // массиве выражается значением-заглушкой. Семена — отдельным слоем и
@@ -296,6 +299,13 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
             out.humus[static_cast<std::size_t>(pos.y) * width + pos.x] = tileHumus.minerals;
         });
 
+    // Куча принесённой еды — такое же состояние тайла, как перегной и
+    // падаль, и уходит так же: ноль значит "кучи здесь нет".
+    registry.view<const PositionComponent, const StoreComponent>().each(
+        [&](const PositionComponent& pos, const StoreComponent& tileStore) {
+            out.store[static_cast<std::size_t>(pos.y) * width + pos.x] = tileStore.food;
+        });
+
     // Падаль — такое же состояние тайла, как перегной, и уходит таким же
     // плотным слоем: ноль значит "туши здесь нет".
     registry.view<const PositionComponent, const CarcassComponent>().each(
@@ -373,6 +383,13 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     // Гоблины — своим списком и по тем же правилам. В звериный они не
     // попадают сами: тот выбирается по DesireComponent, которого у гоблина
     // нет (см. GoblinDesireComponent.hpp).
+    //
+    // Руки спрашиваются осторожно: ноша — общее свойство живого
+    // (core/Carry.hpp), и существо без компонента просто ничего не несёт.
+    const auto carriedFood = [](const auto& reg, entt::entity entity) {
+        const auto* hands = reg.template try_get<const CarriedComponent>(entity);
+        return hands != nullptr ? hands->food : 0;
+    };
     registry
         .view<const PositionComponent, const AnimalComponent, const AnimalGenomeComponent,
               const GoblinDesireComponent>()
@@ -390,6 +407,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
                 .health = toWire(body.health),
                 .desire = desire.current,
                 .fatigue = toWire(registry.get<const GoblinComponent>(entity).fatigue),
+                .carried = toWire(carriedFood(registry, entity)),
                 .tribe = genome.species,
                 .sex = body.sex});
         });
@@ -529,7 +547,8 @@ nlohmann::json NetworkServer::goblinToJson(const LayerSnapshot::GoblinView& gobl
             {"health", goblin.health},
             {"sex", sexName(goblin.sex)},
             {"desire", goblinDesireName(goblin.desire)},
-            {"fatigue", goblin.fatigue}};
+            {"fatigue", goblin.fatigue},
+            {"carried", goblin.carried}};
 }
 
 nlohmann::json NetworkServer::goblinsToJson(const std::vector<LayerSnapshot::GoblinView>& goblins) {
@@ -546,23 +565,33 @@ nlohmann::json NetworkServer::goblinsDeltaJson(const std::vector<LayerSnapshot::
     // меняется, и её у зверя нет вовсе, поэтому она и добавляется здесь, а
     // не внутри общего слияния.
     auto fatigue = nlohmann::json::array();
+    auto carried = nlohmann::json::array();
     auto message = creaturesDeltaJson(
         previous, current, goblinToJson,
-        [&fatigue](std::size_t index, const LayerSnapshot::GoblinView& was,
-                    const LayerSnapshot::GoblinView& now) {
+        [&fatigue, &carried](std::size_t index, const LayerSnapshot::GoblinView& was,
+                              const LayerSnapshot::GoblinView& now) {
             if (was.fatigue != now.fatigue) {
                 fatigue.push_back(index);
                 fatigue.push_back(now.fatigue);
             }
+            if (was.carried != now.carried) {
+                carried.push_back(index);
+                carried.push_back(now.carried);
+            }
         });
-    if (fatigue.empty()) {
+    if (fatigue.empty() && carried.empty()) {
         return message;
     }
     // Могло не измениться больше ничего — тогда объекта ещё нет.
     if (message.is_null()) {
         message = nlohmann::json::object();
     }
-    message["fatigue"] = std::move(fatigue);
+    if (!fatigue.empty()) {
+        message["fatigue"] = std::move(fatigue);
+    }
+    if (!carried.empty()) {
+        message["carried"] = std::move(carried);
+    }
     return message;
 }
 
@@ -949,6 +978,13 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                                                  {"protein", body.protein},
                                                  {"dung", body.dung},
                                                  {"step_progress", body.stepProgress}}));
+            // Руки — своей строкой рядом с телом: то, что несут, не часть
+            // тела, но и не желание. Пустые руки показываются нулём, а не
+            // прячутся: "ничего не несёт" — такой же ответ, как "несёт
+            // горсть", и по карточке должно быть видно, какой из них верен.
+            const auto* hands = registry.try_get<const CarriedComponent>(entity);
+            groups.push_back(makeGroup("Hands", {{"food", hands != nullptr ? hands->food : 0},
+                                                  {"minerals", hands != nullptr ? hands->minerals : 0}}));
             // Усталость — среди желаний, а не среди тела: голод и жажда
             // стоят рядом с ней по той же причине — это то, что гонит, а не
             // то, из чего гоблин состоит.
@@ -1247,6 +1283,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
 
     message["layers"]["rockiness"] = layers.rockiness;
     message["layers"]["trampled"] = layers.trampled;
+    message["layers"]["store"] = layers.store;
     message["layers"]["moisture"] = layers.moisture;
     message["layers"]["minerals"] = layers.minerals;
     message["layers"]["height"] = layers.terrainHeight;
@@ -1281,6 +1318,7 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
     const std::pair<const char*, std::pair<const std::vector<int>*, const std::vector<int>*>> layers[] = {
         {"moisture", {&previous.moisture, &current.moisture}},
         {"trampled", {&previous.trampled, &current.trampled}},
+        {"store", {&previous.store, &current.store}},
         {"minerals", {&previous.minerals, &current.minerals}},
         {"height", {&previous.terrainHeight, &current.terrainHeight}},
         {"water", {&previous.water, &current.water}},

@@ -121,6 +121,20 @@ inline Color berries(Color bushColor, int count) {
     return lerp(bushColor, berry, 0.25f + 0.45f * share);
 }
 
+// Куча принесённой еды. Своим цветом, не похожим ни на траву, ни на падаль:
+// куча — единственная вещь на карте, оказавшаяся там не сама, и увидеть её
+// надо с одного взгляда, иначе весь шаг с ношей не проверить глазами.
+//
+// Насыщение — примерно горсть взрослого (kCarryPerSize = 2000,
+// core/Carry.hpp): дальше растёт только уверенность, а не цвет.
+constexpr float kStoreVisualCap = 2000.0f;
+
+inline Color store(Color base, int food) {
+    static const Color heap{226, 178, 86, 255};
+    const float share = std::clamp(static_cast<float>(food) / kStoreVisualCap, 0.0f, 1.0f);
+    return lerp(base, heap, 0.35f + 0.55f * share);
+}
+
 // Семя в клетке — тёмная крапина цвета своего вида: оно лежит В земле, а
 // не стоит на ней, поэтому цвет вида сперва притемняется и только потом
 // подмешивается к почве. Так семя не путается с проростком (тот уже

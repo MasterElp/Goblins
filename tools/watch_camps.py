@@ -16,7 +16,13 @@
 лагерь. Пятно, в котором спят, но которое одно из сорока таких же, — это
 ночёвка, а не место притяжения. Лагерь — когда оба числа велики разом.
 
-Третья мера, справочная: **доля суши, годной для отдыха**. Она отвечает не
+С появлением ноши (core/Carry.hpp) добавилась третья мера, и она про то же
+самое с другой стороны: **где лежат кучи**. Еда, принесённая руками, должна
+оседать У МЕСТА ОТДЫХА, а не там, где её нашли, — значит, доля еды, лежащей
+внутри пятен, обязана быть заметно выше доли самих пятен на карте. Кучи,
+рассыпанные ровно, означают, что дом в памяти не работает как адрес.
+
+Четвёртая мера, справочная: **доля суши, годной для отдыха**. Она отвечает не
 про лагерь, а про порог kRestGood — сколько мест мир вообще предлагает. Её
 формула здесь переписана с core/Rest.hpp, а вот ЧИСЛА берутся у сервера
 (он шлёт свои константы в world_init), чтобы переписанное не разъехалось с
@@ -184,7 +190,7 @@ def main():
             tick = message.get("tick", tick)
             # Слои правятся дельтами — теми же парами "индекс, значение", по
             # которым их держит клиент.
-            for name in ("trampled", "trees", "water"):
+            for name in ("trampled", "trees", "water", "store"):
                 pairs = message.get(name) or []
                 target = layers.setdefault(name, [])
                 for i in range(0, len(pairs) - 1, 2):
@@ -239,6 +245,22 @@ def main():
                   f"лежащих {within(resting, biggest[3])}")
             print("  пятна по убыванию: " +
                   ", ".join(f"({x},{y}):{size}" for size, x, y, _ in found[:5]))
+
+        store = layers.get("store") or []
+        if store:
+            heaps = [(i, value) for i, value in enumerate(store) if value > 0]
+            food_total = sum(value for _, value in heaps)
+            food_inside = sum(value for i, value in heaps if i in inside)
+            biggest_food = sum(value for i, value in heaps if biggest and i in biggest[3])
+            land = sum(1 for i, value in enumerate(layers.get("moisture") or [])
+                       if i >= len(layers.get("water") or []) or (layers["water"][i] == 0))
+            spots = len(inside) * 100.0 / land if land else 0.0
+            if not heaps:
+                print("КУЧ НЕТ: ничего никуда не принесли")
+            else:
+                print(f"КУЧИ: {len(heaps)} клеток с запасом, еды в них {food_total}")
+                print(f"  внутри пятен {food_inside * 100.0 / food_total:.1f}% этой еды "
+                      f"(сами пятна — {spots:.1f}% суши), в крупнейшем пятне {biggest_food}")
 
         share = rest_share(layers, constants, width, height)
         if share is not None:

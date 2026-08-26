@@ -62,6 +62,12 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
                 color = TileColors::berries(color, state.berries[i]);
             }
         }
+        // Куча — поверх всего, что лежит на земле: она и лежит поверх.
+        // Гаснет вместе с гоблинами, а не с травой: её принесли руки, и без
+        // тех, кто носит, её бы не было.
+        if (layers.goblins && !state.store.empty() && state.store[i] > 0) {
+            color = TileColors::store(color, state.store[i]);
+        }
         // Вода — не полупрозрачный слой поверх, а готовый цвет тайла
         // (TileColors::water непрозрачен), поэтому просто заменяет
         // предыдущий.
