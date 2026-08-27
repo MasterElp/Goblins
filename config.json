@@ -11,8 +11,15 @@
         "width": 200
     },
     "boulder_count": 27,
+    "goblins": {
+        "count": 80,
+        "mutation_rate": 60,
+        "tribes": 3
+    },
     "host": "127.0.0.1",
     "plants": {
+        "bush_coverage": 20,
+        "bush_species": 2,
         "grass_coverage": 395,
         "grass_species": 3,
         "humus_decay_period": 801,
@@ -40,11 +47,12 @@
         "soil_erosion_rate": 500,
         "toggles": {
             "erosion_deposition": true,
-            "minerals_spread": false
+            "minerals_spread": false,
+            "trampling": true
         },
         "water_evaporation_rate": 96,
         "water_source_count": 7,
-        "water_source_depth": 1009
+        "water_source_depth": 4014
     },
     "tick_interval_ms": 200
 }

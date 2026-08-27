@@ -12,6 +12,7 @@
 #include "core/components/HeightComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
+#include "core/Build.hpp"
 #include "core/Trample.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -659,6 +660,22 @@ void HydrologySystem(World& world, CommandQueue& commands) {
         // сравнивал бы не то.
         if (toggles.trampling && soil.trampled > 0 && trampleFades(tick, i)) {
             --soil.trampled;
+        }
+
+        // Постройки ветшают здесь же и по той же причине, по которой здесь
+        // зарастает тропа: и то, и другое делает не кто-то, а само время, и
+        // делает со всякой клеткой, а не с той, на которую сегодня пришли.
+        // Останься ветшание в системе гоблинов, оно замерло бы вместе с
+        // последним из них, и брошенный лагерь стоял бы вечно.
+        //
+        // Заброшенное зарастает само, живое требует труда постоянно — и
+        // поселение оказывается тем, что ПОДДЕРЖИВАЮТ, а не тем, что однажды
+        // построили.
+        if (buildDecays(tick, i)) {
+            if (auto* building = registry.try_get<BuildingComponent>(entity)) {
+                building->canopy = std::max(0, building->canopy - 1);
+                building->bedding = std::max(0, building->bedding - 1);
+            }
         }
         registry.get<HeightComponent>(entity).height = nextTerrainHeight[i];
 

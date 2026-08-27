@@ -21,6 +21,7 @@
 #include "core/Trample.hpp"
 #include "core/Store.hpp"
 #include "core/components/StoreComponent.hpp"
+#include "core/components/BuildingComponent.hpp"
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
 #include "core/components/BushComponent.hpp"
@@ -903,7 +904,14 @@ void PlantSystem(World& world, CommandQueue& commands) {
     for (const auto entity : storeView) {
         auto& store = storeView.get<StoreComponent>(entity);
         const auto& storePosition = storeView.get<PositionComponent>(entity);
-        if (store.food > 0) {
+        // Постройки на этой же клетке берегут запас (core/Store.hpp): навес
+        // вдвое, подстилка ещё вдвое. Склад в мире не заведён отдельной
+        // вещью — он и есть навес, поставленный над кучей.
+        const auto* shelter = registry.try_get<const BuildingComponent>(entity);
+        const int canopy = shelter != nullptr ? shelter->canopy : 0;
+        const int bedding = shelter != nullptr ? shelter->bedding : 0;
+        const auto storeCell = static_cast<std::uint64_t>(index(storePosition.x, storePosition.y));
+        if (store.food > 0 && storeRotDue(tick, storeCell, canopy, bedding)) {
             // Гниёт доля еды, а крупицы уходят с ней той же долей
             // (core/Portion.hpp) — вещество не пропадает, оно переезжает.
             const Portion rotted = takeFromStore(store, kStoreRot);

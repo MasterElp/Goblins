@@ -10,6 +10,9 @@
 #include "core/components/BerryComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
 #include "core/components/StoreComponent.hpp"
+#include "core/Build.hpp"
+#include "core/components/BuildingComponent.hpp"
+#include "core/components/SiteComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
@@ -82,8 +85,22 @@ struct TileSnapshot {
     std::vector<int> trampled;
     // Дерево — не еда (объедать крону травоядное не умеет), а укрытие: под
     // ним добычу не высматривают (kCoverSight, core/Hunting.hpp), и к нему
-    // же бежит испуганный.
+    // же бежит испуганный. С появлением стройки оно стало ещё и источником
+    // веток, поэтому рядом с меткой лежит и само растение с его развитостью:
+    // ветку ломают у дерева, а не у флага.
     std::vector<unsigned char> treeAt;
+    std::vector<entt::entity> treeEntity;
+    std::vector<int> treeGrowth;
+
+    // Что на клетке построено и что на ней строится (core/Build.hpp).
+    // Прочность — 0..kFull, ноль значит "нет"; вид площадки — BuildKind::None,
+    // если стройки нет.
+    std::vector<int> canopy;
+    std::vector<int> bedding;
+    std::vector<BuildKind> siteKind;
+    // Сила материала, лежащего на площадке: по ней видно, идти ли за новым
+    // или уже можно работать.
+    std::vector<int> siteMaterial;
 
     std::size_t index(int x, int y) const {
         return static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
@@ -113,6 +130,12 @@ struct TileSnapshot {
         rockiness.assign(cells, 0);
         trampled.assign(cells, 0);
         treeAt.assign(cells, 0);
+        treeEntity.assign(cells, entt::null);
+        treeGrowth.assign(cells, 0);
+        canopy.assign(cells, 0);
+        bedding.assign(cells, 0);
+        siteKind.assign(cells, BuildKind::None);
+        siteMaterial.assign(cells, 0);
         if (cells == 0) {
             return;
         }
@@ -140,6 +163,14 @@ struct TileSnapshot {
             if (const auto* store = registry.try_get<const StoreComponent>(entity)) {
                 storeFood[i] = store->food;
             }
+            if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
+                canopy[i] = building->canopy;
+                bedding[i] = building->bedding;
+            }
+            if (const auto* site = registry.try_get<const SiteComponent>(entity)) {
+                siteKind[i] = site->kind;
+                siteMaterial[i] = materialStrength(site->straw, site->twigs);
+            }
         }
 
         auto plantView = registry.view<const PlantComponent, const PositionComponent>();
@@ -165,6 +196,8 @@ struct TileSnapshot {
                     break;
                 case PlantKind::Tree:
                     treeAt[i] = 1;
+                    treeEntity[i] = entity;
+                    treeGrowth[i] = plantView.get<const PlantComponent>(entity).growth;
                     break;
             }
         }

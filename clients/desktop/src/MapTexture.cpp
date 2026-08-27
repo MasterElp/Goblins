@@ -62,11 +62,24 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
                 color = TileColors::berries(color, state.berries[i]);
             }
         }
+        // Подстилка — под кучей и под навесом: она самая нижняя из
+        // сделанного руками.
+        if (layers.goblins && !state.bedding.empty() && state.bedding[i] > 0.0f) {
+            color = TileColors::bedding(color, state.bedding[i]);
+        }
         // Куча — поверх всего, что лежит на земле: она и лежит поверх.
         // Гаснет вместе с гоблинами, а не с травой: её принесли руки, и без
         // тех, кто носит, её бы не было.
         if (layers.goblins && !state.store.empty() && state.store[i] > 0) {
             color = TileColors::store(color, state.store[i]);
+        }
+        // Навес — поверх всего: он над головой и закрывает собой и кучу, и
+        // подстилку. Площадка — там, где ещё ничего не построено.
+        if (layers.goblins && !state.canopy.empty() && state.canopy[i] > 0.0f) {
+            color = TileColors::canopy(color, state.canopy[i]);
+        }
+        if (layers.goblins && !state.site.empty() && state.site[i] > 0) {
+            color = TileColors::site(color);
         }
         // Вода — не полупрозрачный слой поверх, а готовый цвет тайла
         // (TileColors::water непрозрачен), поэтому просто заменяет

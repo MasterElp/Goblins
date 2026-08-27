@@ -164,6 +164,15 @@ void drawTileGroup(const WorldState& state, ColumnWriter& writer, int x, int y) 
     if (index < state.store.size() && state.store[index] > 0) {
         writer.line("store", TextFormat("%d", state.store[index]));
     }
+    if (index < state.canopy.size() && state.canopy[index] > 0.0f) {
+        writer.line("canopy", formatValue(state.canopy[index]));
+    }
+    if (index < state.bedding.size() && state.bedding[index] > 0.0f) {
+        writer.line("bedding", formatValue(state.bedding[index]));
+    }
+    if (index < state.site.size() && state.site[index] > 0) {
+        writer.line("building", state.site[index] == 1 ? "canopy (planned)" : "bedding (planned)");
+    }
     writer.line("minerals", formatValue(static_cast<float>(state.minerals[index])));
     writer.line("height", formatValue(state.height[index]));
     if (state.waterDepth[index] > 0.0f) {

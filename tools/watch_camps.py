@@ -22,6 +22,16 @@
 внутри пятен, обязана быть заметно выше доли самих пятен на карте. Кучи,
 рассыпанные ровно, означают, что дом в памяти не работает как адрес.
 
+С появлением построек (core/Build.hpp) добавилась мера, ради которой шаг и
+делался: **средняя годность тех клеток, на которых спят**. Она отвечает на
+вопрос, который до сих пор задать было нельзя, — стал ли мир лучше от того,
+что в нём живут. Вырасти она должна не оттого, что гоблины нашли места
+получше, а оттого, что сделали получше те, где уже спали.
+
+Рядом печатается, где стоят постройки: внутри пятен утоптанного или где
+попало. Навес посреди чистого поля означает, что замысел ставится не там, где
+живут.
+
 Четвёртая мера, справочная: **доля суши, годной для отдыха**. Она отвечает не
 про лагерь, а про порог kRestGood — сколько мест мир вообще предлагает. Её
 формула здесь переписана с core/Rest.hpp, а вот ЧИСЛА берутся у сервера
@@ -91,6 +101,31 @@ def clusters(trampled, width, height):
     return found
 
 
+def rest_quality(layers, constants, i):
+    """Годность одной клетки по закону core/Rest.hpp.
+
+    Формула переписана, ЧИСЛА взяты у сервера (он шлёт константы в
+    world_init): подкрутят закон в ядре — изменится и это, без правок здесь.
+    Слои приходят сотыми, а закон живёт в тысячных (core/Scale.hpp), отсюда
+    множители: сравнивать сотые с порогом в тысячных значило бы ошибиться
+    ровно в десять раз, и однажды на этом уже обожглись.
+    """
+    def layer(name):
+        values = layers.get(name) or []
+        return values[i] if i < len(values) else 0
+
+    quality = constants["kRestBase"]
+    quality += (100 - min(100, layer("moisture"))) * constants["kRestDryWeight"] // 100
+    # Крыша одна: лучшее из кроны и навеса, а не сумма.
+    tree_roof = constants["kRestShelter"] if layer("trees") >= 0 else 0
+    canopy_roof = min(100, layer("canopy")) * constants.get("kRestCanopy", 0) // 100
+    quality += max(tree_roof, canopy_roof)
+    quality += min(100, layer("bedding")) * constants.get("kRestBedding", 0) // 100
+    quality -= min(100, layer("rockiness")) * constants["kRestRockPenalty"] // 100
+    quality += min(100, layer("trampled")) * constants["kRestTrodden"] // 100
+    return quality
+
+
 def rest_share(layers, constants, width, height):
     """Какая доля суши годится, чтобы лечь, — по закону core/Rest.hpp.
 
@@ -110,22 +145,11 @@ def rest_share(layers, constants, width, height):
         return None
     good = 0
     land = 0
-    # Слои приходят сотыми, а закон живёт в тысячных (core/Scale.hpp) —
-    # отсюда множители: сравнивать сотые с порогом в тысячных значило бы
-    # ошибиться ровно в десять раз, и однажды на этом уже обожглись
-    # (см. комментарий к kRestGood).
     for i in range(len(moisture)):
         if i < len(water) and water[i] > 0:
             continue  # вода — не суша, лечь туда нельзя
         land += 1
-        quality = constants["kRestBase"]
-        quality += (100 - min(100, moisture[i])) * constants["kRestDryWeight"] // 100
-        if i < len(trees) and trees[i] >= 0:
-            quality += constants["kRestShelter"]
-        quality -= min(100, rockiness[i]) * constants["kRestRockPenalty"] // 100
-        if i < len(trampled):
-            quality += min(100, trampled[i]) * constants["kRestTrodden"] // 100
-        if quality >= constants["kRestGood"]:
+        if rest_quality(layers, constants, i) >= constants["kRestGood"]:
             good += 1
     return (good * 100.0 / land) if land else None
 
@@ -190,7 +214,7 @@ def main():
             tick = message.get("tick", tick)
             # Слои правятся дельтами — теми же парами "индекс, значение", по
             # которым их держит клиент.
-            for name in ("trampled", "trees", "water", "store"):
+            for name in ("trampled", "trees", "water", "store", "canopy", "bedding", "site"):
                 pairs = message.get(name) or []
                 target = layers.setdefault(name, [])
                 for i in range(0, len(pairs) - 1, 2):
@@ -261,6 +285,29 @@ def main():
                 print(f"КУЧИ: {len(heaps)} клеток с запасом, еды в них {food_total}")
                 print(f"  внутри пятен {food_inside * 100.0 / food_total:.1f}% этой еды "
                       f"(сами пятна — {spots:.1f}% суши), в крупнейшем пятне {biggest_food}")
+
+        canopy = layers.get("canopy") or []
+        bedding = layers.get("bedding") or []
+        sites = layers.get("site") or []
+        built = [i for i, v in enumerate(canopy) if v > 0] + [i for i, v in enumerate(bedding) if v > 0]
+        planned = [i for i, v in enumerate(sites) if v > 0]
+        if not built and not planned:
+            print("ПОСТРОЕК НЕТ: ни одной клетки с навесом, подстилкой или замыслом")
+        else:
+            inside_built = sum(1 for i in set(built) if i in inside)
+            print(f"ПОСТРОЙКИ: навесов {sum(1 for v in canopy if v > 0)}, "
+                  f"подстилок {sum(1 for v in bedding if v > 0)}, "
+                  f"строек начато {len(planned)}")
+            if built:
+                print(f"  внутри пятен {inside_built} из {len(set(built))}; "
+                      f"средняя прочность навеса {sum(canopy) / max(1, sum(1 for v in canopy if v > 0)):.0f} "
+                      f"из 100")
+
+        # Главное число шага: стало ли лучше там, где спят.
+        if constants and resting:
+            qualities = [rest_quality(layers, constants, g["y"] * width + g["x"]) for g in resting]
+            print(f"ГОДНОСТЬ МЕСТА СНА: в среднем {sum(qualities) / len(qualities):.0f} "
+                  f"(порог {constants.get('kRestGood')}), считано по {len(qualities)} лежащим")
 
         share = rest_share(layers, constants, width, height)
         if share is not None:

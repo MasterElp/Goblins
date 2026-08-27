@@ -44,6 +44,15 @@ enum class GoblinDesire : std::uint8_t {
     // сама укладка — одно занятие с двумя половинами, а не два желания.
     // Разделять их значило бы позволить бросить полные руки на полдороге.
     Haul = 5,
+    // Строить: поставить замысел, натаскать материала и работать
+    // (core/Build.hpp). Первое дело, которое НЕ ДЕЛАЕТСЯ В ОДИНОЧКУ за раз:
+    // работа копится на площадке, и вложиться в неё может всякий, кто мимо
+    // шёл.
+    //
+    // И первое, чем гоблин меняет место, а не пользуется им: до сих пор он
+    // выбирал, где лечь и куда вернуться, а теперь делает выбранное лучше,
+    // чем оно было.
+    Build = 6,
 };
 
 // Имя желания — не логика, а имя значения (см. desireName в
@@ -56,6 +65,7 @@ inline const char* goblinDesireName(GoblinDesire desire) {
         case GoblinDesire::Mate: return "mate";
         case GoblinDesire::Rest: return "rest";
         case GoblinDesire::Haul: return "haul";
+        case GoblinDesire::Build: return "build";
         case GoblinDesire::Idle: break;
     }
     return "idle";
@@ -70,6 +80,7 @@ inline GoblinDesire goblinDesireFromName(const std::string& name) {
     if (name == "mate") return GoblinDesire::Mate;
     if (name == "rest") return GoblinDesire::Rest;
     if (name == "haul") return GoblinDesire::Haul;
+    if (name == "build") return GoblinDesire::Build;
     return GoblinDesire::Idle;
 }
 

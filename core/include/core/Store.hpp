@@ -1,6 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+
 #include "core/Portion.hpp"
+#include "core/Scale.hpp"
 #include "core/World.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/StoreComponent.hpp"
@@ -27,6 +32,33 @@ namespace goblins {
 // лето, перестал бы зависеть от мира вовсе — а вместе с этим исчезла бы и
 // причина куда-либо ходить.
 constexpr int kStoreRot = 2;
+
+// С какой кучи "нехватка крыши" считается полной. Полная горсть взрослого
+// (kCarryPerSize, core/Carry.hpp): один раз принесённое ещё не повод строить,
+// а вот запас, ради которого ходили не раз, укрыть уже стоит.
+constexpr int kStoreShelterFull = 2000;
+
+// Часто ли куче портиться. Постройки её берегут: под навесом вдвое, на
+// подстилке ещё вдвое, вместе вчетверо (core/Build.hpp) — и склад получается
+// сам собой, стоит поставить навес над кучей. Отдельной постройки для него не
+// заводится.
+//
+// Считается долей ТИКОВ, а не долей порции, и это не придирка. Порция гниения
+// — две единицы; поделить её вчетверо целыми числами нельзя, первое же
+// деление обратило бы её в ноль, и запас под навесом стал бы вечным. Доля
+// тиков делится сколько угодно: гниёт не всегда, а столько раз из тысячи, во
+// сколько куче мешают. Заодно это даёт постепенность — полунавес бережёт
+// вполовину, как ему и положено (BuildingComponent).
+//
+// Сдвиг по номеру клетки — чтобы кучи всего мира не теряли по горсти в один и
+// тот же тик; тот же приём, что у ягод, троп и ветшания.
+inline bool storeRotDue(std::uint64_t tick, std::size_t cell, int canopy, int bedding) {
+    const int protection = (kFull + std::clamp(canopy, 0, kFull)) *
+                            (kFull + std::clamp(bedding, 0, kFull)) / kFull;
+    const int share = kFull * kFull / std::max(kFull, protection);
+    return (tick + static_cast<std::uint64_t>(cell)) % static_cast<std::uint64_t>(kFull) <
+            static_cast<std::uint64_t>(share);
+}
 
 // Положить еду на клетку. Если куча там уже есть, положенное складывается с
 // ней: две горсти на одном тайле — это одна куча, а не две.

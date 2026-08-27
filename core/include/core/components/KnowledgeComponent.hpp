@@ -26,6 +26,14 @@ enum class PlaceKind : std::uint8_t {
     Food = 1,
     Water = 2,
     Rest = 3,
+    // Стройка. Единственный вид места, который помнится не потому, что там
+    // хорошо, а потому, что там НЕДОДЕЛАНО: гоблин возвращается к площадке
+    // ровно до тех пор, пока она стоит. Достроил — площадка исчезла, и место
+    // забывается само, придя пустым (disappoint).
+    //
+    // Так же и узнаётся чужой замысел: увидел площадку — запомнил, а дальше
+    // ходишь достраивать наравне с тем, кто её задумал.
+    Work = 4,
 };
 
 inline const char* placeKindName(PlaceKind kind) {
@@ -33,6 +41,7 @@ inline const char* placeKindName(PlaceKind kind) {
         case PlaceKind::Food: return "food";
         case PlaceKind::Water: return "water";
         case PlaceKind::Rest: return "rest";
+        case PlaceKind::Work: return "work";
         case PlaceKind::None: break;
     }
     return "none";
@@ -42,6 +51,7 @@ inline PlaceKind placeKindFromName(const std::string& name) {
     if (name == "food") return PlaceKind::Food;
     if (name == "water") return PlaceKind::Water;
     if (name == "rest") return PlaceKind::Rest;
+    if (name == "work") return PlaceKind::Work;
     return PlaceKind::None;
 }
 

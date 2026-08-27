@@ -39,16 +39,28 @@ inline int carryCapacity(int size) {
     return kCarryPerSize * std::clamp(size, 0, kFull) / kFull;
 }
 
+// Сколько всего в руках: и еда, и материал. Руки одни, и это не мелочь —
+// набравший полные руки веток не унесёт с собой ничего съестного, а значит,
+// за материалом ходят ОТДЕЛЬНЫМ походом. Стройка стоит не только труда, но и
+// того времени, которое не потрачено на еду.
+//
+// Ветка занимает столько же места, сколько соломина: в руках она мерится
+// объёмом, а не пользой. Втрое ценнее она на площадке, а не по дороге к ней
+// (core/Build.hpp).
+inline int carried(const CarriedComponent& hands) {
+    return hands.food + hands.straw + hands.twigs;
+}
+
 // Сколько ещё влезет.
 inline int carryRoom(const CarriedComponent& hands, int size) {
-    return std::max(0, carryCapacity(size) - hands.food);
+    return std::max(0, carryCapacity(size) - carried(hands));
 }
 
 // Насколько полны руки, 0..kFull. Из этого считается и цена шага, и
 // срочность желания отнести (GoblinSystem).
 inline int carryLoad(const CarriedComponent& hands, int size) {
     const int capacity = carryCapacity(size);
-    return capacity > 0 ? std::clamp(hands.food * kFull / capacity, 0, kFull) : 0;
+    return capacity > 0 ? std::clamp(carried(hands) * kFull / capacity, 0, kFull) : 0;
 }
 
 // Цена шага с ношей: base — то, что шаг стоил бы с пустыми руками.
@@ -65,10 +77,25 @@ inline Portion putInHands(CarriedComponent& hands, int& food, int& minerals, int
     return taken;
 }
 
-// Взять из рук — съесть или положить. Крупицы уходят той же долей
-// (core/Portion.hpp).
+// Взять из рук ЕДУ — съесть или положить в кучу. Крупицы уходят той же долей
+// (core/Portion.hpp). Материал этим не берётся: его не едят и кладут не в
+// кучу, а в стройку.
 inline Portion takeFromHands(CarriedComponent& hands, int want) {
     return takePortion(hands.food, hands.minerals, want);
+}
+
+// Набрать материала в руки. Возвращает, сколько взято: больше, чем влезает,
+// не взять, и остальное остаётся на растении.
+inline int takeStraw(CarriedComponent& hands, int want, int size) {
+    const int taken = std::max(0, std::min(want, carryRoom(hands, size)));
+    hands.straw += taken;
+    return taken;
+}
+
+inline int takeTwigs(CarriedComponent& hands, int want, int size) {
+    const int taken = std::max(0, std::min(want, carryRoom(hands, size)));
+    hands.twigs += taken;
+    return taken;
 }
 
 } // namespace goblins

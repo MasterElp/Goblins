@@ -55,6 +55,26 @@ constexpr int kRestRockPenalty = 300;
 // заодно это разводит места отдыха и места, где кого-то съели.
 constexpr int kRestCarcassPenalty = 600;
 
+// Навес. Крыша над головой, сделанная руками, — и она ЛУЧШЕ кроны, потому
+// что кроной укрываются, а навес строят.
+//
+// Крыша при этом ОДНА: с тенью дерева навес не складывается, берётся лучшее
+// из двух (см. restQualityOf). Из этого само собой следует, что под деревом
+// строить незачем, — и это ровно то, что говорит правило "строят то, чего
+// месту не хватает" (docs/plan/10_Goblins_roadmap.md, шаг 7). Складывались бы
+// они — лагерь полез бы в рощу и обстраивал бы там каждую клетку, а голая
+// поляна осталась бы ни при чём.
+//
+// Слагаемое масштабируется прочностью: навес наполовину укрывает вполовину
+// (BuildingComponent).
+constexpr int kRestCanopy = 400;
+
+// Подстилка. Равна кроне числом, но складывается со всем: она не крыша, она
+// под боком. Оттого её и кладут там, где крыша уже есть, — под деревом или
+// под собственным навесом, — и клетка с обеими постройками оказывается
+// лучшим местом мира.
+constexpr int kRestBedding = 250;
+
 // Утоптанность. То самое слагаемое, место под которое было оставлено в
 // списке заранее (см. шапку): земля, по которой ходят, умята и примята, и
 // лечь на неё удобнее, чем на кочки.
@@ -115,15 +135,21 @@ struct RestPlace {
     bool tree = false;    // стоит ли на клетке дерево
     int carcassMeat = 0;  // мясо лежащей туши, шкала биомассы
     int trodden = 0;      // утоптанность, 0..kFull (core/Trample.hpp)
+    int canopy = 0;       // прочность навеса, 0..kFull (core/Build.hpp)
+    int bedding = 0;      // прочность подстилки, 0..kFull
 };
 
 // Годность клетки для отдыха, 0..kFull.
 inline int restQualityOf(const RestPlace& place) {
     int quality = kRestBase;
     quality += (kFull - std::clamp(place.moisture, 0, kFull)) * kRestDryWeight / kFull;
-    if (place.tree) {
-        quality += kRestShelter;
-    }
+    // Крыша одна: либо крона, либо навес, и берётся лучшая. Сумма означала бы,
+    // что построенное под деревом вдвойне хорошо, — а тогда строили бы только
+    // в роще и никогда на поляне, где крыша и нужна.
+    quality += std::max(place.tree ? kRestShelter : 0,
+                        kRestCanopy * std::clamp(place.canopy, 0, kFull) / kFull);
+    // Подстилка складывается со всем: она не крыша, она под боком.
+    quality += kRestBedding * std::clamp(place.bedding, 0, kFull) / kFull;
     quality -= std::clamp(place.rockiness, 0, kFull) * kRestRockPenalty / kFull;
     quality += std::clamp(place.trodden, 0, kFull) * kRestTrodden / kFull;
     if (place.carcassMeat > 0) {

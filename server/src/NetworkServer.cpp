@@ -28,6 +28,7 @@
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
 #include "core/components/CarriedComponent.hpp"
+#include "core/components/BuildingComponent.hpp"
 #include "core/components/BushComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PlantGenomeComponent.hpp"
@@ -41,6 +42,7 @@
 #include "core/components/TreeComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/StoreComponent.hpp"
+#include "core/components/SiteComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WaterSourceComponent.hpp"
@@ -100,6 +102,9 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     rockiness.assign(count, 0);
     trampled.assign(count, 0);
     store.assign(count, 0);
+    canopy.assign(count, 0);
+    bedding.assign(count, 0);
+    site.assign(count, 0);
     berries.assign(count, 0);
     // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
     // массиве выражается значением-заглушкой. Семена — отдельным слоем и
@@ -306,6 +311,20 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
             out.store[static_cast<std::size_t>(pos.y) * width + pos.x] = tileStore.food;
         });
 
+    // Постройки и замысел — тоже состояние тайла: прочность каждой и вид
+    // того, что здесь решено построить.
+    registry.view<const PositionComponent, const BuildingComponent>().each(
+        [&](const PositionComponent& pos, const BuildingComponent& building) {
+            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
+            out.canopy[i] = toWire(building.canopy);
+            out.bedding[i] = toWire(building.bedding);
+        });
+
+    registry.view<const PositionComponent, const SiteComponent>().each(
+        [&](const PositionComponent& pos, const SiteComponent& tileSite) {
+            out.site[static_cast<std::size_t>(pos.y) * width + pos.x] = static_cast<int>(tileSite.kind);
+        });
+
     // Падаль — такое же состояние тайла, как перегной, и уходит таким же
     // плотным слоем: ноль значит "туши здесь нет".
     registry.view<const PositionComponent, const CarcassComponent>().each(
@@ -390,6 +409,10 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
         const auto* hands = reg.template try_get<const CarriedComponent>(entity);
         return hands != nullptr ? hands->food : 0;
     };
+    const auto carriedMaterial = [](const auto& reg, entt::entity entity) {
+        const auto* hands = reg.template try_get<const CarriedComponent>(entity);
+        return hands != nullptr ? hands->straw + hands->twigs : 0;
+    };
     registry
         .view<const PositionComponent, const AnimalComponent, const AnimalGenomeComponent,
               const GoblinDesireComponent>()
@@ -408,6 +431,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
                 .desire = desire.current,
                 .fatigue = toWire(registry.get<const GoblinComponent>(entity).fatigue),
                 .carried = toWire(carriedFood(registry, entity)),
+                .material = toWire(carriedMaterial(registry, entity)),
                 .tribe = genome.species,
                 .sex = body.sex});
         });
@@ -548,7 +572,8 @@ nlohmann::json NetworkServer::goblinToJson(const LayerSnapshot::GoblinView& gobl
             {"sex", sexName(goblin.sex)},
             {"desire", goblinDesireName(goblin.desire)},
             {"fatigue", goblin.fatigue},
-            {"carried", goblin.carried}};
+            {"carried", goblin.carried},
+            {"material", goblin.material}};
 }
 
 nlohmann::json NetworkServer::goblinsToJson(const std::vector<LayerSnapshot::GoblinView>& goblins) {
@@ -566,10 +591,11 @@ nlohmann::json NetworkServer::goblinsDeltaJson(const std::vector<LayerSnapshot::
     // не внутри общего слияния.
     auto fatigue = nlohmann::json::array();
     auto carried = nlohmann::json::array();
+    auto material = nlohmann::json::array();
     auto message = creaturesDeltaJson(
         previous, current, goblinToJson,
-        [&fatigue, &carried](std::size_t index, const LayerSnapshot::GoblinView& was,
-                              const LayerSnapshot::GoblinView& now) {
+        [&fatigue, &carried, &material](std::size_t index, const LayerSnapshot::GoblinView& was,
+                                         const LayerSnapshot::GoblinView& now) {
             if (was.fatigue != now.fatigue) {
                 fatigue.push_back(index);
                 fatigue.push_back(now.fatigue);
@@ -578,8 +604,12 @@ nlohmann::json NetworkServer::goblinsDeltaJson(const std::vector<LayerSnapshot::
                 carried.push_back(index);
                 carried.push_back(now.carried);
             }
+            if (was.material != now.material) {
+                material.push_back(index);
+                material.push_back(now.material);
+            }
         });
-    if (fatigue.empty() && carried.empty()) {
+    if (fatigue.empty() && carried.empty() && material.empty()) {
         return message;
     }
     // Могло не измениться больше ничего — тогда объекта ещё нет.
@@ -591,6 +621,9 @@ nlohmann::json NetworkServer::goblinsDeltaJson(const std::vector<LayerSnapshot::
     }
     if (!carried.empty()) {
         message["carried"] = std::move(carried);
+    }
+    if (!material.empty()) {
+        message["material"] = std::move(material);
     }
     return message;
 }
@@ -832,6 +865,13 @@ std::optional<RestPlace> restPlaceAt(const World& world, int x, int y) {
         // принимает решение, иначе по нему нельзя понять, почему он лёг
         // именно здесь.
         place.trodden = soil->trampled;
+        // Постройки — те же слагаемые того же закона: наложение на карте
+        // обязано показывать ту годность, по которой гоблин выбирает, где
+        // лечь, включая ту, что он сам себе и сделал.
+        if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
+            place.canopy = building->canopy;
+            place.bedding = building->bedding;
+        }
         if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
             place.carcassMeat = carcass->meat;
         }
@@ -984,7 +1024,9 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             // горсть", и по карточке должно быть видно, какой из них верен.
             const auto* hands = registry.try_get<const CarriedComponent>(entity);
             groups.push_back(makeGroup("Hands", {{"food", hands != nullptr ? hands->food : 0},
-                                                  {"minerals", hands != nullptr ? hands->minerals : 0}}));
+                                                  {"minerals", hands != nullptr ? hands->minerals : 0},
+                                                  {"straw", hands != nullptr ? hands->straw : 0},
+                                                  {"twigs", hands != nullptr ? hands->twigs : 0}}));
             // Усталость — среди желаний, а не среди тела: голод и жажда
             // стоят рядом с ней по той же причине — это то, что гонит, а не
             // то, из чего гоблин состоит.
@@ -1284,6 +1326,9 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["layers"]["rockiness"] = layers.rockiness;
     message["layers"]["trampled"] = layers.trampled;
     message["layers"]["store"] = layers.store;
+    message["layers"]["canopy"] = layers.canopy;
+    message["layers"]["bedding"] = layers.bedding;
+    message["layers"]["site"] = layers.site;
     message["layers"]["moisture"] = layers.moisture;
     message["layers"]["minerals"] = layers.minerals;
     message["layers"]["height"] = layers.terrainHeight;
@@ -1319,6 +1364,9 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
         {"moisture", {&previous.moisture, &current.moisture}},
         {"trampled", {&previous.trampled, &current.trampled}},
         {"store", {&previous.store, &current.store}},
+        {"canopy", {&previous.canopy, &current.canopy}},
+        {"bedding", {&previous.bedding, &current.bedding}},
+        {"site", {&previous.site, &current.site}},
         {"minerals", {&previous.minerals, &current.minerals}},
         {"height", {&previous.terrainHeight, &current.terrainHeight}},
         {"water", {&previous.water, &current.water}},

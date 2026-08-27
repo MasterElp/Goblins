@@ -7,6 +7,7 @@
 
 #include "core/Body.hpp"
 #include "core/Berries.hpp"
+#include "core/Build.hpp"
 #include "core/Carry.hpp"
 #include "core/Carcass.hpp"
 #include "core/Desires.hpp"
@@ -21,12 +22,14 @@
 #include "core/Scale.hpp"
 #include "core/Share.hpp"
 #include "core/Store.hpp"
+#include "core/Work.hpp"
 #include "core/TileSnapshot.hpp"
 #include "core/Trample.hpp"
 #include "core/Walk.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/BerryComponent.hpp"
+#include "core/components/BuildingComponent.hpp"
 #include "core/components/CarriedComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
@@ -39,6 +42,7 @@
 #include "core/components/PositionComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/StoreComponent.hpp"
+#include "core/components/SiteComponent.hpp"
 #include "core/components/TimeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
@@ -109,6 +113,16 @@ constexpr int kBerryPick = 3;
 // Это первая работа в мире: труд, который не кормит сейчас. На шаге
 // "постройки" из него вырастет настоящая.
 constexpr int kHaulUrge = 400;
+
+// Насколько сильно гоблина гонит достраивать начатое. Ровно как у запаса,
+// число постоянное и лежит между порогом желаний и голодом: строит тот, кого
+// больше ничто не гонит.
+//
+// Само НАЧАЛО стройки этим числом не меряется — его меряет нехватка (см.
+// buildLack): пока место не станет плохим, строить незачем. А вот начатое
+// надо доводить до конца, и держит гоблина у площадки уже не нехватка, а сам
+// незаконченный замысел.
+constexpr int kBuildUrge = 400;
 
 // С какой вероятностью ничего не желающий гоблин всё-таки делает шаг.
 // Постоянно бродящий выглядит нервным и зря жжёт энергию, полностью
@@ -182,7 +196,7 @@ struct Goblin {
 // некого — хищник его не видит (см. GoblinSystem.hpp). Появится опасность —
 // появится и желание, и встанет оно последним, чтобы побеждать при
 // равенстве.
-GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool hasHome) {
+GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool hasHome, int building) {
     const GoblinDesireComponent& desire = *goblin.desire;
     const int mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0;
     // Запасать некуда — незачем и начинать. Гейт стоит здесь, а не в самой
@@ -201,6 +215,10 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool has
         // то есть проигрывает и голоду, и жажде, и паре: набирать впрок имеет
         // смысл только сытым.
         {static_cast<int>(GoblinDesire::Haul), hauling},
+        // Стройка — после запаса, то есть при равенстве побеждает она: запас
+        // делается впрок и подождёт, а стройка — ответ на конкретную нехватку
+        // здесь и сейчас. Голоду и жажде она всё равно проигрывает.
+        {static_cast<int>(GoblinDesire::Build), building},
         {static_cast<int>(GoblinDesire::Food), goblin.hunger},
         {static_cast<int>(GoblinDesire::Water), goblin.thirst},
         {static_cast<int>(GoblinDesire::Mate), mating},
@@ -213,6 +231,7 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool has
         case GoblinDesire::Mate: currentUrgency = mating; break;
         case GoblinDesire::Rest: currentUrgency = goblin.own->fatigue; break;
         case GoblinDesire::Haul: currentUrgency = hauling; break;
+        case GoblinDesire::Build: currentUrgency = building; break;
         case GoblinDesire::Idle: break;
     }
 
@@ -285,11 +304,17 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     const std::vector<entt::entity>& bushAt = tiles.bushAt;
     const std::vector<int>& berriesAt = tiles.berriesAt;
     const std::vector<int>& storeFood = tiles.storeFood;
+    const std::vector<int>& canopyAt = tiles.canopy;
+    const std::vector<int>& beddingAt = tiles.bedding;
+    const std::vector<BuildKind>& siteKind = tiles.siteKind;
+    const std::vector<int>& siteMaterial = tiles.siteMaterial;
     const std::vector<int>& carcassMeat = tiles.carcassMeat;
 
     std::vector<ShareIntent> bites;  // трава
     std::vector<ShareIntent> picks;  // ягоды
     std::vector<ShareIntent> scoops; // куча
+    std::vector<ShareIntent> harvests; // трава и ветки на материал
+    std::vector<StepIntent> works;   // единицы труда, вложенные в площадки
     std::vector<ShareIntent> meals;  // падаль
     std::vector<ShareIntent> drinks;
     std::vector<StepIntent> steps;
@@ -346,7 +371,41 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // Дом — вспомненное место отдыха. Спрашивается здесь, до выбора
         // занятия: без дома запасать некуда, и желание не должно побеждать.
         const bool hasHome = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y) != nullptr;
-        desire.current = chooseGoblinDesire(goblin, adult && content, hasHome);
+
+        // Насколько гоблина гонит строить. Складывается из двух вещей, и обе
+        // честно ограничены тем, что он может знать (02_CorePrinciples.md,
+        // п.6): чего не хватает ЗДЕСЬ, где он стоит, и есть ли начатое дело,
+        // которое он помнит или видит.
+        int building = 0;
+        {
+            const std::size_t here = index(goblin.x, goblin.y);
+            // Первая причина — недовольство обжитым местом. Считается только
+            // стоя на нём: недостаток чувствуют, а не вычисляют издалека.
+            // Гоблин, лежащий на голой земле в месте, куда он ходит спать
+            // каждый день, — и есть тот, кто начинает стройку.
+            const auto* home = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y, kRestReturn);
+            if (home != nullptr && home->x == goblin.x && home->y == goblin.y) {
+                const RestPlace place{tiles.moisture[here], tiles.rockiness[here], tiles.treeAt[here] != 0,
+                                       tiles.carcassMeat[here], tiles.trampled[here], tiles.canopy[here],
+                                       tiles.bedding[here]};
+                building = std::max(0, kRestGood - restQualityOf(place));
+                // Вторая причина — куча под открытым небом. Еда портится, и
+                // это видно тому, кто стоит рядом с ней. Крыша над кучей и
+                // есть склад (core/Store.hpp), отдельной постройки для него
+                // не нужно.
+                if (tiles.canopy[here] < kFull) {
+                    const int uncovered = tiles.storeFood[here] * (kFull - tiles.canopy[here]) / kFull;
+                    building = std::max(building, std::min(kFull, uncovered * kFull / kStoreShelterFull));
+                }
+            }
+            // Начатое надо доводить: незаконченный замысел держит сам по
+            // себе, без всякой нехватки. Помнит гоблин свою площадку или
+            // видит чужую — разницы нет, вкладываться можно во всякую.
+            if (building < kBuildUrge && recall(*goblin.mind, PlaceKind::Work, goblin.x, goblin.y) != nullptr) {
+                building = kBuildUrge;
+            }
+        }
+        desire.current = chooseGoblinDesire(goblin, adult && content, hasHome, building);
     }
 
     // Возможная пара в том виде, в каком её видно со стороны
@@ -688,7 +747,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // наблюдатель рисует эту пригодность на карте.
                 const auto placeAt = [&](std::size_t cell, int nx, int ny) {
                     return RestPlace{tiles.moisture[cell], tiles.rockiness[cell], tiles.treeAt[cell] != 0,
-                                      carcassMeat[cell], tiles.trampled[cell]};
+                                      carcassMeat[cell], tiles.trampled[cell], canopyAt[cell],
+                                      beddingAt[cell]};
                 };
                 if (restQualityOf(placeAt(here, goblin.x, goblin.y)) >= kRestGood) {
                     // Лёг. Отдых — единственное занятие, которое НИЧЕГО не
@@ -802,6 +862,120 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // домой незачем, а вот к ягоднику — затем и затевалось.
                 if (!hasTarget) {
                     hasTarget = goByMemory(PlaceKind::Food);
+                }
+                break;
+            }
+            case GoblinDesire::Build: {
+                // --- 0. Замысел: недовольный местом отмечает клетку ---
+                // Ставит его тот, кто на этом месте СТОИТ и кому здесь плохо
+                // (см. срочность выше). Дальше площадку видно всякому, и
+                // достраивать её будут сообща.
+                if (siteKind[here] == BuildKind::None) {
+                    const auto* home = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y, kRestReturn);
+                    if (home != nullptr && home->x == goblin.x && home->y == goblin.y) {
+                        const RestPlace place{tiles.moisture[here], tiles.rockiness[here],
+                                               tiles.treeAt[here] != 0, carcassMeat[here],
+                                               tiles.trampled[here], canopyAt[here], beddingAt[here]};
+                        const BuildKind kind = betterBuild(place);
+                        if (kind != BuildKind::None) {
+                            commands.enqueue([x = goblin.x, y = goblin.y, kind](World& w) {
+                                placeSite(w, x, y, kind);
+                            });
+                            remember(*goblin.mind, PlaceKind::Work, goblin.x, goblin.y);
+                            busy = true;
+                            break;
+                        }
+                    }
+                }
+
+                // --- 1. Стоим на площадке: работать или нести сюда материал ---
+                if (siteKind[here] != BuildKind::None) {
+                    // Место помнится как стройка: пока замысел не исполнен,
+                    // сюда возвращаются — и не за тем, что здесь хорошо, а за
+                    // тем, что здесь недоделано.
+                    remember(*goblin.mind, PlaceKind::Work, goblin.x, goblin.y);
+
+                    if (siteMaterial[here] >= kMaterialPerWork) {
+                        // Работа. Тик труда — одна единица (core/Work.hpp);
+                        // делается она в фазе исполнения, вместе со всеми
+                        // остальными вкладами в эту же площадку.
+                        works.push_back(StepIntent{static_cast<int>(g), goblin.x, goblin.y});
+                        busy = true;
+                        break;
+                    }
+                    if (goblin.hands->straw > 0 || goblin.hands->twigs > 0) {
+                        // Принесли — выкладываем. Через очередь: площадка уже
+                        // есть, но правит её тот же тик, что и работу.
+                        const int straw = goblin.hands->straw;
+                        const int twigs = goblin.hands->twigs;
+                        goblin.hands->straw = 0;
+                        goblin.hands->twigs = 0;
+                        commands.enqueue([x = goblin.x, y = goblin.y, straw, twigs](World& w) {
+                            for (const auto tile : w.area().cellAt(x, y).entities) {
+                                if (auto* site = w.registry().try_get<SiteComponent>(tile)) {
+                                    site->straw += straw;
+                                    site->twigs += twigs;
+                                    return;
+                                }
+                            }
+                        });
+                        busy = true;
+                        break;
+                    }
+                    // Материала нет ни на площадке, ни в руках — идти ломать.
+                }
+
+                // --- 2. Руки полны — нести на площадку ---
+                if (carryRoom(*goblin.hands, size) <= 0 ||
+                    (goblin.hands->straw + goblin.hands->twigs > 0 && siteKind[here] == BuildKind::None)) {
+                    int siteX = goblin.x;
+                    int siteY = goblin.y;
+                    const bool siteSeen = findNearest([&](std::size_t cell, int nx, int ny) {
+                        return siteKind[cell] != BuildKind::None && standable(nx, ny);
+                    }, siteX, siteY) >= 0;
+                    if (siteSeen) {
+                        targetX = siteX;
+                        targetY = siteY;
+                        hasTarget = true;
+                        break;
+                    }
+                    // Не видно — идти к вспомненной стройке. Придём и не
+                    // найдём — там же и разочаруемся (goByMemory).
+                    hasTarget = goByMemory(PlaceKind::Work);
+                    break;
+                }
+
+                // --- 3. Руки не полны — ломать ближайшее ---
+                // Ветка втрое ценнее соломины (core/Build.hpp), поэтому
+                // дерево под ногами разбирается раньше травы. Своё дерево
+                // тоже: предвидения у гоблина нет, и лагерь, обглодавший
+                // собственную тень, портит себе место — честное следствие, а
+                // не ошибка.
+                if (tiles.treeEntity[here] != entt::null && tiles.treeGrowth[here] > kHarvestMinGrowth) {
+                    harvests.push_back(ShareIntent{here, static_cast<int>(g), goblin.id, kTwigHarvest});
+                    busy = true;
+                    break;
+                }
+                if (plantAt[here] != entt::null && plantGrowth[here] > kHarvestMinGrowth) {
+                    harvests.push_back(ShareIntent{here, static_cast<int>(g), goblin.id, kStrawHarvest});
+                    busy = true;
+                    break;
+                }
+                // Под ногами пусто — искать глазами: сперва дерево, потом
+                // траву.
+                hasTarget = findNearest([&](std::size_t cell, int nx, int ny) {
+                    return tiles.treeGrowth[cell] > kHarvestMinGrowth && standable(nx, ny);
+                }, targetX, targetY) >= 0;
+                if (!hasTarget) {
+                    hasTarget = findNearest([&](std::size_t cell, int nx, int ny) {
+                        return plantAt[cell] != entt::null && plantGrowth[cell] > kHarvestMinGrowth &&
+                               standable(nx, ny);
+                    }, targetX, targetY) >= 0;
+                }
+                // Ни того, ни другого не видно — идти к стройке: там хотя бы
+                // видно, чего не хватает.
+                if (!hasTarget) {
+                    hasTarget = goByMemory(PlaceKind::Work);
                 }
                 break;
             }
@@ -1022,6 +1196,87 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         n = m;
     }
 
+    // --- 5d. Добыча материала: одно растение на всех, кто до него дотянулся ---
+    // Дележ тот же (core/Share.hpp). Растение от этого убывает — ветку
+    // ломают, траву срезают, — но крупицы остаются в нём: минералы сидят в
+    // корнях, а не в ветке, и когда растение умрёт, лягут перегноем целиком.
+    std::sort(harvests.begin(), harvests.end(), sortByCellThenId);
+    for (std::size_t n = 0; n < harvests.size();) {
+        std::size_t m = n;
+        int demand = 0;
+        while (m < harvests.size() && harvests[m].cell == harvests[n].cell) {
+            demand += harvests[m].want;
+            ++m;
+        }
+
+        // Дерево или трава — решает то, что на клетке стоит: ветки берут с
+        // дерева, солому с травы, и одна клетка даёт что-то одно.
+        const bool fromTree = tiles.treeEntity[harvests[n].cell] != entt::null;
+        const entt::entity plantEntity =
+            fromTree ? tiles.treeEntity[harvests[n].cell] : plantAt[harvests[n].cell];
+        auto* plant = registry.valid(plantEntity) ? registry.try_get<PlantComponent>(plantEntity) : nullptr;
+        if (plant == nullptr || demand <= 0) {
+            n = m;
+            continue;
+        }
+
+        // Ниже kHarvestMinGrowth не обдирают: с ободранного до нуля куста
+        // нечего будет взять и в следующий раз, а лагерю жить здесь долго.
+        const int available = std::max(0, plant->growth - kHarvestMinGrowth);
+        for (std::size_t k = n; k < m; ++k) {
+            const int share = shareOf(harvests[k].want, available, demand);
+            if (share <= 0) {
+                continue;
+            }
+            const Goblin& worker = goblins[static_cast<std::size_t>(harvests[k].claimant)];
+            const int size = bodySize(worker.state->growth);
+            const int taken = fromTree ? takeTwigs(*worker.hands, share, size)
+                                        : takeStraw(*worker.hands, share, size);
+            plant->growth = std::max(0, plant->growth - taken);
+        }
+        n = m;
+    }
+
+    // --- 5e. Труд: единицы работы, вложенные в площадки ---
+    // Каждый вложивший даёт по единице за тик, и кладут они в одну и ту же
+    // площадку — отсюда и получается, что двое строят вдвое быстрее
+    // (02_CorePrinciples.md, п.11). Ничего про "нескольких исполнителей"
+    // писать отдельно не пришлось.
+    for (const auto& work : works) {
+        const std::size_t cell = index(work.x, work.y);
+        const entt::entity tile = terrain[cell];
+        if (tile == entt::null || !registry.valid(tile)) {
+            continue;
+        }
+        auto* site = registry.try_get<SiteComponent>(tile);
+        if (site == nullptr) {
+            continue;
+        }
+        auto* building = registry.try_get<BuildingComponent>(tile);
+        if (building == nullptr) {
+            // Первая же единица труда поднимает прочность с нуля, и постройка
+            // появляется на свет недостроенной — то есть слабой. Отдельного
+            // состояния "строится" в мире нет (BuildingComponent).
+            commands.enqueue([tile](World& w) {
+                if (w.registry().valid(tile) && !w.registry().all_of<BuildingComponent>(tile)) {
+                    w.registry().emplace<BuildingComponent>(tile);
+                }
+            });
+            continue;
+        }
+        applyWork(*site, *building);
+
+        // Замысел исполнен — площадка снимается. Помнящие её придут, не
+        // найдут и забудут сами (disappoint в goByMemory).
+        if (buildingCondition(*building, site->kind) >= kFull) {
+            commands.enqueue([tile](World& w) {
+                if (w.registry().valid(tile)) {
+                    w.registry().remove<SiteComponent>(tile);
+                }
+            });
+        }
+    }
+
     // --- 6. Кормёжка падалью: одна туша на всех, кто до неё добрался ---
     std::sort(meals.begin(), meals.end(), sortByCellThenId);
     for (std::size_t n = 0; n < meals.size();) {
@@ -1233,6 +1488,19 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     constexpr const char* c = "Goblins (carry)";
     out.push_back({c, "kCarryPerSize", static_cast<float>(kCarryPerSize)});
     out.push_back({c, "kCarryStepCost", static_cast<float>(kCarryStepCost)});
+
+    // Стройка (core/Build.hpp, core/Work.hpp) — своей группой: цена труда,
+    // цена материала и скорость ветшания подбираются друг против друга.
+    constexpr const char* b = "Goblins (build)";
+    out.push_back({b, "kBuildUrge", kBuildUrge});
+    out.push_back({b, "kWorkBedding", static_cast<float>(kWorkBedding)});
+    out.push_back({b, "kWorkCanopy", static_cast<float>(kWorkCanopy)});
+    out.push_back({b, "kBuildDecayPeriod", static_cast<float>(kBuildDecayPeriod)});
+    out.push_back({b, "kMaterialPerWork", static_cast<float>(kMaterialPerWork)});
+    out.push_back({b, "kTwigStrength", static_cast<float>(kTwigStrength)});
+    out.push_back({b, "kStrawHarvest", static_cast<float>(kStrawHarvest)});
+    out.push_back({b, "kTwigHarvest", static_cast<float>(kTwigHarvest)});
+    out.push_back({b, "kHarvestMinGrowth", static_cast<float>(kHarvestMinGrowth)});
     out.push_back({g, "kRoamTicks", static_cast<float>(kRoamTicks)});
     out.push_back({g, "kFatigueTick", kFatigueTick});
     out.push_back({g, "kFatigueStep", kFatigueStep});

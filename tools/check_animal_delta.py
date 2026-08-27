@@ -60,12 +60,12 @@ def apply_changes(animals, changes):
     for p in range(0, len(triples) - 2, 3):
         animals[triples[p]]["x"] = triples[p + 1]
         animals[triples[p]]["y"] = triples[p + 2]
-    # "fatigue" и "carried" есть только у гоблинов, и у животных этих ключей
+    # "fatigue", "carried" и "material" есть только у гоблинов, и у животных этих ключей
     # в сообщении просто не бывает — общий список тут ничего не путает. На
     # той стороне они тоже правятся вместе с остальными парами
     # (applyCreatureChanges в NetworkClient.cpp), между правками и
     # удалениями: индексы во всех них считаны в ПРЕЖНЕМ списке.
-    for key in ("growth", "health", "desire", "fatigue", "carried"):
+    for key in ("growth", "health", "desire", "fatigue", "carried", "material"):
         pairs = changes.get(key, [])
         for p in range(0, len(pairs) - 1, 2):
             animals[pairs[p]][key] = pairs[p + 1]

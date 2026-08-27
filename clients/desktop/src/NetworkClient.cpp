@@ -67,6 +67,7 @@ WorldState::Goblin parseGoblin(const nlohmann::json& goblin) {
     parsed.health = goblin.value("health", 100) * kFromHundredths;
     parsed.fatigue = goblin.value("fatigue", 0) * kFromHundredths;
     parsed.carried = goblin.value("carried", 0) * kFromHundredths;
+    parsed.material = goblin.value("material", 0) * kFromHundredths;
     parsed.sex = goblin.value("sex", std::string{});
     parsed.desire = goblin.value("desire", std::string{});
     return parsed;
@@ -369,6 +370,9 @@ void NetworkClient::applyGoblinChanges(const nlohmann::json& message) {
         applyPairs("carried", [](WorldState::Goblin& g, const nlohmann::json& v) {
             g.carried = v.get<int>() * kFromHundredths;
         });
+        applyPairs("material", [](WorldState::Goblin& g, const nlohmann::json& v) {
+            g.material = v.get<int>() * kFromHundredths;
+        });
     });
 }
 
@@ -643,6 +647,9 @@ void NetworkClient::handleMessage(const std::string& payload) {
         // показа, ни перевода долей (shared/protocol/WirePrecision.hpp).
         working_.berries = decodeInts(layers, "berries", cellCount, 0);
         working_.store = decodeInts(layers, "store", cellCount, 0);
+        working_.canopy = decodeScaled(layers, "canopy", cellCount, kFromHundredths);
+        working_.bedding = decodeScaled(layers, "bedding", cellCount, kFromHundredths);
+        working_.site = decodeInts(layers, "site", cellCount, 0);
         working_.carcass = decodeScaled(layers, "carcass", cellCount, kFromHundredths);
 
         // Виды растений: два списка, у травы и у деревьев своя нумерация.
@@ -762,6 +769,9 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "bushes", working_.bushSpeciesAt, [](int raw) { return raw; });
         applyChangedCells(json, "berries", working_.berries, [](int raw) { return raw; });
         applyChangedCells(json, "store", working_.store, [](int raw) { return raw; });
+        applyChangedCells(json, "canopy", working_.canopy, toFraction);
+        applyChangedCells(json, "bedding", working_.bedding, toFraction);
+        applyChangedCells(json, "site", working_.site, [](int raw) { return raw; });
         // Поголовье — изменениями, как и слои, только правится не клетка,
         // а животное (см. протокол в server/NetworkServer.hpp).
         applyAnimalChanges(json);

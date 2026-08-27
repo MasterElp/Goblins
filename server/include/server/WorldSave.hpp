@@ -57,7 +57,9 @@ namespace goblins {
 //                   "bush": true,
 //                   "berries": {"berries","minerals"},
 //                   "store": {"food","minerals"},
-//                   "carried": {"food","minerals"},
+//                   "building": {"canopy","bedding"},
+//                   "site": {"kind","straw","twigs","progress"},
+//                   "carried": {"food","minerals","straw","twigs"},
 //                   "plant": {"age","growth","minerals","stress"},
 //                   "genome": {"species": N, "<черта>": V, ...},
 //                   "animal": {"age","growth","sex","energy","water",
@@ -136,6 +138,12 @@ namespace goblins {
 // пустыми руками поля нет вовсе. Гоблину компонент ставится при загрузке
 // всегда, даже пустой: система выбирает существ по компонентам, и гоблин без
 // рук молча перестал бы жить.
+//
+// "building" (BuildingComponent) — прочность навеса и подстилки, "site"
+// (SiteComponent) — задуманное на клетке вместе с принесённым материалом и
+// недоработанным остатком труда. И то, и другое потерять нельзя тем более,
+// что вырасти само оно не может: всё, что здесь стоит, кто-то построил
+// руками (core/Build.hpp).
 //
 // "plant"/"genome" (живое растение), "humus" (HumusComponent — лежит на
 // том же Entity тайла, что почва и вода) и "plant_species" (виды травы
