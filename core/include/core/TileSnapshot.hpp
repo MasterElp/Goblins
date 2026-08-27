@@ -71,10 +71,15 @@ struct TileSnapshot {
     std::vector<int> berriesAt;
     // Мясо лежащей туши.
     std::vector<int> carcassMeat;
-    // Еда в куче, принесённой сюда чьими-то руками (core/Store.hpp). Лежит
-    // рядом с падалью не случайно: и то, и другое — съедобное состояние
-    // земли, которое кончается, когда его съедают.
+    // Что лежит в куче на клетке (core/Store.hpp): еда — рядом с падалью не
+    // случайно, и то, и другое съедобное состояние земли, — а материал нужен
+    // стройке. Порознь по видам, потому что и берут их порознь: еду в рот,
+    // солому с ветками в дело.
     std::vector<int> storeFood;
+    std::vector<int> storeMaterial;
+    // Сколько всего лежит на клетке: по нему видно, влезет ли ещё
+    // (kStoreCapacity, core/Store.hpp).
+    std::vector<int> storeTotal;
     // Влажность и каменистость почвы. Ходьбе они не мешают ничем, а вот
     // лежанию мешают обе (core/Rest.hpp): мокро и жёстко.
     std::vector<int> moisture;
@@ -98,9 +103,6 @@ struct TileSnapshot {
     std::vector<int> canopy;
     std::vector<int> bedding;
     std::vector<BuildKind> siteKind;
-    // Сила материала, лежащего на площадке: по ней видно, идти ли за новым
-    // или уже можно работать.
-    std::vector<int> siteMaterial;
 
     std::size_t index(int x, int y) const {
         return static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
@@ -126,6 +128,8 @@ struct TileSnapshot {
         berriesAt.assign(cells, 0);
         carcassMeat.assign(cells, 0);
         storeFood.assign(cells, 0);
+        storeMaterial.assign(cells, 0);
+        storeTotal.assign(cells, 0);
         moisture.assign(cells, 0);
         rockiness.assign(cells, 0);
         trampled.assign(cells, 0);
@@ -135,7 +139,6 @@ struct TileSnapshot {
         canopy.assign(cells, 0);
         bedding.assign(cells, 0);
         siteKind.assign(cells, BuildKind::None);
-        siteMaterial.assign(cells, 0);
         if (cells == 0) {
             return;
         }
@@ -161,7 +164,9 @@ struct TileSnapshot {
                 carcassMeat[i] = carcass->meat;
             }
             if (const auto* store = registry.try_get<const StoreComponent>(entity)) {
-                storeFood[i] = store->food;
+                storeFood[i] = store->stored.of(ResourceKind::Food);
+                storeMaterial[i] = materialIn(store->stored);
+                storeTotal[i] = store->stored.total();
             }
             if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
                 canopy[i] = building->canopy;
@@ -169,7 +174,6 @@ struct TileSnapshot {
             }
             if (const auto* site = registry.try_get<const SiteComponent>(entity)) {
                 siteKind[i] = site->kind;
-                siteMaterial[i] = materialStrength(site->straw, site->twigs);
             }
         }
 

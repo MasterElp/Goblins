@@ -30,6 +30,7 @@
 #include "core/components/ImpassableComponent.hpp"
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
+#include "core/Resources.hpp"
 #include "core/components/BuildingComponent.hpp"
 #include "core/components/CarriedComponent.hpp"
 #include "core/components/BushComponent.hpp"
@@ -347,8 +348,28 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // что восстановиться сама она не может. Крупицы пишутся вместе с
         // едой: они уже вынуты из земли и вернутся в неё либо через
         // съевшего, либо гниением (core/Store.hpp).
+        // Куча и ноша пишутся ПО ИМЕНАМ ВИДОВ (core/Resources.hpp), а не
+        // полями "food"/"straw": новый ресурс попадёт в файл сам, а старый
+        // файл, где его нет, прочитается нулём. Ровно тот же приём, что у
+        // черт генома, и по той же причине — список ведёт формат, а не
+        // наоборот.
+        const auto resourcesToJson = [](const Resources& res) {
+            nlohmann::json record;
+            for (int k = 0; k < kResourceKinds; ++k) {
+                const auto kind = static_cast<ResourceKind>(k);
+                if (res.of(kind) != 0) {
+                    record[resourceName(kind)] = res.of(kind);
+                }
+            }
+            if (res.minerals != 0) {
+                record["minerals"] = res.minerals;
+            }
+            return record;
+        };
         if (const auto* store = registry.try_get<StoreComponent>(entity)) {
-            record["store"] = {{"food", store->food}, {"minerals", store->minerals}};
+            if (store->stored.total() > 0 || store->stored.minerals > 0) {
+                record["store"] = resourcesToJson(store->stored);
+            }
         }
         if (const auto* building = registry.try_get<BuildingComponent>(entity)) {
             record["building"] = {{"canopy", building->canopy}, {"bedding", building->bedding}};
@@ -356,11 +377,11 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // Площадка пишется вместе с недоработанным остатком: без него
         // загруженная стройка теряла бы то, что уже сделано, и последняя
         // единица труда пропадала бы при каждом открытии мира.
+        // Площадка — чистый замысел: ни материала, ни остатка труда в ней
+        // больше нет (SiteComponent). Материал лежит в куче на той же клетке
+        // и пишется вместе с ней.
         if (const auto* site = registry.try_get<SiteComponent>(entity)) {
-            record["site"] = {{"kind", buildKindName(site->kind)},
-                              {"straw", site->straw},
-                              {"twigs", site->twigs},
-                              {"progress", site->progress}};
+            record["site"] = {{"kind", buildKindName(site->kind)}};
         }
         if (const auto* berries = registry.try_get<BerryComponent>(entity)) {
             record["berries"] = {{"berries", berries->berries}, {"minerals", berries->minerals}};
@@ -398,11 +419,8 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // живой (docs/10_Goblins.md, п.1a). Пустые руки не пишутся: их
         // незачем возить.
         if (const auto* carried = registry.try_get<CarriedComponent>(entity)) {
-            if (carried->food > 0 || carried->minerals > 0 || carried->straw > 0 || carried->twigs > 0) {
-                record["carried"] = {{"food", carried->food},
-                                     {"minerals", carried->minerals},
-                                     {"straw", carried->straw},
-                                     {"twigs", carried->twigs}};
+            if (carried->carried.total() > 0 || carried->carried.minerals > 0) {
+                record["carried"] = resourcesToJson(carried->carried);
             }
         }
         if (const auto* mind = registry.try_get<KnowledgeComponent>(entity)) {
@@ -660,17 +678,23 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         parsed.impassable = record.value("impassable", false);
         parsed.tree = record.value("tree", false);
         parsed.bush = record.value("bush", false);
+        // Разбор — тем же списком видов: чего в файле нет, того и не было.
+        const auto resourcesFromJson = [](const nlohmann::json& source) {
+            Resources res;
+            for (int k = 0; k < kResourceKinds; ++k) {
+                const auto kind = static_cast<ResourceKind>(k);
+                res.of(kind) = source.value(resourceName(kind), 0);
+            }
+            res.minerals = source.value("minerals", 0);
+            return res;
+        };
         if (record.contains("store")) {
             parsed.hasStore = true;
-            parsed.store.food = record["store"].value("food", 0);
-            parsed.store.minerals = record["store"].value("minerals", 0);
+            parsed.store.stored = resourcesFromJson(record["store"]);
         }
         if (record.contains("carried")) {
             parsed.hasCarried = true;
-            parsed.carried.food = record["carried"].value("food", 0);
-            parsed.carried.minerals = record["carried"].value("minerals", 0);
-            parsed.carried.straw = record["carried"].value("straw", 0);
-            parsed.carried.twigs = record["carried"].value("twigs", 0);
+            parsed.carried.carried = resourcesFromJson(record["carried"]);
         }
         if (record.contains("building")) {
             parsed.hasBuilding = true;
@@ -680,9 +704,6 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         if (record.contains("site")) {
             parsed.hasSite = true;
             parsed.site.kind = buildKindFromName(record["site"].value("kind", std::string("none")));
-            parsed.site.straw = record["site"].value("straw", 0);
-            parsed.site.twigs = record["site"].value("twigs", 0);
-            parsed.site.progress = record["site"].value("progress", 0);
         }
         if (record.contains("berries")) {
             parsed.hasBerries = true;

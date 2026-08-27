@@ -21,6 +21,7 @@
 #include "core/Rest.hpp"
 #include "core/Scale.hpp"
 #include "core/Share.hpp"
+#include "core/Resources.hpp"
 #include "core/Store.hpp"
 #include "core/Work.hpp"
 #include "core/TileSnapshot.hpp"
@@ -304,10 +305,11 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     const std::vector<entt::entity>& bushAt = tiles.bushAt;
     const std::vector<int>& berriesAt = tiles.berriesAt;
     const std::vector<int>& storeFood = tiles.storeFood;
+    const std::vector<int>& storeMaterial = tiles.storeMaterial;
+    const std::vector<int>& storeTotal = tiles.storeTotal;
     const std::vector<int>& canopyAt = tiles.canopy;
     const std::vector<int>& beddingAt = tiles.bedding;
     const std::vector<BuildKind>& siteKind = tiles.siteKind;
-    const std::vector<int>& siteMaterial = tiles.siteMaterial;
     const std::vector<int>& carcassMeat = tiles.carcassMeat;
 
     std::vector<ShareIntent> bites;  // трава
@@ -537,8 +539,9 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // полкарты рискует съесть её сам, и доносит запас тот, кто
                 // вышел сытым. Ничего специально для этого не написано —
                 // просто голод сильнее желания запасать (см. kHaulUrge).
-                if (goblin.hands->food > 0) {
-                    const Portion bite = takeFromHands(*goblin.hands, genome.biteSize * size / kFull);
+                if (goblin.hands->carried.of(ResourceKind::Food) > 0) {
+                    const Portion bite =
+                        takeFromHands(*goblin.hands, ResourceKind::Food, genome.biteSize * size / kFull);
                     feedBody(state, genome, bite.amount);
                     takeProtein(state, genome, bite.minerals);
                     busy = true;
@@ -802,15 +805,22 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // Руки полны — домой. Пришёл — положил.
                 if (carryRoom(*goblin.hands, size) <= 0) {
                     if (goblin.x == home->x && goblin.y == home->y) {
-                        const int food = goblin.hands->food;
-                        const int minerals = goblin.hands->minerals;
-                        goblin.hands->food = 0;
-                        goblin.hands->minerals = 0;
+                        // Кладут столько, сколько влезает: у клетки есть
+                        // предел (kStoreCapacity, core/Store.hpp). Не влезшее
+                        // остаётся в руках и не пропадает — вещество в этом
+                        // мире не исчезает оттого, что ему не хватило места.
+                        // Гоблин с полными руками у полной кучи просто идёт
+                        // дальше и рано или поздно съедает принесённое сам.
+                        const int room = std::max(0, kStoreCapacity - storeTotal[here]);
+                        const Portion give = takeFromHands(*goblin.hands, ResourceKind::Food, room);
+                        if (give.amount <= 0) {
+                            break;
+                        }
                         // Класть — через очередь: компонент кучи может
                         // появиться, а это структурное изменение
                         // (05_Entity.md, п.5).
-                        commands.enqueue([x = goblin.x, y = goblin.y, food, minerals](World& w) {
-                            depositStore(w, x, y, food, minerals);
+                        commands.enqueue([x = goblin.x, y = goblin.y, give](World& w) {
+                            depositStore(w, x, y, ResourceKind::Food, give);
                         });
                         // Куча — это ЕДА, лежащая в известном месте, и
                         // помнится она именно так. Никакого "склада" как
@@ -866,18 +876,27 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 break;
             }
             case GoblinDesire::Build: {
+                // Что здесь недоделано: замысел или начатая постройка. Один
+                // ответ на все вопросы ветки (core/Build.hpp) — иначе гоблин
+                // ходил бы достраивать то, что для мира уже достроено.
+                const BuildKind unfinished = unfinishedAt(
+                    BuildingComponent{canopyAt[here], beddingAt[here]}, siteKind[here]);
+
                 // --- 0. Замысел: недовольный местом отмечает клетку ---
                 // Ставит его тот, кто на этом месте СТОИТ и кому здесь плохо
-                // (см. срочность выше). Дальше площадку видно всякому, и
-                // достраивать её будут сообща.
-                if (siteKind[here] == BuildKind::None) {
+                // (см. срочность выше). Дальше замысел видно всякому, и
+                // достраивать его будут сообща.
+                if (unfinished == BuildKind::None) {
                     const auto* home = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y, kRestReturn);
                     if (home != nullptr && home->x == goblin.x && home->y == goblin.y) {
                         const RestPlace place{tiles.moisture[here], tiles.rockiness[here],
                                                tiles.treeAt[here] != 0, carcassMeat[here],
                                                tiles.trampled[here], canopyAt[here], beddingAt[here]};
                         const BuildKind kind = betterBuild(place);
-                        if (kind != BuildKind::None) {
+                        // Под деревом не строят — оно занимает клетку.
+                        // placeSite откажет и сам, но незачем помнить как
+                        // стройку то, чего не будет.
+                        if (kind != BuildKind::None && tiles.treeAt[here] == 0) {
                             commands.enqueue([x = goblin.x, y = goblin.y, kind](World& w) {
                                 placeSite(w, x, y, kind);
                             });
@@ -888,50 +907,35 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     }
                 }
 
-                // --- 1. Стоим на площадке: работать или нести сюда материал ---
-                if (siteKind[here] != BuildKind::None) {
-                    // Место помнится как стройка: пока замысел не исполнен,
-                    // сюда возвращаются — и не за тем, что здесь хорошо, а за
-                    // тем, что здесь недоделано.
+                // --- 1. Стоим на недоделанном: работать или принести материал ---
+                if (unfinished != BuildKind::None) {
+                    // Место помнится как стройка: пока не доделано, сюда
+                    // возвращаются — и не за тем, что здесь хорошо, а за тем,
+                    // что здесь недоделано.
                     remember(*goblin.mind, PlaceKind::Work, goblin.x, goblin.y);
 
-                    if (siteMaterial[here] >= kMaterialPerWork) {
+                    const bool material = storeMaterial[here] >= kMaterialPerWork ||
+                                           materialIn(goblin.hands->carried) >= kMaterialPerWork;
+                    if (material) {
                         // Работа. Тик труда — одна единица (core/Work.hpp);
                         // делается она в фазе исполнения, вместе со всеми
-                        // остальными вкладами в эту же площадку.
+                        // остальными вкладами в эту же постройку.
                         works.push_back(StepIntent{static_cast<int>(g), goblin.x, goblin.y});
                         busy = true;
                         break;
                     }
-                    if (goblin.hands->straw > 0 || goblin.hands->twigs > 0) {
-                        // Принесли — выкладываем. Через очередь: площадка уже
-                        // есть, но правит её тот же тик, что и работу.
-                        const int straw = goblin.hands->straw;
-                        const int twigs = goblin.hands->twigs;
-                        goblin.hands->straw = 0;
-                        goblin.hands->twigs = 0;
-                        commands.enqueue([x = goblin.x, y = goblin.y, straw, twigs](World& w) {
-                            for (const auto tile : w.area().cellAt(x, y).entities) {
-                                if (auto* site = w.registry().try_get<SiteComponent>(tile)) {
-                                    site->straw += straw;
-                                    site->twigs += twigs;
-                                    return;
-                                }
-                            }
-                        });
-                        busy = true;
-                        break;
-                    }
-                    // Материала нет ни на площадке, ни в руках — идти ломать.
+                    // Материала нет ни в куче, ни в руках — идти ломать.
                 }
 
-                // --- 2. Руки полны — нести на площадку ---
+                // --- 2. Руки полны — нести к стройке ---
                 if (carryRoom(*goblin.hands, size) <= 0 ||
-                    (goblin.hands->straw + goblin.hands->twigs > 0 && siteKind[here] == BuildKind::None)) {
+                    (materialIn(goblin.hands->carried) > 0 && unfinished == BuildKind::None)) {
                     int siteX = goblin.x;
                     int siteY = goblin.y;
                     const bool siteSeen = findNearest([&](std::size_t cell, int nx, int ny) {
-                        return siteKind[cell] != BuildKind::None && standable(nx, ny);
+                        return unfinishedAt(BuildingComponent{canopyAt[cell], beddingAt[cell]},
+                                             siteKind[cell]) != BuildKind::None &&
+                               standable(nx, ny);
                     }, siteX, siteY) >= 0;
                     if (siteSeen) {
                         targetX = siteX;
@@ -947,10 +951,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
 
                 // --- 3. Руки не полны — ломать ближайшее ---
                 // Ветка втрое ценнее соломины (core/Build.hpp), поэтому
-                // дерево под ногами разбирается раньше травы. Своё дерево
-                // тоже: предвидения у гоблина нет, и лагерь, обглодавший
-                // собственную тень, портит себе место — честное следствие, а
-                // не ошибка.
+                // дерево под ногами разбирается раньше травы.
                 if (tiles.treeEntity[here] != entt::null && tiles.treeGrowth[here] > kHarvestMinGrowth) {
                     harvests.push_back(ShareIntent{here, static_cast<int>(g), goblin.id, kTwigHarvest});
                     busy = true;
@@ -1134,28 +1135,29 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             // Крупицы уходят вместе с ягодами — тем же путём, каким они
             // уходят из травы в травоядное (core/Berries.hpp).
             const BerryPick got = pickBerries(*berries, share);
-            int food = got.amount * kBerryMass;
-            int minerals = got.minerals;
+            const Portion picked{got.amount * kBerryMass, got.minerals};
 
             // В рот или в руки — решает занятие, а не отдельный признак у
             // намерения: желание и есть ответ на вопрос, чем гоблин сейчас
             // занят (см. GoblinDesireComponent). Запасающий не ест.
             if (picker.desire->current == GoblinDesire::Haul) {
-                putInHands(*picker.hands, food, minerals, food, bodySize(state.growth));
+                const Portion taken =
+                    putInHands(*picker.hands, ResourceKind::Food, picked, bodySize(state.growth));
                 // Не влезшее остаётся сорванным и падает под ноги: класть
                 // ягоду обратно на куст мир не умеет, а терять вещество ему
                 // нельзя. Кладётся оно кучей — той же, что у лагеря, и это
                 // не поблажка: рассыпанное у ягодника тоже кто-нибудь
                 // подберёт.
-                if (food > 0 || minerals > 0) {
-                    commands.enqueue([x = picker.x, y = picker.y, food, minerals](World& w) {
-                        depositStore(w, x, y, food, minerals);
+                const Portion spilled{picked.amount - taken.amount, picked.minerals - taken.minerals};
+                if (spilled.amount > 0 || spilled.minerals > 0) {
+                    commands.enqueue([x = picker.x, y = picker.y, spilled](World& w) {
+                        depositStore(w, x, y, ResourceKind::Food, spilled);
                     });
                 }
                 continue;
             }
-            feedBody(state, genome, food);
-            takeProtein(state, genome, minerals);
+            feedBody(state, genome, picked.amount);
+            takeProtein(state, genome, picked.minerals);
         }
         n = m;
     }
@@ -1180,7 +1182,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             continue;
         }
 
-        const int foodBefore = store->food;
+        const int foodBefore = store->stored.of(ResourceKind::Food);
         for (std::size_t k = n; k < m; ++k) {
             const int share = shareOf(scoops[k].want, foodBefore, demand);
             if (share <= 0) {
@@ -1189,7 +1191,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             auto& state = *goblins[static_cast<std::size_t>(scoops[k].claimant)].state;
             const auto& genome = *goblins[static_cast<std::size_t>(scoops[k].claimant)].genome;
 
-            const Portion got = takeFromStore(*store, share);
+            const Portion got = takeFromStore(*store, ResourceKind::Food, share);
             feedBody(state, genome, got.amount);
             takeProtein(state, genome, got.minerals);
         }
@@ -1230,47 +1232,83 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             }
             const Goblin& worker = goblins[static_cast<std::size_t>(harvests[k].claimant)];
             const int size = bodySize(worker.state->growth);
-            const int taken = fromTree ? takeTwigs(*worker.hands, share, size)
-                                        : takeStraw(*worker.hands, share, size);
-            plant->growth = std::max(0, plant->growth - taken);
+            const ResourceKind kind = fromTree ? ResourceKind::Twigs : ResourceKind::Straw;
+            const Portion taken = putInHands(*worker.hands, kind, Portion{share, 0}, size);
+            plant->growth = std::max(0, plant->growth - taken.amount);
         }
         n = m;
     }
 
-    // --- 5e. Труд: единицы работы, вложенные в площадки ---
+    // --- 5e. Труд: единицы работы, вложенные в постройки ---
     // Каждый вложивший даёт по единице за тик, и кладут они в одну и ту же
-    // площадку — отсюда и получается, что двое строят вдвое быстрее
+    // постройку — отсюда и получается, что двое строят вдвое быстрее
     // (02_CorePrinciples.md, п.11). Ничего про "нескольких исполнителей"
     // писать отдельно не пришлось.
+    //
+    // Материал берётся сперва из кучи на клетке и только потом из рук
+    // работающего (core/Build.hpp): принёс и сложил — достроит кто угодно.
     for (const auto& work : works) {
         const std::size_t cell = index(work.x, work.y);
         const entt::entity tile = terrain[cell];
         if (tile == entt::null || !registry.valid(tile)) {
             continue;
         }
-        auto* site = registry.try_get<SiteComponent>(tile);
-        if (site == nullptr) {
+        const auto s = static_cast<std::size_t>(work.goblin);
+        if (!alive[s]) {
             continue;
         }
+
         auto* building = registry.try_get<BuildingComponent>(tile);
+        auto* site = registry.try_get<SiteComponent>(tile);
+        const BuildKind kind =
+            unfinishedAt(building != nullptr ? *building : BuildingComponent{},
+                          site != nullptr ? site->kind : BuildKind::None);
+        if (kind == BuildKind::None) {
+            continue;
+        }
+
+        auto* heap = registry.try_get<StoreComponent>(tile);
+        auto& hands = goblins[s].hands->carried;
+
         if (building == nullptr) {
-            // Первая же единица труда поднимает прочность с нуля, и постройка
-            // появляется на свет недостроенной — то есть слабой. Отдельного
-            // состояния "строится" в мире нет (BuildingComponent).
-            commands.enqueue([tile](World& w) {
-                if (w.registry().valid(tile) && !w.registry().all_of<BuildingComponent>(tile)) {
-                    w.registry().emplace<BuildingComponent>(tile);
+            // Первая единица труда рождает постройку — сразу с прочностью, а
+            // не пустой: пустая исчезла бы от ветшания раньше, чем в неё
+            // вложат вторую (см. HydrologySystem). Потому и создание, и работа
+            // идут одной командой.
+            BuildingComponent fresh;
+            if (!applyWork(kind, fresh, heap != nullptr ? &heap->stored : nullptr, &hands)) {
+                continue;
+            }
+            commands.enqueue([tile, fresh, kind](World& w) {
+                if (!w.registry().valid(tile)) {
+                    return;
+                }
+                if (auto* existing = w.registry().try_get<BuildingComponent>(tile)) {
+                    // Пока команда ждала очереди, постройку мог создать
+                    // сосед: тогда вкладываем прочность в неё, а не заводим
+                    // вторую.
+                    int& condition = buildingCondition(*existing, kind);
+                    condition = std::min(kFull, condition + conditionPerWork(kind));
+                } else {
+                    w.registry().emplace<BuildingComponent>(tile, fresh);
+                }
+                // Замысел исполнен началом: дальше на клетке стоит не план, а
+                // недостроенное здание (SiteComponent).
+                if (w.registry().all_of<SiteComponent>(tile)) {
+                    w.registry().remove<SiteComponent>(tile);
                 }
             });
             continue;
         }
-        applyWork(*site, *building);
 
-        // Замысел исполнен — площадка снимается. Помнящие её придут, не
-        // найдут и забудут сами (disappoint в goByMemory).
-        if (buildingCondition(*building, site->kind) >= kFull) {
+        if (!applyWork(kind, *building, heap != nullptr ? &heap->stored : nullptr, &hands)) {
+            continue;
+        }
+        // Площадка снимается ПЕРВОЙ ЖЕ работой, а не по готовности: с этого
+        // мига здесь не замысел, а недостроенное здание.
+        if (site != nullptr) {
             commands.enqueue([tile](World& w) {
-                if (w.registry().valid(tile)) {
+                if (w.registry().valid(tile) && w.registry().all_of<SiteComponent>(tile)) {
                     w.registry().remove<SiteComponent>(tile);
                 }
             });

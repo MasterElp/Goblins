@@ -911,23 +911,35 @@ void PlantSystem(World& world, CommandQueue& commands) {
         const int canopy = shelter != nullptr ? shelter->canopy : 0;
         const int bedding = shelter != nullptr ? shelter->bedding : 0;
         const auto storeCell = static_cast<std::uint64_t>(index(storePosition.x, storePosition.y));
-        if (store.food > 0 && storeRotDue(tick, storeCell, canopy, bedding)) {
-            // Гниёт доля еды, а крупицы уходят с ней той же долей
-            // (core/Portion.hpp) — вещество не пропадает, оно переезжает.
-            const Portion rotted = takeFromStore(store, kStoreRot);
-            if (rotted.minerals > 0) {
-                commands.enqueue([x = storePosition.x, y = storePosition.y, minerals = rotted.minerals](World& w) {
-                    depositHumus(w, x, y, minerals);
-                });
+
+        // Портится всё органическое, но по-разному: еда быстро, солома
+        // вчетверо реже, ветки вдесятеро (kResourceKeeps). Перебор по списку
+        // видов, а не три ветки по именам: появится новый ресурс — он попадёт
+        // сюда сам.
+        int rotted = 0;
+        for (int k = 0; k < kResourceKinds; ++k) {
+            const auto kind = static_cast<ResourceKind>(k);
+            if (store.stored.of(kind) <= 0 || !storeRotDue(tick, storeCell, kind, canopy, bedding)) {
+                continue;
             }
+            // Гниёт доля запаса, а крупицы уходят с ней той же долей
+            // (core/Portion.hpp) — вещество не пропадает, оно переезжает.
+            const Portion lost = takeFromStore(store, kind, kStoreRot);
+            rotted += lost.minerals;
         }
-        if (store.food <= 0) {
+        if (rotted > 0) {
+            commands.enqueue([x = storePosition.x, y = storePosition.y, minerals = rotted](World& w) {
+                depositHumus(w, x, y, minerals);
+            });
+        }
+
+        if (store.stored.total() <= 0) {
             commands.enqueue([entity](World& w) {
                 // Проверяем заново: пока команда ждала очереди, на эту клетку
                 // могли положить новую горсть (GoblinSystem идёт позже), и
                 // снять компонент сейчас значило бы выбросить её из мира.
                 auto* storeComponent = w.registry().try_get<StoreComponent>(entity);
-                if (storeComponent != nullptr && storeComponent->food <= 0) {
+                if (storeComponent != nullptr && storeComponent->stored.total() <= 0) {
                     w.registry().remove<StoreComponent>(entity);
                 }
             });

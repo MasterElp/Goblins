@@ -5,12 +5,16 @@
 #include <cstdint>
 
 #include "core/Rest.hpp"
+#include "core/Resources.hpp"
 #include "core/Scale.hpp"
 #include "core/Work.hpp"
 #include "core/World.hpp"
 #include "core/components/BuildingComponent.hpp"
 #include "core/components/SiteComponent.hpp"
+#include "core/components/CarriedComponent.hpp"
 #include "core/components/SoilComponent.hpp"
+#include "core/components/StoreComponent.hpp"
+#include "core/components/TreeComponent.hpp"
 
 namespace goblins {
 
@@ -23,21 +27,27 @@ namespace goblins {
 // место лучше, чем оно было, — и платит за это трудом, материалом и тем, что
 // сделанное надо поддерживать.
 
-// Раз во сколько тиков постройка теряет единицу прочности. Полное обветшание
-// — четыре тысячи тиков, как полное зарастание тропы (kTrampleRecoverPeriod,
-// core/Trample.hpp), и это соседство не случайно: заброшенный лагерь обязан
-// исчезать с той же скоростью, с какой исчезает дорога к нему.
+// Раз во сколько тиков постройка теряет единицу прочности. Полное обветшание —
+// сорок тысяч тиков: вдесятеро дольше, чем зарастает тропа
+// (kTrampleRecoverPeriod, core/Trample.hpp), и это верно по сути — тропу
+// набивают ногами мимоходом, а навес ставят руками.
+//
+// Число подобрано замером, а не на глаз. При четырёх тиках поддержание навеса
+// стоило около сотни работ на тысячу тиков — четверть всего времени гоблина, —
+// и лагерь жил в вечном ремонте: двадцать начатых строек на пятнадцать живых,
+// средняя прочность навеса 59 из ста. Теперь поддержание стоит десяти работ на
+// тысячу тиков: заметно, но не вместо жизни.
 //
 // Ветшание — от времени и только от времени. Не от того, кто на постройке
 // спал: наказание за людность превратило бы большой лагерь в самый непрочный,
 // а он должен быть самым крепким — просто потому, что в нём больше рук.
-constexpr int kBuildDecayPeriod = 4;
+constexpr int kBuildDecayPeriod = 40;
 
-// Сколько материала съедает одна единица труда. Навес (kWorkCanopy = 400
+// Сколько материала съедает одна единица труда. Навес (kWorkCanopy = 500
 // работ) требует поэтому 2000 материала — ровно полную горсть взрослого
 // (kCarryPerSize, core/Carry.hpp). Один поход за ветками — одна постройка,
 // если ходить за ветками, а не за травой.
-constexpr int kMaterialPerWork = 5;
+constexpr int kMaterialPerWork = 4;
 
 // Во сколько соломин ценится ветка. В этом всё различие материалов: строить
 // можно из чего угодно, но за ветками стоит идти — их нужно втрое меньше.
@@ -71,6 +81,39 @@ inline int& buildingCondition(BuildingComponent& building, BuildKind kind) {
     return kind == BuildKind::Canopy ? building.canopy : building.bedding;
 }
 
+inline int buildingConditionOf(const BuildingComponent& building, BuildKind kind) {
+    return kind == BuildKind::Canopy ? building.canopy : building.bedding;
+}
+
+// Сколько прочности даёт одна единица труда. Делится нацело — цены построек
+// для того и выбраны (core/Work.hpp): дробной прочности в мире нет, и
+// хранить неделящийся остаток негде.
+inline int conditionPerWork(BuildKind kind) {
+    const int cost = workCost(buildWorkCost(kind));
+    return cost > 0 ? kFull / cost : 0;
+}
+
+// Что здесь ещё не доделано: замысел, если он есть, или начатая, но не
+// доведённая до полной прочности постройка. BuildKind::None — доделывать
+// нечего.
+//
+// Одна функция на всех спрашивающих: гоблин (чем заняться), наблюдатель
+// (что показать), проверка (стоит ли помнить это место). Разъехаться этим
+// ответам нельзя — иначе гоблин будет ходить достраивать то, что для
+// наблюдателя достроено.
+inline BuildKind unfinishedAt(const BuildingComponent& building, BuildKind site) {
+    if (site != BuildKind::None && buildingConditionOf(building, site) < kFull) {
+        return site;
+    }
+    if (building.canopy > 0 && building.canopy < kFull) {
+        return BuildKind::Canopy;
+    }
+    if (building.bedding > 0 && building.bedding < kFull) {
+        return BuildKind::Bedding;
+    }
+    return BuildKind::None;
+}
+
 // Пора ли постройкам на этой клетке обветшать. Сдвиг по номеру клетки — чтобы
 // весь лагерь не осыпался в один тик: срок один на всех, очередь у каждого
 // своя. Тот же приём, что у ягод и троп.
@@ -78,40 +121,57 @@ inline bool buildDecays(std::uint64_t tick, std::size_t cell) {
     return (tick + static_cast<std::uint64_t>(cell)) % static_cast<std::uint64_t>(kBuildDecayPeriod) == 0;
 }
 
-// Единица труда на площадке: съесть материал, поднять прочность.
+// Материал под рукой: сколько силы наберётся из этого запаса.
+inline int materialIn(const Resources& res) {
+    return materialStrength(res.of(ResourceKind::Straw), res.of(ResourceKind::Twigs));
+}
+
+// Истратить на одну единицу труда. Тратится сперва солома: ветки берегутся на
+// то, чего соломой не покроешь. Разницы для готовой постройки нет — прочность
+// одна, — но пока лежит и то, и другое, разумнее класть в дело дешёвое.
 //
-// false — работать нечем: материала на площадке не осталось. Это не ошибка, а
-// обычное дело — принесут ещё.
-inline bool applyWork(SiteComponent& site, BuildingComponent& building) {
-    if (site.kind == BuildKind::None) {
+// false — не хватило: столько материала здесь не наберётся.
+inline bool spendMaterial(Resources& res) {
+    if (materialIn(res) < kMaterialPerWork) {
         return false;
     }
-    int& condition = buildingCondition(building, site.kind);
+    int spend = kMaterialPerWork;
+    const int fromStraw = std::min(res.of(ResourceKind::Straw), spend);
+    res.of(ResourceKind::Straw) -= fromStraw;
+    spend -= fromStraw;
+    while (spend > 0 && res.of(ResourceKind::Twigs) > 0) {
+        --res.of(ResourceKind::Twigs);
+        spend -= kTwigStrength;
+    }
+    return true;
+}
+
+// Единица труда: съесть материал, поднять прочность.
+//
+// Материал берётся СПЕРВА ИЗ КУЧИ на этой клетке и только потом из рук
+// работающего, и в этом весь смысл склада при стройке: принёс и сложил —
+// достроит кто угодно, в том числе пришедший с пустыми руками. Одни носят,
+// другие строят, и совместный труд получается настоящим, а не двумя
+// одиночками рядом.
+//
+// false — работать нечем: материала нет ни там, ни там. Это не ошибка, а
+// обычное дело — принесут ещё.
+inline bool applyWork(BuildKind kind, BuildingComponent& building, Resources* heap, Resources* hands) {
+    if (kind == BuildKind::None) {
+        return false;
+    }
+    int& condition = buildingCondition(building, kind);
     if (condition >= kFull) {
         return false;
     }
-    if (materialStrength(site.straw, site.twigs) < kMaterialPerWork) {
+    if (heap != nullptr && spendMaterial(*heap)) {
+        // взято из кучи
+    } else if (hands != nullptr && spendMaterial(*hands)) {
+        // взято из рук
+    } else {
         return false;
     }
-
-    // Тратится сперва трава: ветки берегутся на то, чего травой не покроешь.
-    // Разницы для готовой постройки нет — прочность одна, — но пока на
-    // площадке лежит и то, и другое, разумнее класть в дело дешёвое.
-    int spend = kMaterialPerWork;
-    const int fromStraw = std::min(site.straw, spend);
-    site.straw -= fromStraw;
-    spend -= fromStraw;
-    while (spend > 0 && site.twigs > 0) {
-        --site.twigs;
-        spend -= kTwigStrength;
-    }
-
-    // Единица труда даёт kFull/стоимость прочности — целой она почти никогда
-    // не выходит, поэтому остаток ждёт в самой площадке (core/Scale.hpp).
-    const int cost = workCost(buildWorkCost(site.kind));
-    site.progress += kFull;
-    condition = std::min(kFull, condition + site.progress / cost);
-    site.progress %= cost;
+    condition = std::min(kFull, condition + conditionPerWork(kind));
     return true;
 }
 
@@ -140,6 +200,19 @@ inline BuildKind betterBuild(const RestPlace& place) {
 inline void placeSite(World& world, int x, int y, BuildKind kind) {
     if (kind == BuildKind::None || !world.area().inBounds(x, y)) {
         return;
+    }
+    // Под деревом не строят: дерево занимает клетку целиком, и ни навесу, ни
+    // подстилке там места нет. Проверка стоит в самом законе, а не только в
+    // решении гоблина: закон, мимо которого можно пройти одной забытой
+    // проверкой, рано или поздно обойдут.
+    //
+    // Следствие называется прямо: лагерь под рощей не обстраивается вовсе — он
+    // и так хорош тенью, — а роща остаётся тем, чем была, местом, куда ходят за
+    // ветками.
+    for (const auto tile : world.area().cellAt(x, y).entities) {
+        if (world.registry().all_of<TreeComponent>(tile)) {
+            return;
+        }
     }
     for (const auto tile : world.area().cellAt(x, y).entities) {
         if (!world.registry().all_of<SoilComponent>(tile)) {

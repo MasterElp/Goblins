@@ -33,6 +33,7 @@
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
 #include "core/components/CarriedComponent.hpp"
+#include "core/Resources.hpp"
 #include "core/components/BuildingComponent.hpp"
 #include "core/components/BushComponent.hpp"
 #include "core/components/PlantComponent.hpp"
@@ -312,9 +313,21 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
 
     // Куча принесённой еды — такое же состояние тайла, как перегной и
     // падаль, и уходит так же: ноль значит "кучи здесь нет".
+    // Куча уходит ОДНИМ числом — сколько всего в ней лежит, чем бы оно ни было
+    // (core/Resources.hpp). Карте этого довольно: куча тем ярче, чем она
+    // больше. Роспись по видам едет только для той клетки, за которой следят
+    // (goblinPlaceAt ниже): плотный массив на каждый ресурс стоил бы всей
+    // карты в каждой дельте, а новый ресурс — ещё одной.
+    //
+    // Рядом идёт материал той же кучи, одной меркой с работой
+    // (core/Build.hpp: ветка стоит трёх соломин). По нему видно, стоит стройка
+    // или идёт: без него стоящая без материала выглядит точно так же, как
+    // идущая.
     registry.view<const PositionComponent, const StoreComponent>().each(
         [&](const PositionComponent& pos, const StoreComponent& tileStore) {
-            out.store[static_cast<std::size_t>(pos.y) * width + pos.x] = tileStore.food;
+            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
+            out.store[i] = tileStore.stored.total();
+            out.siteMaterial[i] = materialIn(tileStore.stored);
         });
 
     // Постройки и замысел — тоже состояние тайла: прочность каждой и вид
@@ -330,11 +343,6 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
         [&](const PositionComponent& pos, const SiteComponent& tileSite) {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
             out.site[i] = static_cast<int>(tileSite.kind);
-            // Одной меркой, тем же законом, каким её считает работа
-            // (core/Build.hpp): ветка стоит трёх соломин, и площадка с
-            // охапкой веток обеспечена втрое лучше площадки с той же горстью
-            // травы.
-            out.siteMaterial[i] = materialStrength(tileSite.straw, tileSite.twigs);
         });
 
     // Падаль — такое же состояние тайла, как перегной, и уходит таким же
@@ -419,11 +427,14 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
     // (core/Carry.hpp), и существо без компонента просто ничего не несёт.
     const auto carriedFood = [](const auto& reg, entt::entity entity) {
         const auto* hands = reg.template try_get<const CarriedComponent>(entity);
-        return hands != nullptr ? hands->food : 0;
+        return hands != nullptr ? hands->carried.of(ResourceKind::Food) : 0;
     };
     const auto carriedMaterial = [](const auto& reg, entt::entity entity) {
         const auto* hands = reg.template try_get<const CarriedComponent>(entity);
-        return hands != nullptr ? hands->straw + hands->twigs : 0;
+        if (hands == nullptr) {
+            return 0;
+        }
+        return hands->carried.of(ResourceKind::Straw) + hands->carried.of(ResourceKind::Twigs);
     };
     registry
         .view<const PositionComponent, const AnimalComponent, const AnimalGenomeComponent,
@@ -916,8 +927,10 @@ struct GoblinPlace {
     int bedding = 0;
     bool site = false;
     BuildKind siteKind = BuildKind::None;
-    int siteStraw = 0;
-    int siteTwigs = 0;
+    // Роспись кучи по видам — только здесь, для той клетки, за которой следят:
+    // на карту уходит одно число "всего", а разобрать, еда там или ветки,
+    // нужно ровно тому, кто смотрит.
+    Resources stored{};
     // Вода на своей или любой соседней клетке: пьют и с той, и с другой —
     // гоблин стоит на берегу, а в воду шагнуть не может (см. GoblinSystem).
     bool waterNear = false;
@@ -935,7 +948,8 @@ GoblinPlace goblinPlaceAt(const World& world, int x, int y) {
                 place.carcass = carcass->meat;
             }
             if (const auto* store = registry.try_get<const StoreComponent>(entity)) {
-                place.store = store->food;
+                place.store = store->stored.of(ResourceKind::Food);
+                place.stored = store->stored;
             }
             if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
                 place.canopy = building->canopy;
@@ -944,8 +958,6 @@ GoblinPlace goblinPlaceAt(const World& world, int x, int y) {
             if (const auto* site = registry.try_get<const SiteComponent>(entity)) {
                 place.site = true;
                 place.siteKind = site->kind;
-                place.siteStraw = site->straw;
-                place.siteTwigs = site->twigs;
             }
             continue;
         }
@@ -991,9 +1003,15 @@ GoblinPlace goblinPlaceAt(const World& world, int x, int y) {
 // имя желания, и не знает, какие занятия бывают (07_TechStack.md, п.6).
 const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const CarriedComponent* hands,
                            int size, int restQuality, bool atHome) {
-    const int food = hands != nullptr ? hands->food : 0;
-    const int material = hands != nullptr ? hands->straw + hands->twigs : 0;
+    const Resources inHands = hands != nullptr ? hands->carried : Resources{};
+    const int food = inHands.of(ResourceKind::Food);
+    const int material = materialIn(inHands);
     const bool full = hands != nullptr && carryRoom(*hands, size) <= 0;
+    // Что здесь недоделано — тем же законом, каким это решает сам гоблин
+    // (core/Build.hpp): замысел или начатая, но не доведённая постройка.
+    const BuildKind unfinished =
+        unfinishedAt(BuildingComponent{place.canopy, place.bedding},
+                      place.site ? place.siteKind : BuildKind::None);
 
     switch (desire) {
         case GoblinDesire::Food:
@@ -1031,17 +1049,16 @@ const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const 
             }
             return "walking to the berries";
         case GoblinDesire::Build:
-            if (place.site) {
-                if (materialStrength(place.siteStraw, place.siteTwigs) >= kMaterialPerWork) {
-                    return place.siteKind == BuildKind::Canopy ? "building the canopy" : "laying the bedding";
-                }
-                if (material > 0) {
-                    return "unloading material at the site";
+            if (unfinished != BuildKind::None) {
+                // Материал берётся сперва из кучи под ногами, потом из рук
+                // (core/Build.hpp) — и то, и другое здесь одинаково годится.
+                if (materialIn(place.stored) >= kMaterialPerWork || material >= kMaterialPerWork) {
+                    return unfinished == BuildKind::Canopy ? "building the canopy" : "laying the bedding";
                 }
                 // Не беда и не ошибка, а обычное дело: принесут ещё. Ради
                 // этой строки слой "site_material" и заведён — стоящая
                 // стройка выглядит точно так же, как идущая.
-                return "the site is out of material";
+                return "the building is out of material";
             }
             if (material > 0) {
                 return "carrying material to the site";
@@ -1198,10 +1215,11 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             // прячутся: "ничего не несёт" — такой же ответ, как "несёт
             // горсть", и по карточке должно быть видно, какой из них верен.
             const auto* hands = registry.try_get<const CarriedComponent>(entity);
-            groups.push_back(makeGroup("Hands", {{"food", hands != nullptr ? hands->food : 0},
-                                                  {"minerals", hands != nullptr ? hands->minerals : 0},
-                                                  {"straw", hands != nullptr ? hands->straw : 0},
-                                                  {"twigs", hands != nullptr ? hands->twigs : 0}}));
+            const Resources inHands = hands != nullptr ? hands->carried : Resources{};
+            groups.push_back(makeGroup("Hands", {{"food", inHands.of(ResourceKind::Food)},
+                                                  {"minerals", inHands.minerals},
+                                                  {"straw", inHands.of(ResourceKind::Straw)},
+                                                  {"twigs", inHands.of(ResourceKind::Twigs)}}));
             // Усталость — среди желаний, а не среди тела: голод и жажда
             // стоят рядом с ней по той же причине — это то, что гонит, а не
             // то, из чего гоблин состоит.
@@ -1237,18 +1255,49 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             // считаются той же ценой, какой их тратит сам мир
             // (core/Build.hpp, core/Work.hpp), — иначе карточка обещала бы
             // одно, а стройка требовала другого.
-            if (place.site) {
-                const int condition = place.siteKind == BuildKind::Canopy ? place.canopy : place.bedding;
-                const int workLeft =
-                    (kFull - condition) * workCost(buildWorkCost(place.siteKind)) / kFull;
+            // Недоделанное под ногами — только когда оно есть: у стоящего в
+            // чистом поле группа была бы строкой нулей ни о чём. Работа и
+            // материал считаются той же ценой, какой их тратит сам мир
+            // (core/Build.hpp, core/Work.hpp), — иначе карточка обещала бы
+            // одно, а стройка требовала другого.
+            //
+            // Замысел и недостроенное здесь названы одним словом намеренно:
+            // площадка снимается первой же работой, и дальше "стройка" — это
+            // постройка малой прочности (SiteComponent).
+            const BuildKind unfinished =
+                unfinishedAt(BuildingComponent{place.canopy, place.bedding},
+                              place.site ? place.siteKind : BuildKind::None);
+            if (unfinished != BuildKind::None) {
+                const int condition = unfinished == BuildKind::Canopy ? place.canopy : place.bedding;
+                const int workLeft = (kFull - condition) * workCost(buildWorkCost(unfinished)) / kFull;
                 groups.push_back(
-                    makeGroup(place.siteKind == BuildKind::Canopy ? "Site (canopy)" : "Site (bedding)",
+                    makeGroup(unfinished == BuildKind::Canopy ? "Site (canopy)" : "Site (bedding)",
                               {{"condition", condition},
-                               {"straw", place.siteStraw},
-                               {"twigs", place.siteTwigs},
-                               {"material", materialStrength(place.siteStraw, place.siteTwigs)},
+                               {"straw", place.stored.of(ResourceKind::Straw)},
+                               {"twigs", place.stored.of(ResourceKind::Twigs)},
+                               {"material", materialIn(place.stored)},
                                {"work_left", workLeft},
                                {"material_left", workLeft * kMaterialPerWork}}));
+            }
+
+            // Куча под ногами — росписью по видам: на карту уходит одно число
+            // "всего", а здесь видно, из чего оно складывается. Перебор по
+            // списку ресурсов, а не три строки по именам: появится новый вид —
+            // попадёт сюда сам (core/Resources.hpp).
+            if (place.stored.total() > 0) {
+                auto pairs = nlohmann::json::array();
+                for (int k = 0; k < kResourceKinds; ++k) {
+                    const auto kind = static_cast<ResourceKind>(k);
+                    auto pair = nlohmann::json::array();
+                    pair.push_back(resourceName(kind));
+                    pair.push_back(place.stored.of(kind));
+                    pairs.push_back(std::move(pair));
+                }
+                auto pair = nlohmann::json::array();
+                pair.push_back("minerals");
+                pair.push_back(place.stored.minerals);
+                pairs.push_back(std::move(pair));
+                groups.push_back(nlohmann::json{{"title", "Heap"}, {"values", std::move(pairs)}});
             }
 
             groups.push_back(makeGenomeGroup(goblinTraits(), genome));

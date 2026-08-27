@@ -675,6 +675,22 @@ void HydrologySystem(World& world, CommandQueue& commands) {
             if (auto* building = registry.try_get<BuildingComponent>(entity)) {
                 building->canopy = std::max(0, building->canopy - 1);
                 building->bedding = std::max(0, building->bedding - 1);
+                // Осыпалось до конца — постройки больше нет. Нет компонента —
+                // нет и вещи (02_CorePrinciples.md, п.3); оставленный нулевой
+                // компонент означал бы навес, которого никто не видит, но
+                // который всё ещё числится за клеткой.
+                if (building->canopy <= 0 && building->bedding <= 0) {
+                    commands.enqueue([entity](World& w) {
+                        // Проверяем заново: пока команда ждала очереди, здесь
+                        // могли начать строить снова (GoblinSystem идёт
+                        // позже), и снять компонент сейчас значило бы стереть
+                        // первую вложенную работу.
+                        auto* current = w.registry().try_get<BuildingComponent>(entity);
+                        if (current != nullptr && current->canopy <= 0 && current->bedding <= 0) {
+                            w.registry().remove<BuildingComponent>(entity);
+                        }
+                    });
+                }
             }
         }
         registry.get<HeightComponent>(entity).height = nextTerrainHeight[i];
