@@ -1028,7 +1028,11 @@ const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const 
             if (place.berries > 0) {
                 return "picking berries";
             }
-            if (place.grassGrowth > kMinBiteGrowth) {
+            // Порог тот же, что в решении гоблина: съедобен верх куртины,
+            // а не вся развитость (edibleGrowth, core/Body.hpp). Иначе
+            // наблюдатель называл бы "grazing" стояние над травой, есть
+            // которую уже нечего.
+            if (edibleGrowth(place.grassGrowth) > kMinBiteGrowth) {
                 return "grazing";
             }
             return "looking for food";

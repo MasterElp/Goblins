@@ -833,15 +833,19 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     break;
                 }
 
-                if (plantAt[here] != entt::null && plantGrowth[here] > kMinBiteGrowth) {
+                // Годна клетка или нет, решает не вся развитость травы, а
+                // только та её часть, которую зубами берут (edibleGrowth,
+                // core/Body.hpp): низ куртины на месте, а есть его нельзя,
+                // и стоять над ним животному незачем.
+                if (plantAt[here] != entt::null && edibleGrowth(plantGrowth[here]) > kMinBiteGrowth) {
                     bites.push_back(
                         ShareIntent{here, static_cast<int>(a), animal.id, genome.biteSize * size / kFull});
                     busy = true;
                 } else {
                     hasTarget = findNearest(
                                     [&](std::size_t cell, int nx, int ny) {
-                                        return plantAt[cell] != entt::null && plantGrowth[cell] > kMinBiteGrowth &&
-                                               standable(nx, ny);
+                                        return plantAt[cell] != entt::null &&
+                                               edibleGrowth(plantGrowth[cell]) > kMinBiteGrowth && standable(nx, ny);
                                     },
                                     targetX, targetY) >= 0;
                 }
@@ -1133,6 +1137,18 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const int growthBefore = plant->growth;
         const int mineralsBefore = plant->minerals;
 
+        // Делится не вся трава, а только съедобная её часть: сколько бы ртов
+        // ни встало на клетку, низ куртины они не возьмут (edibleGrowth,
+        // core/Body.hpp). Крупицы белка при этом по-прежнему считаются от
+        // ПОЛНОЙ развитости — белок сидит во всём растении, и съевший
+        // половину травы получает половину её крупиц, а не половину крупиц
+        // съедобной части.
+        const int edible = edibleGrowth(growthBefore);
+        if (edible <= 0) {
+            n = m;
+            continue;
+        }
+
         // Крупицы белка делятся между едоками целочисленно и без остатка:
         // каждому достаётся столько, сколько причитается на всё съеденное
         // им И теми, кто был до него, минус уже розданное. Накопителя доли
@@ -1141,14 +1157,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         int eatenTotal = 0;
         int releasedTotal = 0;
         for (std::size_t k = n; k < m; ++k) {
-            const int eaten = shareOf(bites[k].want, growthBefore, demand);
+            const int eaten = shareOf(bites[k].want, edible, demand);
             if (eaten <= 0) {
                 continue;
             }
             auto& state = *animals[static_cast<std::size_t>(bites[k].claimant)].state;
             const auto& genome = *animals[static_cast<std::size_t>(bites[k].claimant)].genome;
 
-            feedBody(state, genome, eaten);
+            feedBody(state, genome, eaten, kEnergyPerGrass);
             eatenTotal += eaten;
 
             // Крупицы белка достаются едоку целыми: сколько причитается на
@@ -1204,7 +1220,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             auto& state = *animals[static_cast<std::size_t>(meals[k].claimant)].state;
             const auto& genome = *animals[static_cast<std::size_t>(meals[k].claimant)].genome;
 
-            feedBody(state, genome, eaten);
+            feedBody(state, genome, eaten, kEnergyPerBiomass);
 
             const int meatNow = carcass->meat;
             carcass->meat = std::max(0, carcass->meat - eaten);
@@ -1483,6 +1499,8 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kStepEnergy", kStepEnergy});
     out.push_back({g, "kDrinkRate", kDrinkRate});
     out.push_back({g, "kMinBiteGrowth", kMinBiteGrowth});
+    out.push_back({g, "kGrazeLeave", kGrazeLeave});
+    out.push_back({g, "kEnergyPerGrass", kEnergyPerGrass});
     out.push_back({g, "kMinBiteMeat", kMinBiteMeat});
     out.push_back({g, "kDungPeriod", static_cast<float>(kDungPeriod)});
     out.push_back({g, "kDungDrop", static_cast<float>(kDungDrop)});

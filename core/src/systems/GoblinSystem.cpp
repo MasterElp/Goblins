@@ -542,7 +542,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 if (goblin.hands->carried.of(ResourceKind::Food) > 0) {
                     const Portion bite =
                         takeFromHands(*goblin.hands, ResourceKind::Food, genome.biteSize * size / kFull);
-                    feedBody(state, genome, bite.amount);
+                    feedBody(state, genome, bite.amount, kEnergyPerBiomass);
                     takeProtein(state, genome, bite.minerals);
                     busy = true;
                     break;
@@ -588,7 +588,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // у него на восемь мест (core/Knowledge.hpp), трава растёт
                 // везде, и первая же съеденная травинка вытеснила бы из
                 // памяти ягодник — единственное, к чему стоит возвращаться.
-                if (plantAt[here] != entt::null && plantGrowth[here] > kMinBiteGrowth) {
+                if (plantAt[here] != entt::null && edibleGrowth(plantGrowth[here]) > kMinBiteGrowth) {
                     bites.push_back(
                         ShareIntent{here, static_cast<int>(g), goblin.id, genome.biteSize * size / kFull});
                     busy = true;
@@ -658,7 +658,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 if (!hasTarget) {
                     hasTarget = findNearest(
                                     [&](std::size_t cell, int nx, int ny) {
-                                        return plantAt[cell] != entt::null && plantGrowth[cell] > kMinBiteGrowth &&
+                                        return plantAt[cell] != entt::null &&
+                                               edibleGrowth(plantGrowth[cell]) > kMinBiteGrowth &&
                                                standable(nx, ny);
                                     },
                                     targetX, targetY) >= 0;
@@ -1071,17 +1072,27 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         const int growthBefore = plant->growth;
         const int mineralsBefore = plant->minerals;
 
+        // Съедобна не вся трава, а только верх куртины (edibleGrowth,
+        // core/Body.hpp) — тот же закон, по которому её ест стадо. Белок
+        // при этом считается от полной развитости: он сидит во всём
+        // растении, а не в одном верху.
+        const int edible = edibleGrowth(growthBefore);
+        if (edible <= 0) {
+            n = m;
+            continue;
+        }
+
         int eatenTotal = 0;
         int releasedTotal = 0;
         for (std::size_t k = n; k < m; ++k) {
-            const int eaten = shareOf(bites[k].want, growthBefore, demand);
+            const int eaten = shareOf(bites[k].want, edible, demand);
             if (eaten <= 0) {
                 continue;
             }
             auto& state = *goblins[static_cast<std::size_t>(bites[k].claimant)].state;
             const auto& genome = *goblins[static_cast<std::size_t>(bites[k].claimant)].genome;
 
-            feedBody(state, genome, eaten);
+            feedBody(state, genome, eaten, kEnergyPerGrass);
             eatenTotal += eaten;
 
             const int owed =
@@ -1156,7 +1167,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 }
                 continue;
             }
-            feedBody(state, genome, picked.amount);
+            feedBody(state, genome, picked.amount, kEnergyPerBiomass);
             takeProtein(state, genome, picked.minerals);
         }
         n = m;
@@ -1192,7 +1203,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             const auto& genome = *goblins[static_cast<std::size_t>(scoops[k].claimant)].genome;
 
             const Portion got = takeFromStore(*store, ResourceKind::Food, share);
-            feedBody(state, genome, got.amount);
+            feedBody(state, genome, got.amount, kEnergyPerBiomass);
             takeProtein(state, genome, got.minerals);
         }
         n = m;
@@ -1342,7 +1353,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             auto& state = *goblins[static_cast<std::size_t>(meals[k].claimant)].state;
             const auto& genome = *goblins[static_cast<std::size_t>(meals[k].claimant)].genome;
 
-            feedBody(state, genome, eaten);
+            feedBody(state, genome, eaten, kEnergyPerBiomass);
 
             const int meatNow = carcass->meat;
             carcass->meat = std::max(0, carcass->meat - eaten);
