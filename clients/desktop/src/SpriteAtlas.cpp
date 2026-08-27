@@ -61,6 +61,34 @@ void Sheet::build(const Assets::SpriteSheet& art, std::span<const Palette> palet
     ready_ = true;
 }
 
+Rectangle Baked::source(int palette, int frame) const {
+    const int index = frame < 0 || frame >= static_cast<int>(frames.size()) ? 0 : frame;
+    return sheet.source(palette, frames.empty() ? 0 : frames[static_cast<std::size_t>(index)]);
+}
+
+Baked bake(const std::string& art, std::span<const Palette> palettes, std::span<const char* const> frameNames) {
+    Baked out;
+    out.frames.assign(frameNames.size(), -1);
+
+    const Assets::SpriteSheet& picture = Assets::sprites(art);
+    if (picture.empty()) {
+        return out;
+    }
+    out.sheet.build(picture, palettes);
+    if (!out.sheet.ready()) {
+        return out;
+    }
+
+    out.complete = true;
+    for (std::size_t i = 0; i < frameNames.size(); ++i) {
+        out.frames[i] = picture.frameIndex(frameNames[i]);
+        if (out.frames[i] < 0) {
+            out.complete = false;
+        }
+    }
+    return out;
+}
+
 Rectangle Sheet::source(int palette, int frame) const {
     if (!ready_) {
         return Rectangle{0, 0, 0, 0};

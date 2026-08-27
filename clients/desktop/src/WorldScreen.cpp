@@ -12,6 +12,7 @@
 #include <raygui.h>
 #include <raylib.h>
 
+#include "BuildSprites.hpp"
 #include "ConstantsOverlay.hpp"
 #include "GenomeGraph.hpp"
 #include "InfoPanel.hpp"
@@ -712,18 +713,34 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                           std::max(1, tileSize - 2 * inset), std::max(1, tileSize - 2 * inset), boulderColor);
         }
 
-        // Деревья — не тексель карты, а фигура поверх неё: тонкий
-        // вертикальный прямоугольник, воткнутый в свою клетку и выходящий
-        // на клетку выше. Клеткой дерево не выражается — оно из неё торчит,
-        // и в этом вся разница между ним и травой: трава есть свойство
-        // земли, дерево на земле стоит.
+        // Всё, что на клетке СТОИТ, — деревья и постройки, — одним обходом
+        // по строкам сверху вниз.
         //
-        // Обход по строкам сверху вниз, и это не всё равно: дерево из
-        // нижней строки заходит на верхнюю, и рисоваться оно должно ПОВЕРХ
-        // тамошнего — иначе роща на склоне выглядела бы вывернутой
-        // наизнанку. Нижняя граница обхода на строку больше видимой ровно
-        // поэтому же.
-        if (showPlants && !snapshot.treeSpeciesAt.empty()) {
+        // Клеткой ни то, ни другое не выражается: они из неё торчат вверх, и
+        // в этом вся разница между деревом и травой, между навесом и
+        // утоптанной землёй. Трава и утоптанность — свойства земли, их место
+        // в текстуре карты; дерево и навес на земле стоят.
+        //
+        // Обход по строкам сверху вниз, и это не всё равно: стоящее в нижней
+        // строке заходит на верхнюю и рисоваться должно ПОВЕРХ тамошнего —
+        // иначе роща на склоне выглядела бы вывернутой наизнанку. Нижняя
+        // граница обхода на строку больше видимой ровно поэтому же.
+        //
+        // Обход ОДИН на оба, и это не мелочь: двумя проходами всякий навес
+        // оказался бы либо над всяким деревом, либо под всяким, а глубина
+        // здесь задаётся строкой, а не тем, чем предмет является.
+        const bool drawTrees = showPlants && !snapshot.treeSpeciesAt.empty();
+        // Рисунок постройки — те же шестнадцать пикселей на клетку, что и у
+        // дерева, и запасного пути у него нет: на мелком масштабе постройка
+        // остаётся тем, чем она нарисована в самой текстуре карты, — оттенком
+        // клетки (TileColors::canopy). Тот же предмет, изображённый настолько
+        // подробно, насколько его видно.
+        const std::size_t cellCount =
+            static_cast<std::size_t>(snapshot.areaWidth) * static_cast<std::size_t>(snapshot.areaHeight);
+        const bool drawBuildings = showGoblins && tileSize >= 6 && BuildSprites::ready() &&
+                                   snapshot.canopy.size() >= cellCount && snapshot.bedding.size() >= cellCount &&
+                                   snapshot.site.size() >= cellCount;
+        if (drawTrees || drawBuildings) {
             const int firstX = std::max(0, static_cast<int>(std::floor(viewX / tileSizeF)));
             const int lastX = std::min(snapshot.areaWidth - 1,
                                         static_cast<int>(std::floor((viewX + viewportW) / tileSizeF)));
@@ -743,22 +760,59 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             // клетки, и один и тот же миг для всех деревьев кадра —
             // единственное, что тут обязано совпадать.
             const double now = GetTime();
+            // Место рисунка: своя клетка и клетка над ней. Одно и то же у
+            // дерева и у постройки — обе оттуда торчат.
+            const auto standingAt = [&](float screenX, float screenY) {
+                return Rectangle{screenX, screenY - tileSizeF, tileSizeF, tileSizeF * 2.0f};
+            };
             for (int y = firstY; y <= lastY; ++y) {
                 for (int x = firstX; x <= lastX; ++x) {
                     const std::size_t cell = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
-                    if (cell >= snapshot.treeSpeciesAt.size() || snapshot.treeSpeciesAt[cell] < 0) {
+                    const float screenX = static_cast<float>(x) * tileSizeF - viewX;
+                    const float screenY = static_cast<float>(y) * tileSizeF - viewY + kHudHeight;
+
+                    // Постройки — снизу вверх в том же порядке, в каком они
+                    // лежат на самом деле: подстилка на земле, замысел и
+                    // принесённый материал рядом с ней, навес над всем этим.
+                    // Тот же порядок, что и у оттенков в текстуре карты
+                    // (MapTexture), и это не совпадение: сверху карты и с
+                    // высоты глаза видно одно и то же место.
+                    if (drawBuildings) {
+                        if (snapshot.bedding[cell] > 0.0f) {
+                            DrawTexturePro(BuildSprites::atlas(),
+                                           BuildSprites::bedding(BuildSprites::stageOf(snapshot.bedding[cell])),
+                                           standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
+                        }
+                        if (snapshot.site[cell] > 0) {
+                            DrawTexturePro(BuildSprites::atlas(), BuildSprites::site(snapshot.site[cell]),
+                                           standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
+                            // Куча принесённого — только на площадке: в
+                            // готовой постройке материала не лежит, он в неё
+                            // и ушёл. Пустая площадка от полной отличается
+                            // именно этим, и по карте должно быть видно, чего
+                            // стройке не хватает — рук или веток.
+                            if (cell < snapshot.siteMaterial.size() && snapshot.siteMaterial[cell] > 0) {
+                                DrawTexturePro(BuildSprites::atlas(), BuildSprites::material(),
+                                               standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
+                            }
+                        }
+                        if (snapshot.canopy[cell] > 0.0f) {
+                            DrawTexturePro(BuildSprites::atlas(),
+                                           BuildSprites::canopy(BuildSprites::stageOf(snapshot.canopy[cell])),
+                                           standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
+                        }
+                    }
+
+                    if (!drawTrees || cell >= snapshot.treeSpeciesAt.size() || snapshot.treeSpeciesAt[cell] < 0) {
                         continue;
                     }
                     const int species = snapshot.treeSpeciesAt[cell];
                     const float growth = snapshot.plantGrowth[cell];
-                    const float screenX = static_cast<float>(x) * tileSizeF - viewX;
-                    const float screenY = static_cast<float>(y) * tileSizeF - viewY + kHudHeight;
                     if (drawSprites) {
                         DrawTexturePro(TreeSprites::atlas(),
                                        TreeSprites::source(species, TreeSprites::stageOf(growth),
                                                             TreeSprites::frameOf(x, y, now)),
-                                       Rectangle{screenX, screenY - tileSizeF, tileSizeF, tileSizeF * 2.0f},
-                                       Vector2{0, 0}, 0.0f, WHITE);
+                                       standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
                     } else {
                         DrawRectangle(static_cast<int>(screenX) + (tileSize - trunkWidth) / 2,
                                       static_cast<int>(screenY) - tileSize, trunkWidth, trunkHeight,
@@ -894,6 +948,12 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     color = Color{90, 160, 230, 255};
                 } else if (known.kind == "rest") {
                     color = Color{225, 190, 100, 255};
+                } else if (known.kind == "work") {
+                    // Тот же холодный цвет, каким помечена площадка и на
+                    // карте, и на рисунке (TileColors::site, BuildSprites):
+                    // недоделанное место должно узнаваться одним цветом
+                    // всюду, где о нём заходит речь.
+                    color = Color{130, 165, 190, 255};
                 }
                 color.a = static_cast<unsigned char>(70 + std::clamp(known.strength, 0, 100) * 170 / 100);
                 const float centerX = screenX + tileSizeF * 0.5f;

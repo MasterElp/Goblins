@@ -9,11 +9,16 @@
 #include <ixwebsocket/IXNetSystem.h>
 #include <nlohmann/json.hpp>
 
+#include "core/Body.hpp"
+#include "core/Build.hpp"
+#include "core/Carry.hpp"
 #include "core/Hunting.hpp"
+#include "core/Knowledge.hpp"
 #include "core/Mating.hpp"
 #include "core/Needs.hpp"
 #include "core/Rest.hpp"
 #include "core/Random.hpp"
+#include "core/Walk.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
@@ -105,6 +110,7 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     canopy.assign(count, 0);
     bedding.assign(count, 0);
     site.assign(count, 0);
+    siteMaterial.assign(count, 0);
     berries.assign(count, 0);
     // -1 — клетка пуста: растение это Entity, и его отсутствие в плотном
     // массиве выражается значением-заглушкой. Семена — отдельным слоем и
@@ -322,7 +328,13 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
 
     registry.view<const PositionComponent, const SiteComponent>().each(
         [&](const PositionComponent& pos, const SiteComponent& tileSite) {
-            out.site[static_cast<std::size_t>(pos.y) * width + pos.x] = static_cast<int>(tileSite.kind);
+            const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
+            out.site[i] = static_cast<int>(tileSite.kind);
+            // Одной меркой, тем же законом, каким её считает работа
+            // (core/Build.hpp): ветка стоит трёх соломин, и площадка с
+            // охапкой веток обеспечена втрое лучше площадки с той же горстью
+            // травы.
+            out.siteMaterial[i] = materialStrength(tileSite.straw, tileSite.twigs);
         });
 
     // Падаль — такое же состояние тайла, как перегной, и уходит таким же
@@ -887,6 +899,169 @@ std::optional<RestPlace> restPlaceAt(const World& world, int x, int y) {
     return std::nullopt;
 }
 
+// Что лежит под ногами гоблина из того, чем решается его занятие. Читается
+// прямо из мира и по клетке за раз — как и restPlaceAt, и по той же причине:
+// наблюдателю нужно то же самое, что и системе тика, но про одного
+// выбранного, а не про всю Область.
+struct GoblinPlace {
+    int carcass = 0;
+    int store = 0;
+    int berries = 0;
+    int grassGrowth = 0;
+    int treeGrowth = 0;
+    // Постройки и замысел на этой же клетке. Прочность нужна не сама по себе,
+    // а чтобы сказать, сколько работы осталось: "готово / не готово" в мире
+    // нет, есть число (BuildingComponent).
+    int canopy = 0;
+    int bedding = 0;
+    bool site = false;
+    BuildKind siteKind = BuildKind::None;
+    int siteStraw = 0;
+    int siteTwigs = 0;
+    // Вода на своей или любой соседней клетке: пьют и с той, и с другой —
+    // гоблин стоит на берегу, а в воду шагнуть не может (см. GoblinSystem).
+    bool waterNear = false;
+};
+
+GoblinPlace goblinPlaceAt(const World& world, int x, int y) {
+    GoblinPlace place;
+    if (!world.area().inBounds(x, y)) {
+        return place;
+    }
+    const auto& registry = world.registry();
+    for (const auto entity : world.area().cellAt(x, y).entities) {
+        if (registry.all_of<SoilComponent>(entity)) {
+            if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
+                place.carcass = carcass->meat;
+            }
+            if (const auto* store = registry.try_get<const StoreComponent>(entity)) {
+                place.store = store->food;
+            }
+            if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
+                place.canopy = building->canopy;
+                place.bedding = building->bedding;
+            }
+            if (const auto* site = registry.try_get<const SiteComponent>(entity)) {
+                place.site = true;
+                place.siteKind = site->kind;
+                place.siteStraw = site->straw;
+                place.siteTwigs = site->twigs;
+            }
+            continue;
+        }
+        if (const auto* plant = registry.try_get<const PlantComponent>(entity)) {
+            // Род растения — одной функцией на весь проект (core/PlantKind.hpp):
+            // трава кормит и идёт на солому, дерево даёт ветки, куст — ягоды, и
+            // спутать их значило бы приписать гоблину не то занятие.
+            switch (plantKindOf(registry, entity)) {
+                case PlantKind::Grass: place.grassGrowth = plant->growth; break;
+                case PlantKind::Tree: place.treeGrowth = plant->growth; break;
+                case PlantKind::Bush:
+                    if (const auto* berries = registry.try_get<const BerryComponent>(entity)) {
+                        place.berries = berries->berries;
+                    }
+                    break;
+            }
+        }
+    }
+
+    place.waterNear = tileFactsAt(world, x, y).water > 0;
+    for (int dir = 0; dir < 8 && !place.waterNear; ++dir) {
+        place.waterNear = tileFactsAt(world, x + kWalkX[dir], y + kWalkY[dir]).water > 0;
+    }
+    return place;
+}
+
+// Чем гоблин занят прямо сейчас — одной строкой, какой её увидел бы
+// смотрящий со стороны.
+//
+// В мире этого не записано, и записывать не стоит: желание лежит в
+// компоненте, а вот что именно из него вышло в прошедшем тике, нигде не
+// хранится, и заводить ради показа поле состояния мира — платить не по
+// товару. Поэтому строка собирается из ФАКТОВ на клетке — из тех же самых, по
+// которым GoblinSystem выбирает действие, и В ТОМ ЖЕ ПОРЯДКЕ.
+//
+// Порядок здесь поэтому не украшение: разойдись он с системой — и карточка
+// станет рассказывать про другого гоблина. Меняется решение там — меняется
+// строка здесь. Цена та же, что у нарисованной дороги зверя (appendRoad), и
+// заплачена она за то же самое: показывать то, по чему принято решение, а не
+// похожее на него.
+//
+// Строкой, а не числом-кодом: клиент печатает её ровно так же, как печатает
+// имя желания, и не знает, какие занятия бывают (07_TechStack.md, п.6).
+const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const CarriedComponent* hands,
+                           int size, int restQuality, bool atHome) {
+    const int food = hands != nullptr ? hands->food : 0;
+    const int material = hands != nullptr ? hands->straw + hands->twigs : 0;
+    const bool full = hands != nullptr && carryRoom(*hands, size) <= 0;
+
+    switch (desire) {
+        case GoblinDesire::Food:
+            // Еда в руках раньше всего остального — она уже в руках.
+            if (food > 0) {
+                return "eating from its hands";
+            }
+            if (place.store > kMinBiteGrowth) {
+                return "eating from the heap";
+            }
+            if (place.carcass > kMinBiteMeat) {
+                return "eating carrion";
+            }
+            if (place.berries > 0) {
+                return "picking berries";
+            }
+            if (place.grassGrowth > kMinBiteGrowth) {
+                return "grazing";
+            }
+            return "looking for food";
+        case GoblinDesire::Water:
+            return place.waterNear ? "drinking" : "walking to water";
+        case GoblinDesire::Rest:
+            // Ложится он не там, где хочет, а там, где место годно: порог
+            // один и тот же и здесь, и в решении (core/Rest.hpp).
+            return restQuality >= kRestGood ? "resting here" : "walking to a place to sleep";
+        case GoblinDesire::Mate:
+            return "looking for a mate";
+        case GoblinDesire::Haul:
+            if (full) {
+                return atHome ? "adding to the heap" : "carrying the load home";
+            }
+            if (place.berries > 0) {
+                return "picking berries for the heap";
+            }
+            return "walking to the berries";
+        case GoblinDesire::Build:
+            if (place.site) {
+                if (materialStrength(place.siteStraw, place.siteTwigs) >= kMaterialPerWork) {
+                    return place.siteKind == BuildKind::Canopy ? "building the canopy" : "laying the bedding";
+                }
+                if (material > 0) {
+                    return "unloading material at the site";
+                }
+                // Не беда и не ошибка, а обычное дело: принесут ещё. Ради
+                // этой строки слой "site_material" и заведён — стоящая
+                // стройка выглядит точно так же, как идущая.
+                return "the site is out of material";
+            }
+            if (material > 0) {
+                return "carrying material to the site";
+            }
+            if (full) {
+                return "carrying the load to the site";
+            }
+            if (place.treeGrowth > kHarvestMinGrowth) {
+                return "breaking twigs";
+            }
+            if (place.grassGrowth > kHarvestMinGrowth) {
+                return "cutting straw";
+            }
+            return "looking for material";
+        case GoblinDesire::Idle:
+            break;
+    }
+    return "wandering";
+}
+
 // Геном — по таблице черт своей диеты, а не полем за полем: новая черта
 // уедет клиенту сама, как это уже сделано для архетипов видов.
 template <typename Traits, typename Genome>
@@ -1035,6 +1210,47 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                                                     {"thirst", thirstOf(body, genome)},
                                                     {"fatigue", own.fatigue},
                                                     {"mating", desire.mating}}));
+
+            // Место под ногами и то, чем гоблин на нём занят. Обе вещи об
+            // одном: карточка обязана отвечать на вопрос "почему он тут
+            // стоит", а не только "сколько в нём чего".
+            const GoblinPlace place = goblinPlaceAt(world_, position.x, position.y);
+            const auto& mind = registry.get<const KnowledgeComponent>(entity);
+            const auto* home = recall(mind, PlaceKind::Rest, position.x, position.y);
+            const std::optional<RestPlace> restHere = restPlaceAt(world_, position.x, position.y);
+            const int restQuality = restHere ? restQualityOf(*restHere) : 0;
+            watched["doing"] =
+                goblinActivity(desire.current, place, hands, bodySize(body.growth), restQuality,
+                                home != nullptr && home->x == position.x && home->y == position.y);
+
+            // Годность места под ногами — числом рядом с порогом, по которому
+            // мир и решает, ложиться ли здесь. Порог рядом со значением, а не
+            // в оверлее констант: без него число ничего не говорит, а с ним
+            // отвечает на весь вопрос сразу.
+            groups.push_back(makeGroup("Place", {{"rest_here", restQuality},
+                                                  {"rest_good", kRestGood},
+                                                  {"canopy", place.canopy},
+                                                  {"bedding", place.bedding}}));
+
+            // Площадка под ногами — только когда она есть: у стоящего в чистом
+            // поле группа была бы строкой нулей ни о чём. Работа и материал
+            // считаются той же ценой, какой их тратит сам мир
+            // (core/Build.hpp, core/Work.hpp), — иначе карточка обещала бы
+            // одно, а стройка требовала другого.
+            if (place.site) {
+                const int condition = place.siteKind == BuildKind::Canopy ? place.canopy : place.bedding;
+                const int workLeft =
+                    (kFull - condition) * workCost(buildWorkCost(place.siteKind)) / kFull;
+                groups.push_back(
+                    makeGroup(place.siteKind == BuildKind::Canopy ? "Site (canopy)" : "Site (bedding)",
+                              {{"condition", condition},
+                               {"straw", place.siteStraw},
+                               {"twigs", place.siteTwigs},
+                               {"material", materialStrength(place.siteStraw, place.siteTwigs)},
+                               {"work_left", workLeft},
+                               {"material_left", workLeft * kMaterialPerWork}}));
+            }
+
             groups.push_back(makeGenomeGroup(goblinTraits(), genome));
 
             // Пригодность округи для отдыха — единственное, что видно не
@@ -1084,7 +1300,6 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             // гоблина каждый тик — это дорого, а нужны они по одному, у того,
             // за кем следят. Ровно как голод и жажда, которые тоже живут
             // только здесь.
-            const auto& mind = registry.get<const KnowledgeComponent>(entity);
             auto knownJson = nlohmann::json::array();
             for (const auto& place : mind.places) {
                 if (place.kind == PlaceKind::None || place.strength <= 0) {
@@ -1329,6 +1544,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["layers"]["canopy"] = layers.canopy;
     message["layers"]["bedding"] = layers.bedding;
     message["layers"]["site"] = layers.site;
+    message["layers"]["site_material"] = layers.siteMaterial;
     message["layers"]["moisture"] = layers.moisture;
     message["layers"]["minerals"] = layers.minerals;
     message["layers"]["height"] = layers.terrainHeight;
@@ -1367,6 +1583,7 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
         {"canopy", {&previous.canopy, &current.canopy}},
         {"bedding", {&previous.bedding, &current.bedding}},
         {"site", {&previous.site, &current.site}},
+        {"site_material", {&previous.siteMaterial, &current.siteMaterial}},
         {"minerals", {&previous.minerals, &current.minerals}},
         {"height", {&previous.terrainHeight, &current.terrainHeight}},
         {"water", {&previous.water, &current.water}},

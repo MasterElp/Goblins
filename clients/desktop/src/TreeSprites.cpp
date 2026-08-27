@@ -42,46 +42,18 @@ SpriteAtlas::Palette paletteOf(int species) {
             SpriteAtlas::Ink{'T', kBarkLit}, SpriteAtlas::Ink{'t', kBark}};
 }
 
-struct Baked {
-    SpriteAtlas::Sheet sheet;
-    // Номера кадров в атласе по нашему порядку возрастов. -1 — такого
-    // кадра в ресурсе нет, и рисовать дерево нечем.
-    std::array<int, kStages * kFrames> frames{};
-    bool complete = false;
-};
-
-const Baked& baked() {
-    // Печётся при первом обращении: нужен уже созданный GL-контекст.
-    static const Baked result = [] {
-        Baked out;
-        out.frames.fill(-1);
-
-        const Assets::SpriteSheet& art = Assets::sprites("tree");
-        if (art.empty()) {
-            return out;
-        }
-
+// Печётся при первом обращении: нужен уже созданный GL-контекст. Не
+// хватает хоть одного кадра — не рисуем ничем (SpriteAtlas::bake): дерево
+// без своего возраста хуже, чем дерево прямоугольником, потому что
+// выглядит как дерево не того возраста.
+const SpriteAtlas::Baked& baked() {
+    static const SpriteAtlas::Baked result = [] {
         std::vector<SpriteAtlas::Palette> palettes;
         palettes.reserve(TileColors::kTreeSpeciesCount);
         for (int species = 0; species < TileColors::kTreeSpeciesCount; ++species) {
             palettes.push_back(paletteOf(species));
         }
-        out.sheet.build(art, palettes);
-        if (!out.sheet.ready()) {
-            return out;
-        }
-
-        out.complete = true;
-        for (std::size_t i = 0; i < kFrameNames.size(); ++i) {
-            out.frames[i] = art.frameIndex(kFrameNames[i]);
-            if (out.frames[i] < 0) {
-                // Не хватает хоть одного кадра — не рисуем ничем: дерево
-                // без своего возраста хуже, чем дерево прямоугольником,
-                // потому что выглядит как дерево не того возраста.
-                out.complete = false;
-            }
-        }
-        return out;
+        return SpriteAtlas::bake("tree", palettes, kFrameNames);
     }();
     return result;
 }
@@ -97,10 +69,9 @@ const Texture2D& atlas() {
 }
 
 Rectangle source(int species, int stage, int frame) {
-    const auto& data = baked();
     const int clampedStage = stage < 0 ? 0 : stage % kStages;
     const int clampedFrame = frame < 0 ? 0 : frame % kFrames;
-    return data.sheet.source(species, data.frames[static_cast<std::size_t>(clampedStage * kFrames + clampedFrame)]);
+    return baked().source(species, clampedStage * kFrames + clampedFrame);
 }
 
 int stageOf(float growth) {

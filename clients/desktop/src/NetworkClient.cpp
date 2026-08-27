@@ -506,6 +506,7 @@ void NetworkClient::applyWatched(const nlohmann::json& message) {
     parsed.diet = watched.value("diet", std::string{});
     parsed.sex = watched.value("sex", std::string{});
     parsed.desire = watched.value("desire", std::string{});
+    parsed.doing = watched.value("doing", std::string{});
 
     if (watched.contains("groups") && watched["groups"].is_array()) {
         for (const auto& group : watched["groups"]) {
@@ -650,6 +651,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.canopy = decodeScaled(layers, "canopy", cellCount, kFromHundredths);
         working_.bedding = decodeScaled(layers, "bedding", cellCount, kFromHundredths);
         working_.site = decodeInts(layers, "site", cellCount, 0);
+        working_.siteMaterial = decodeInts(layers, "site_material", cellCount, 0);
         working_.carcass = decodeScaled(layers, "carcass", cellCount, kFromHundredths);
 
         // Виды растений: два списка, у травы и у деревьев своя нумерация.
@@ -772,6 +774,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyChangedCells(json, "canopy", working_.canopy, toFraction);
         applyChangedCells(json, "bedding", working_.bedding, toFraction);
         applyChangedCells(json, "site", working_.site, [](int raw) { return raw; });
+        applyChangedCells(json, "site_material", working_.siteMaterial, [](int raw) { return raw; });
         // Поголовье — изменениями, как и слои, только правится не клетка,
         // а животное (см. протокол в server/NetworkServer.hpp).
         applyAnimalChanges(json);

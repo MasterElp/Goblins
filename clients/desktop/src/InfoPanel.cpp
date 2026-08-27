@@ -25,6 +25,9 @@ const Color kGroupColor{150, 210, 255, 255};
 const Color kNameColor{195, 195, 200, 255};
 const Color kValueColor{245, 245, 245, 255};
 const Color kMutedColor{135, 135, 142, 255};
+// Чем занят — своим цветом: эту строку читают первой, и теряться среди
+// имён и чисел она не должна.
+const Color kDoingColor{170, 220, 160, 255};
 
 // Значения тут разного порядка — от 0.0002 (расход воды за тик) до 9400
 // (предельный возраст). Один общий формат либо съел бы малые в ноль, либо
@@ -164,15 +167,6 @@ void drawTileGroup(const WorldState& state, ColumnWriter& writer, int x, int y) 
     if (index < state.store.size() && state.store[index] > 0) {
         writer.line("store", TextFormat("%d", state.store[index]));
     }
-    if (index < state.canopy.size() && state.canopy[index] > 0.0f) {
-        writer.line("canopy", formatValue(state.canopy[index]));
-    }
-    if (index < state.bedding.size() && state.bedding[index] > 0.0f) {
-        writer.line("bedding", formatValue(state.bedding[index]));
-    }
-    if (index < state.site.size() && state.site[index] > 0) {
-        writer.line("building", state.site[index] == 1 ? "canopy (planned)" : "bedding (planned)");
-    }
     writer.line("minerals", formatValue(static_cast<float>(state.minerals[index])));
     writer.line("height", formatValue(state.height[index]));
     if (state.waterDepth[index] > 0.0f) {
@@ -213,6 +207,75 @@ void drawTileGroup(const WorldState& state, ColumnWriter& writer, int x, int y) 
     }
     if (animalsHere > 0) {
         writer.line("animals here", TextFormat("%d", animalsHere));
+    }
+}
+
+// Что на клетке ПОСТРОЕНО — своей группой, а не строчками среди свойств
+// земли, рядом с влажностью и камнями. Постройка землёй не является: её
+// сделали руками, она ветшает, и её подновляют — а вопрос к ней всегда
+// особый, крепка ли она и много ли осталось.
+//
+// Прочность процентами, а не долей: "навес 62%" и есть ответ мира, который
+// слов "готово" и "не готово" не знает вовсе (BuildingComponent) — половина
+// навеса укрывает вполовину.
+void drawBuildingGroup(const WorldState& state, ColumnWriter& writer, int x, int y) {
+    if (x < 0 || y < 0 || x >= state.areaWidth || y >= state.areaHeight) {
+        return;
+    }
+    const std::size_t index = static_cast<std::size_t>(y) * state.areaWidth + x;
+    const bool canopy = index < state.canopy.size() && state.canopy[index] > 0.0f;
+    const bool bedding = index < state.bedding.size() && state.bedding[index] > 0.0f;
+    const bool site = index < state.site.size() && state.site[index] > 0;
+    if (!canopy && !bedding && !site) {
+        return;
+    }
+
+    writer.group("Building");
+    if (canopy) {
+        writer.line("canopy", TextFormat("%.0f%%", state.canopy[index] * 100.0f));
+    }
+    if (bedding) {
+        writer.line("bedding", TextFormat("%.0f%%", state.bedding[index] * 100.0f));
+    }
+    if (site) {
+        writer.line("planned", state.site[index] == 1 ? "canopy" : "bedding");
+        // Материал на площадке — всегда, пока есть замысел, и нулём тоже.
+        // Ноль значит "работать нечем", и это самое частое, из-за чего
+        // стройка стоит; прячась при нуле, строка прятала бы ровно тот
+        // случай, ради которого её и читают.
+        const int material = index < state.siteMaterial.size() ? state.siteMaterial[index] : 0;
+        writer.line("material", TextFormat("%d", material), material > 0 ? kValueColor : kMutedColor);
+    }
+}
+
+// Что гоблин ПОМНИТ — списком мест, а не только кольцами на карте.
+//
+// Кольца отвечают "куда он пойдёт", список — "чем это место было ему
+// хорошо и насколько твёрдо оно помнится". Второе кольцами не сказать:
+// цвет различает четыре вида мест, а толщина — твёрдость, и читать по ней
+// число нельзя. Между тем именно число объясняет, почему гоблин прошёл
+// мимо ближнего ягодника к дальнему: у дальнего память крепче.
+//
+// Сортировка по твёрдости, а не в порядке ячеек памяти: голова у гоблина
+// на восемь мест (core/Knowledge.hpp), место в ней ничего не значит, а
+// первым читать надо то, что вернее позовёт.
+void drawMemoryGroup(const WorldState& state, ColumnWriter& writer) {
+    if (state.watched.knows.empty()) {
+        return;
+    }
+    std::vector<const WorldState::Watched::Known*> places;
+    places.reserve(state.watched.knows.size());
+    for (const auto& place : state.watched.knows) {
+        places.push_back(&place);
+    }
+    std::sort(places.begin(), places.end(),
+              [](const WorldState::Watched::Known* a, const WorldState::Watched::Known* b) {
+                  return a->strength > b->strength;
+              });
+
+    writer.group("Memory");
+    for (const auto* place : places) {
+        writer.line(place->kind, TextFormat("(%d,%d)  %d%%", place->x, place->y, place->strength));
     }
 }
 
@@ -303,14 +366,39 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
              static_cast<int>(bounds.y) + 2, kFont, target.pinned ? kTitleColor : kMutedColor);
 
     std::string subtitle = TextFormat("at (%d,%d)", tileX, tileY);
+    // Пол, желание, взрослость и целость — одинаково у зверя и у гоблина:
+    // тело у них одно (core/Body.hpp), и разной строки оно не заслуживает.
+    const auto appendBody = [&subtitle](const std::string& sex, const std::string& desire, float growth,
+                                         float health) {
+        subtitle += TextFormat("   %s   -> %s", sex.c_str(), desire.c_str());
+        subtitle += TextFormat("   grown %.0f%%   health %.0f%%", growth * 100.0f, health * 100.0f);
+    };
     if (animal != nullptr) {
-        subtitle += TextFormat("   %s   -> %s", animal->sex.c_str(), animal->desire.c_str());
-        subtitle += TextFormat("   grown %.0f%%   health %.0f%%", animal->growth * 100.0f, animal->health * 100.0f);
+        appendBody(animal->sex, animal->desire, animal->growth, animal->health);
+    }
+    if (goblin != nullptr) {
+        appendBody(goblin->sex, goblin->desire, goblin->growth, goblin->health);
     }
     DrawText(subtitle.c_str(), static_cast<int>(bounds.x), static_cast<int>(bounds.y) + kTitleFont + 4, kFont,
              kMutedColor);
 
-    const float contentTop = bounds.y + kTitleFont + kLineHeight + 8.0f;
+    float contentTop = bounds.y + kTitleFont + kLineHeight + 8.0f;
+
+    // Чем занят — отдельной строкой во всю ширину панели, а не парой в
+    // группе: это фраза, а колонка шириной в двадцать знаков её обрежет на
+    // середине. Желание отвечает "чего он хочет", эта строка — "что он с
+    // этим делает", и второе из первого не выводится: хотеть есть можно и
+    // стоя над кустом, и за полкарты от него.
+    //
+    // Только когда карточка пришла именно про эту цель: между кликом и
+    // ответом сервера в state.watched лежит ещё предыдущий выбранный, и
+    // соврать этой строкой хуже всего — она короткая, заметная, и читают её
+    // первой.
+    if (!state.watched.doing.empty() && watchedMatches(state, target)) {
+        DrawText(state.watched.doing.c_str(), static_cast<int>(bounds.x), static_cast<int>(contentTop), kFont,
+                 kDoingColor);
+        contentTop += kLineHeight;
+    }
     const Rectangle content{bounds.x, contentTop, bounds.width, bounds.height - (contentTop - bounds.y)};
     if (content.height < kLineHeight * 2.0f) {
         return;
@@ -348,10 +436,15 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
                     writer.line(name, formatValue(value));
                 }
             }
+            // Память — последней из карточки существа и только у того, у
+            // кого она есть: у зверя её нет вовсе, и пустой группой это
+            // говорить незачем.
+            drawMemoryGroup(state, writer);
         }
     }
 
     drawTileGroup(state, writer, tileX, tileY);
+    drawBuildingGroup(state, writer, tileX, tileY);
 }
 
 } // namespace InfoPanel

@@ -39,7 +39,7 @@
         "noise_octaves": 5,
         "pond_depth": 2535,
         "rain_amount": 145,
-        "rain_interval_ticks": 272,
+        "rain_interval_ticks": 545,
         "river_count": 3,
         "river_depth": 2600,
         "river_sinuosity": 495,
