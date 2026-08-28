@@ -261,7 +261,21 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           {"humus_decay_period", worldProperties->humusDecayPeriod},
                                           {"plant_random_seed", worldProperties->plantRandomSeed},
                                           {"animal_mutation_rate", worldProperties->animalMutationRate},
-                                          {"animal_random_seed", worldProperties->animalRandomSeed}};
+                                          {"animal_random_seed", worldProperties->animalRandomSeed},
+                                          // Гоблинские мутация и seed прежде терялись при сохранении:
+                                          // мир, загруженный из файла, начинал плодить гоблинов с чужой
+                                          // скоростью изменений и бросать чужой жребий. Заметить это
+                                          // было нечем — гоблин выглядит гоблином.
+                                          {"goblin_mutation_rate", worldProperties->goblinMutationRate},
+                                          {"goblin_random_seed", worldProperties->goblinRandomSeed},
+                                          // Долголетие каждой породы: свойство мира, а не генома, и
+                                          // потому живёт здесь, а не в чертах.
+                                          {"grass_lifespan", worldProperties->grassLifespan},
+                                          {"tree_lifespan", worldProperties->treeLifespan},
+                                          {"bush_lifespan", worldProperties->bushLifespan},
+                                          {"herbivore_lifespan", worldProperties->herbivoreLifespan},
+                                          {"predator_lifespan", worldProperties->predatorLifespan},
+                                          {"goblin_lifespan", worldProperties->goblinLifespan}};
         }
         if (const auto* plantSpecies = registry.try_get<PlantSpeciesComponent>(entity)) {
             auto archetypes = nlohmann::json::array();
@@ -451,6 +465,7 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                  {"protein", animal->protein},
                                  {"dung", animal->dung},
                                  {"health", animal->health},
+                                 {"recovery", animal->recovery},
                                  {"step_progress", animal->stepProgress}};
         }
         if (const auto* genome = registry.try_get<AnimalGenomeComponent>(entity)) {
@@ -579,6 +594,24 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("animal_mutation_rate", 0.06f);
             parsed.worldProperties.animalRandomSeed =
                 record["world_properties"].value("animal_random_seed", 0u);
+            parsed.worldProperties.goblinMutationRate =
+                record["world_properties"].value("goblin_mutation_rate", 60);
+            parsed.worldProperties.goblinRandomSeed =
+                record["world_properties"].value("goblin_random_seed", 0u);
+            // Мир из старого файла жил по геному без множителя — значит его
+            // долголетие равно kFull, а не нынешнему умолчанию. Подставить
+            // сюда десятку значило бы втихую растянуть чужому миру жизнь
+            // вдесятеро при первой же загрузке.
+            parsed.worldProperties.grassLifespan =
+                record["world_properties"].value("grass_lifespan", kFull);
+            parsed.worldProperties.treeLifespan = record["world_properties"].value("tree_lifespan", kFull);
+            parsed.worldProperties.bushLifespan = record["world_properties"].value("bush_lifespan", kFull);
+            parsed.worldProperties.herbivoreLifespan =
+                record["world_properties"].value("herbivore_lifespan", kFull);
+            parsed.worldProperties.predatorLifespan =
+                record["world_properties"].value("predator_lifespan", kFull);
+            parsed.worldProperties.goblinLifespan =
+                record["world_properties"].value("goblin_lifespan", kFull);
         }
         if (record.contains("tree_species") && record["tree_species"].is_array()) {
             parsed.hasTreeSpecies = true;
@@ -791,6 +824,9 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             // У животного из старого файла целости тела нет — ран тогда
             // никто не наносил, значит оно цело.
             parsed.animal.health = animal.value("health", 1.0f);
+            // Мать из старого файла отдохнувшая: поля отдыха там нет, а
+            // выдумывать ей срок неоткуда.
+            parsed.animal.recovery = animal.value("recovery", 0);
             parsed.animal.stepProgress = animal.value("step_progress", 0.0f);
             // Геном обязателен по той же причине, что и у растения:
             // подставить "средний геном" значило бы втихую изменить

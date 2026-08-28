@@ -4,6 +4,7 @@
 #include <cmath>
 #include <span>
 
+#include "core/Body.hpp"
 #include "core/Scale.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
@@ -89,7 +90,8 @@ bool foodInSight(const World& world, int x, int y, int radius) {
 // белка из почвы — у них одинаково.
 template <typename Diet, typename Food>
 void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& species,
-                    std::span<const AnimalTrait> traits, int count, float mutationRate, std::uint64_t& state) {
+                    std::span<const AnimalTrait> traits, int count, float mutationRate, int lifespan,
+                    std::uint64_t& state) {
     if (species.empty() || count <= 0) {
         return;
     }
@@ -152,15 +154,14 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
             // случайный в пределах до первой половины жизни, размер — тот, до
             // которого животное успело бы дорасти к этому возрасту. Иначе оно
             // взрослело, размножалось и умирало синхронными волнами.
-            animal.age =
-                static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maxAge / 2))));
+            animal.age = static_cast<int>(
+                randomBelow(state, static_cast<std::uint64_t>(std::max(1, maxAgeOf(genome, lifespan) / 2))));
             animal.sex = randomBelow(state, 2) == 0 ? Sex::Female : Sex::Male;
-            animal.energy = genome.energyCapacity * kInitialReserveShare / kFull;
-            animal.water = genome.waterCapacity * kInitialReserveShare / kFull;
+            animal.energy = energyCapacityOf(genome) * kInitialReserveShare / kFull;
+            animal.water = waterCapacityOf(genome) * kInitialReserveShare / kFull;
 
-            const int grownTo =
-                genome.maturityAge > 0 ? std::min(kFull, animal.age * kFull / genome.maturityAge) : kFull;
-            const int wanted = (grownTo * genome.proteinNeed + kFull - 1) / kFull;
+            const int grownTo = std::min(kFull, animal.age * kFull / maturityAgeOf(genome, lifespan));
+            const int wanted = (grownTo * proteinNeedOf(genome) + kFull - 1) / kFull;
             // Белок первого поголовья — не из воздуха: ровно столько, сколько
             // есть в клетке, и ровно столько же вернётся в мир падалью.
             //
@@ -175,9 +176,7 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
             }
             animal.protein = std::max(0, wanted);
             soil.minerals -= animal.protein;
-            animal.growth = genome.proteinNeed > 0
-                                 ? std::min(grownTo, animal.protein * kFull / genome.proteinNeed)
-                                 : grownTo;
+            animal.growth = std::min(grownTo, animal.protein * kFull / proteinNeedOf(genome));
 
             // Желания в момент рождения мира — те, что следуют из тела: сытое
             // и напоенное животное ничего не хочет, и первый же тик пересчитает
@@ -221,6 +220,8 @@ void seedAnimals(World& world, const AnimalParams& params, unsigned seed) {
     // тиками (05_Entity.md, п.3).
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.animalMutationRate = params.mutationRate;
+    worldProperties.herbivoreLifespan = params.herbivoreLifespan;
+    worldProperties.predatorLifespan = params.predatorLifespan;
     // Как и у травы: целая настройка мира — дробная доля для раскладов
     // бюджета (core/Scale.hpp).
     const float mutationRate = static_cast<float>(params.mutationRate) / kFull;
@@ -237,9 +238,11 @@ void seedAnimals(World& world, const AnimalParams& params, unsigned seed) {
     // кого охотиться, — значит добыча к этому моменту должна стоять на
     // карте. Та же причина, по которой сам этот этап идёт после травы.
     releaseAnimals<HerbivoreComponent, PlantComponent>(world, speciesComponent.herbivores, herbivoreTraits(),
-                                                        params.herbivoreCount, mutationRate, state);
+                                                        params.herbivoreCount, mutationRate,
+                                                        params.herbivoreLifespan, state);
     releaseAnimals<PredatorComponent, HerbivoreComponent>(world, speciesComponent.predators, predatorTraits(),
-                                                           params.predatorCount, mutationRate, state);
+                                                           params.predatorCount, mutationRate,
+                                                           params.predatorLifespan, state);
 }
 
 

@@ -6,6 +6,7 @@
 #include "core/CommandQueue.hpp"
 #include "core/World.hpp"
 #include "core/components/AnimalComponent.hpp"
+#include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 
@@ -103,8 +104,12 @@ inline void enqueueDeath(CommandQueue& commands, entt::entity entity, int x, int
         // (05_Entity.md, п.5).
         int meat = 0;
         int protein = 0;
-        if (const auto* body = w.registry().try_get<const AnimalComponent>(entity)) {
-            meat = kMeatPerSize * bodySize(body->growth) / kFull;
+        const auto* genome = w.registry().try_get<const AnimalGenomeComponent>(entity);
+        if (const auto* body = w.registry().try_get<const AnimalComponent>(entity); body != nullptr && genome != nullptr) {
+            // Мясо — от размера тела, а размер теперь и от величины вида
+            // тоже: туша лося и туша зайца весят разное, и ровно этим одна
+            // добыча кормит хищника дольше десяти.
+            meat = kMeatPerSize * bodySize(*body, *genome) / kFull;
             // И накопленный белок, и не вышедший навоз: из тела в мир
             // уходит всё, что в нём было.
             protein = body->protein + body->dung;

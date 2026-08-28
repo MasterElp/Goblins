@@ -335,12 +335,12 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         const auto& genome = *goblin.genome;
         auto& desire = *goblin.desire;
 
-        advanceBody(state, genome, tick, goblin.id);
+        advanceBody(state, genome, worldProperties.goblinLifespan, tick, goblin.id);
 
         // Своих бед сверх общего закона у гоблина пока нет: болезни от
         // тесноты он не знает (поселение тесно по сути), зубов на него никто
         // не точит. Поэтому между телом и смертью здесь ничего и не стоит.
-        if (bodyDied(state, genome)) {
+        if (bodyDied(state, genome, worldProperties.goblinLifespan)) {
             enqueueDeath(commands, goblin.entity, goblin.x, goblin.y);
             alive[g] = false;
             continue;
@@ -365,9 +365,14 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         goblin.hunger = hungerOf(state, genome);
         goblin.thirst = thirstOf(state, genome);
 
-        const bool adult = state.age >= genome.maturityAge && state.growth >= kBreedingGrowth;
+        const bool adult = state.age >= maturityAgeOf(genome, worldProperties.goblinLifespan) &&
+                           state.growth >= kBreedingGrowth;
         const bool content = state.health >= kFull && goblin.hunger < kCalmNeed && goblin.thirst < kCalmNeed;
-        if (adult && content) {
+        // Готов ли платить за роды: не отдыхает после прошлых и накопил
+        // крупиц на целого ребёнка. Закон общий со зверем (AnimalSystem):
+        // тело у них одно, и цена потомства у него одна.
+        const bool canBearYoung = state.recovery == 0 && state.protein >= proteinNeedOf(genome);
+        if (adult && content && canBearYoung) {
             desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
         }
         // Дом — вспомненное место отдыха. Спрашивается здесь, до выбора
@@ -407,7 +412,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 building = kBuildUrge;
             }
         }
-        desire.current = chooseGoblinDesire(goblin, adult && content, hasHome, building);
+        desire.current = chooseGoblinDesire(goblin, adult && content && canBearYoung, hasHome, building);
     }
 
     // Возможная пара в том виде, в каком её видно со стороны
@@ -440,7 +445,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         const auto& genome = *goblin.genome;
         auto& desire = *goblin.desire;
         const std::size_t here = index(goblin.x, goblin.y);
-        const int size = bodySize(state.growth);
+        const int size = bodySize(state, genome);
 
         // Случайность собирается из seed мира, номера тика и постоянного
         // идентификатора (core/Random.hpp). Не из координат: клетка меняется
@@ -1027,14 +1032,46 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // траву настолько, чтобы обходить его стороной, а хищника он не
         // видит. Поэтому WalkShy пустой — но он есть, и в него встанет
         // первая же причина держаться подальше.
-        // Седьмое слагаемое шага: по натоптанному идти легче
+        //
+        // А вот тянет его к своим — к ближайшему из своего племени, если тот
+        // дальше kHerdKeep (core/Walk.hpp, WalkHerd). Закон тот же, что у
+        // стада, и признак "свой" тот же по смыслу: у зверя вид, у гоблина
+        // племя. Держаться вместе — свойство живого, а не звериное, и писать
+        // его дважды было бы ошибкой того же рода, что две копии тела.
+        //
+        // Лагерь этому не помеха, а опора: место притяжения (дом, куча,
+        // навес) собирает племя туда, где ему хорошо, а тяга к своим не даёт
+        // разбредаться тем, у кого дома ещё нет.
+        WalkHerd herd;
+        {
+            const int sightCells = std::max(1, genome.perception);
+            int kinDistance = 0;
+            for (std::size_t b = 0; b < goblins.size(); ++b) {
+                if (b == g || !alive[b] || goblins[b].genome->species != genome.species) {
+                    continue;
+                }
+                const int dx = goblins[b].x - goblin.x;
+                const int dy = goblins[b].y - goblin.y;
+                const int distance = dx * dx + dy * dy;
+                if (distance <= kHerdKeep * kHerdKeep || distance > sightCells * sightCells) {
+                    continue;
+                }
+                if (herd.direction >= 0 && distance >= kinDistance) {
+                    continue;
+                }
+                herd = WalkHerd{walkDirectionTo(goblin.x, goblin.y, goblins[b].x, goblins[b].y), kHerdPull};
+                kinDistance = distance;
+            }
+        }
+
+        // Восьмое слагаемое шага: по натоптанному идти легче
         // (core/Walk.hpp). Читается из снимка тика, как и всё остальное,
         // чтобы решения всех гоблинов принимались по одному состоянию мира.
         const auto trodden = [&](int nx, int ny) {
             return world.area().inBounds(nx, ny) ? tiles.trampled[index(nx, ny)] : 0;
         };
         const WalkStep step =
-            chooseStep(*goblin.memory, goblin.x, goblin.y, aim, WalkShy{}, standable, trodden, random);
+            chooseStep(*goblin.memory, goblin.x, goblin.y, aim, WalkShy{}, herd, standable, trodden, random);
         if (!step.moved) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
@@ -1153,7 +1190,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             // занят (см. GoblinDesireComponent). Запасающий не ест.
             if (picker.desire->current == GoblinDesire::Haul) {
                 const Portion taken =
-                    putInHands(*picker.hands, ResourceKind::Food, picked, bodySize(state.growth));
+                    putInHands(*picker.hands, ResourceKind::Food, picked, bodySize(state, genome));
                 // Не влезшее остаётся сорванным и падает под ноги: класть
                 // ягоду обратно на куст мир не умеет, а терять вещество ему
                 // нельзя. Кладётся оно кучей — той же, что у лагеря, и это
@@ -1242,7 +1279,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 continue;
             }
             const Goblin& worker = goblins[static_cast<std::size_t>(harvests[k].claimant)];
-            const int size = bodySize(worker.state->growth);
+            const int size = bodySize(*worker.state, *worker.genome);
             const ResourceKind kind = fromTree ? ResourceKind::Twigs : ResourceKind::Straw;
             const Portion taken = putInHands(*worker.hands, kind, Portion{share, 0}, size);
             plant->growth = std::max(0, plant->growth - taken.amount);
@@ -1380,7 +1417,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         for (std::size_t k = n; k < m; ++k) {
             auto& state = *goblins[static_cast<std::size_t>(drinks[k].claimant)].state;
             const auto& genome = *goblins[static_cast<std::size_t>(drinks[k].claimant)].genome;
-            state.water = std::min(genome.waterCapacity, state.water + drinks[k].want);
+            state.water = std::min(waterCapacityOf(genome), state.water + drinks[k].want);
         }
         n = m;
     }
@@ -1410,7 +1447,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             continue;
         }
         if (auto* soil = registry.try_get<SoilComponent>(tile)) {
-            trampleBy(soil->trampled, bodySize(goblins[s].state->growth));
+            trampleBy(soil->trampled, bodySize(*goblins[s].state, *goblins[s].genome));
         }
     }
 
@@ -1474,18 +1511,20 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // детёнышем. Отец не платит ничего.
         const int givenEnergy = mother.state->energy * kBirthEnergyShare / kFull;
         mother.state->energy -= givenEnergy;
-        child.energy = std::min(givenEnergy, childGenome.energyCapacity);
+        child.energy = std::min(givenEnergy, energyCapacityOf(childGenome));
 
         const int givenWater = mother.state->water * kBirthWaterShare / kFull;
         mother.state->water -= givenWater;
-        child.water = std::min(givenWater, childGenome.waterCapacity);
+        child.water = std::min(givenWater, waterCapacityOf(childGenome));
 
-        const int givenProtein = std::max(0, mother.state->protein / 3);
+        // Белок ребёнку — весь, сколько нужно ему на полный рост, и отдых
+        // матери долей её жизни. Оба закона общие со зверем (AnimalSystem,
+        // п.10): тело у них одно, значит и цена потомства одна.
+        const int givenProtein = std::min(mother.state->protein, proteinNeedOf(childGenome));
         mother.state->protein -= givenProtein;
         child.protein = givenProtein;
-        child.growth = childGenome.proteinNeed > 0
-                            ? std::min(child.growth, child.protein * kFull / childGenome.proteinNeed)
-                            : child.growth;
+        child.growth = std::min(child.growth, child.protein * kFull / proteinNeedOf(childGenome));
+        mother.state->recovery = birthRestOf(*mother.genome, worldProperties.goblinLifespan);
 
         mother.desire->mating = 0;
         father.desire->mating = 0;

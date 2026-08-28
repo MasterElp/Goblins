@@ -3,8 +3,8 @@
         "herbivore_count": 400,
         "herbivore_species": 3,
         "mutation_rate": 146,
-        "predator_count": 20,
-        "predator_species": 2
+        "predator_count": 60,
+        "predator_species": 3
     },
     "area": {
         "height": 130,
@@ -29,7 +29,7 @@
     },
     "port": 9002,
     "saves_dir": "saves",
-    "seed": 747745,
+    "seed": 823043,
     "snapshot_interval_ms": 100,
     "terrain": {
         "feature_size": 254,
@@ -40,7 +40,7 @@
         "pond_depth": 2535,
         "rain_amount": 45,
         "rain_interval_ticks": 446,
-        "river_count": 3,
+        "river_count": 5,
         "river_depth": 2600,
         "river_sinuosity": 495,
         "river_width": 52,
@@ -51,7 +51,7 @@
             "trampling": true
         },
         "water_evaporation_rate": 96,
-        "water_source_count": 7,
+        "water_source_count": 0,
         "water_source_depth": 4014
     },
     "tick_interval_ms": 200

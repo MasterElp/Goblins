@@ -10,6 +10,7 @@
 #include "core/components/SoilComponent.hpp"
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
+#include "core/PlantKind.hpp"
 #include "core/Scale.hpp"
 #include "core/generation/PlantGenetics.hpp"
 #include "core/Diagnostics.hpp"
@@ -67,6 +68,13 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
     // seed'а мира, номера тика и координат клетки.
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.plantMutationRate = params.mutationRate;
+    // Долголетие каждой породы растений. Ставится здесь, на первом
+    // растительном этапе, а не в трёх посевах порознь: это одно свойство
+    // мира из одних параметров, и разложить его по трём местам значило бы
+    // завести три места, где его можно забыть.
+    worldProperties.grassLifespan = params.grassLifespan;
+    worldProperties.treeLifespan = params.treeLifespan;
+    worldProperties.bushLifespan = params.bushLifespan;
     // Расклад бюджета черт дробный — это генерация, а не состояние мира
     // (core/Scale.hpp), поэтому целая настройка переводится в долю здесь.
     const float mutationRate = static_cast<float>(params.mutationRate) / kFull;
@@ -146,7 +154,8 @@ void seedGrass(World& world, const PlantParams& params, unsigned seed) {
         // растение успело бы дорасти к этому возрасту. Иначе весь луг
         // созревал бы и умирал синхронными волнами.
         PlantComponent plant;
-        plant.age = static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maturityAge))));
+        plant.age = static_cast<int>(randomBelow(
+            state, static_cast<std::uint64_t>(std::max(1, plantMaturityAgeOf(genome, params.grassLifespan)))));
 
         plant.growth = std::min(kFull, plant.age * genome.growthRate);
 

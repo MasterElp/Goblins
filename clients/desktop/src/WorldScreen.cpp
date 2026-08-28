@@ -854,10 +854,20 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 }
                 const Color color = animal.predator ? TileColors::predatorSpecies(animal.species)
                                                      : TileColors::herbivoreSpecies(animal.species);
-                // Размер значка — от развитости: детёныш мельче взрослого,
-                // как и на самом деле; хищник крупнее добычи.
+                // Размер значка — от величины тела: и от развитости
+                // (детёныш мельче взрослого), и от размера вида (заяц мельче
+                // лося). Второе и есть то, ради чего размер заводился: пока
+                // все взрослые рисовались одинаковой точкой, сорок мелких и
+                // десять крупных выглядели одинаково, а весят они разное.
+                //
+                // Корень, а не сам размер: значок — это площадь, и зверь
+                // втрое тяжелее должен занимать втрое больше места, а не быть
+                // втрое шире. Иначе крупный вид накрывает собой три клетки и
+                // прячет под собой всё, что там есть.
+                const float bodyScale = std::sqrt(std::max(0.05f, animal.adultSize));
                 const float scale = animal.predator ? 0.30f : 0.22f;
-                const float radius = std::max(1.0f, tileSizeF * (scale + 0.16f * animal.growth));
+                const float radius =
+                    std::max(1.0f, tileSizeF * (scale + 0.16f * animal.growth) * bodyScale);
                 const float centerX = screenX + tileSizeF * 0.5f;
                 const float centerY = screenY + tileSizeF * 0.5f;
                 if (animal.sex == "male") {

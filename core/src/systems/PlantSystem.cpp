@@ -432,7 +432,11 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // Смерть от старости или от условий. Entity исчезает не сейчас, а
         // при разрешении очереди команд (05_Entity.md, п.5) — до конца
         // тика клетка считается занятой, и никто не посеет туда семя.
-        if (plant.age >= genome.maxAge || plant.stress >= kFull) {
+        // Долголетие рода — свойство мира (WorldPropertiesComponent): у
+        // травы, куста и дерева свои множители, потому что и таблицы черт у
+        // них свои, и темп жизни разный по самой сути.
+        const int lifespan = plantLifespanOf(worldProperties, plantKindOf(registry, entity));
+        if (plant.age >= plantMaxAgeOf(genome, lifespan) || plant.stress >= kFull) {
             commands.enqueue([entity, x = position.x, y = position.y](World& w) {
                 if (!w.registry().valid(entity)) {
                     return;
@@ -458,7 +462,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // тут ни при чём — они растению вообще ничего не запрещают; воды в
         // теле у него нет; неблагополучия, которое можно было бы спросить,
         // тоже больше нет.
-        if (plant.age < genome.maturityAge ||
+        if (plant.age < plantMaturityAgeOf(genome, lifespan) ||
             plant.growth < (isTree ? kTreeSeedMinGrowth : kSeedMinGrowth)) {
             continue;
         }
@@ -789,13 +793,19 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // траве (см. kTreeSeedWaitTicks).
         const bool isTreeSeed = registry.all_of<TreeComponent>(entity);
         const int waitTicks = isTreeSeed ? kTreeSeedWaitTicks : kSeedWaitTicks;
+        // Покой семени растягивается тем же множителем, что и жизнь: это
+        // время жизни вида, а не отдельная величина. Ожидание свободной
+        // клетки (waitTicks) — не растягивается: это форма закона, одна на
+        // весь мир.
+        const int dormancy = plantSeedDormancyOf(
+            genome, plantLifespanOf(worldProperties, plantKindOf(registry, entity)));
 
         seed.age += 1;
 
         // Не дождалось — семя просто исчезает. Ему нечего вернуть почве:
         // оно не несёт минералов (см. SeedComponent), а из перегноя они
         // возвращаются только тем, чем растение при жизни успело обрасти.
-        if (seed.age >= genome.seedDormancy + waitTicks) {
+        if (seed.age >= dormancy + waitTicks) {
             commands.enqueue([entity](World& w) {
                 if (!w.registry().valid(entity)) {
                     return;
@@ -805,7 +815,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
             continue;
         }
 
-        if (seed.age < genome.seedDormancy) {
+        if (seed.age < dormancy) {
             continue; // ещё спит: срок покоя — черта генома (seed_dormancy)
         }
 

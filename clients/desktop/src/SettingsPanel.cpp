@@ -196,6 +196,14 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     ops.intRow("Mutation rate (per mille)", edited.plants.mutation_rate, 0, 300);
     // Раз во сколько тиков перегной возвращает в почву одну крупицу.
     ops.intRow("Humus: ticks per grain", edited.plants.humus_decay_period, 1, 1000);
+    // Долголетие: во сколько раз растянуты сроки жизни против записанных в
+    // геноме. По ползунку на породу, потому что таблицы черт у них разные, а
+    // темп жизни разный по самой сути: трава живёт сотни тиков, дерево —
+    // десятки тысяч. Одна ручка на всех означала бы, что растянуть жизнь
+    // дереву нельзя, не растянув её траве, которой кормится стадо.
+    ops.intRow("Grass lifespan (x1000)", edited.plants.grass_lifespan, 100, 50000);
+    ops.intRow("Tree lifespan (x1000)", edited.plants.tree_lifespan, 100, 50000);
+    ops.intRow("Bush lifespan (x1000)", edited.plants.bush_lifespan, 100, 50000);
 
     ops.section("Animal life");
     // Та же мутация, что и у растений, но своя: наследование детёныша
@@ -203,11 +211,17 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // бы связать два независимых мира одним ползунком. Одна на обе диеты —
     // это скорость наследственных изменений в мире, а не свойство диеты.
     ops.intRow("Mutation rate (per mille)", edited.animals.mutation_rate, 0, 300);
+    // Долголетие по диетам. Поголовье от него не едет: и взросление, и отдых
+    // после родов — доли той же самой жизни, значит растягиваются во столько
+    // же раз, и потомков за жизнь остаётся столько же.
+    ops.intRow("Herbivore lifespan (x1000)", edited.animals.herbivore_lifespan, 100, 50000);
+    ops.intRow("Predator lifespan (x1000)", edited.animals.predator_lifespan, 100, 50000);
 
     ops.section("Goblin life");
     // Своя, не общая с животными, хотя тело у гоблина звериное: скорость
     // наследственных изменений у разумных не обязана совпадать со звериной.
     ops.intRow("Mutation rate (per mille)", edited.goblins.mutation_rate, 0, 300);
+    ops.intRow("Lifespan (x1000)", edited.goblins.lifespan, 100, 50000);
 }
 
 // Только считает высоту, ничего не рисует — используется до

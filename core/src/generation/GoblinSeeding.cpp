@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <span>
 
+#include "core/Body.hpp"
 #include "core/Scale.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
@@ -100,6 +101,7 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
     // (05_Entity.md, п.3).
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.goblinMutationRate = params.mutationRate;
+    worldProperties.goblinLifespan = params.lifespan;
     worldProperties.goblinRandomSeed = seed;
     // Целая настройка мира — дробная доля для раскладов бюджета
     // (core/Scale.hpp): расклад дробен, потому что он генерация, а не
@@ -171,15 +173,14 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
             // случайный в пределах до первой половины жизни, размер — тот, до
             // которого гоблин успел бы дорасти к этому возрасту. Иначе они
             // взрослели, сходились и умирали синхронными волнами.
-            body.age =
-                static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maxAge / 2))));
+            body.age = static_cast<int>(randomBelow(
+                state, static_cast<std::uint64_t>(std::max(1, maxAgeOf(genome, params.lifespan) / 2))));
             body.sex = randomBelow(state, 2) == 0 ? Sex::Female : Sex::Male;
-            body.energy = genome.energyCapacity * kInitialReserveShare / kFull;
-            body.water = genome.waterCapacity * kInitialReserveShare / kFull;
+            body.energy = energyCapacityOf(genome) * kInitialReserveShare / kFull;
+            body.water = waterCapacityOf(genome) * kInitialReserveShare / kFull;
 
-            const int grownTo =
-                genome.maturityAge > 0 ? std::min(kFull, body.age * kFull / genome.maturityAge) : kFull;
-            const int wanted = (grownTo * genome.proteinNeed + kFull - 1) / kFull;
+            const int grownTo = std::min(kFull, body.age * kFull / maturityAgeOf(genome, params.lifespan));
+            const int wanted = (grownTo * proteinNeedOf(genome) + kFull - 1) / kFull;
             // Белок первого поголовья — не из воздуха: ровно столько, сколько
             // есть в клетке, и ровно столько же вернётся в мир падалью. Если
             // клетка бедна, ищем другую, а не выпускаем недоросля.
@@ -189,8 +190,7 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
             }
             body.protein = std::max(0, wanted);
             soil.minerals -= body.protein;
-            body.growth = genome.proteinNeed > 0 ? std::min(grownTo, body.protein * kFull / genome.proteinNeed)
-                                                  : grownTo;
+            body.growth = std::min(grownTo, body.protein * kFull / proteinNeedOf(genome));
 
             // Желания в момент рождения мира — те, что следуют из тела, и первый
             // же тик пересчитает их заново (GoblinSystem). Единственное, что

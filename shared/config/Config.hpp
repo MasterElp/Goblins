@@ -186,10 +186,26 @@ struct PlantConfig {
     // собирателя, которая растёт сама (core/Berries.hpp), но стать фоном он
     // не должен. Еда, которая везде, не место, и возвращаться к ней незачем.
     int bush_coverage = 20;
+
+    // Долголетие: во сколько раз растянуты сроки жизни против записанных в
+    // геноме, в тысячных (1000 — как в геноме, 10000 — вдесятеро дольше).
+    // Свойство мира, а не черта: множитель нельзя класть в ген, иначе поедет
+    // бюджет преимуществ (см. core::WorldPropertiesComponent).
+    //
+    // Поголовье от него не едет: и взросление, и отдых после родов — доли
+    // той же самой жизни, значит растягиваются во столько же раз. Число
+    // потомков за жизнь остаётся тем же, растягивается только время.
+    //
+    // Три числа, а не одно: трава, дерево и куст — три разные таблицы черт с
+    // тремя разными темпами жизни. У растения множитель тянет за собой все
+    // три срока — предельный возраст, созревание и покой семени.
+    int grass_lifespan = 10000;
+    int tree_lifespan = 10000;
+    int bush_lifespan = 10000;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PlantConfig, grass_species, grass_coverage, mutation_rate,
                                     humus_decay_period, tree_species, tree_coverage, bush_species,
-                                    bush_coverage)
+                                    bush_coverage, grass_lifespan, tree_lifespan, bush_lifespan)
 
 // Зеркало core::AnimalParams (core/generation/AnimalParams.hpp) — по той же
 // причине, что TerrainConfig и PlantConfig выше. Имена и значения по
@@ -215,9 +231,23 @@ struct AnimalConfig {
     // всех животных — это скорость наследственных изменений в этом мире, а
     // не свойство диеты. В тысячных долях вложения черты, как и у растений.
     int mutation_rate = 60;
+
+    // Долголетие: во сколько раз растянуты сроки жизни против записанных в
+    // геноме, в тысячных (1000 — как в геноме, 10000 — вдесятеро дольше).
+    // Свойство мира, а не черта: множитель нельзя класть в ген, иначе поедет
+    // бюджет преимуществ (см. core::WorldPropertiesComponent).
+    //
+    // Поголовье от него не едет: и взросление, и отдых после родов — доли
+    // той же самой жизни, значит растягиваются во столько же раз. Число
+    // потомков за жизнь остаётся тем же, растягивается только время.
+    //
+    // По одному на диету: таблицы черт у травоядного и хищника разные.
+    int herbivore_lifespan = 10000;
+    int predator_lifespan = 10000;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AnimalConfig, herbivore_species, predator_species,
-                                    herbivore_count, predator_count, mutation_rate)
+                                    herbivore_count, predator_count, mutation_rate, herbivore_lifespan,
+                                    predator_lifespan)
 
 // Зеркало core::GoblinParams (core/generation/GoblinParams.hpp). Секция
 // своя, а не третья строка в AnimalConfig: гоблин появляется отдельным,
@@ -238,8 +268,18 @@ struct GoblinConfig {
     // скорость наследственных изменений у разумных не обязана совпадать со
     // звериной (см. GoblinTrait в GoblinGenetics.hpp).
     int mutation_rate = 60;
+
+    // Долголетие: во сколько раз растянуты сроки жизни против записанных в
+    // геноме, в тысячных (1000 — как в геноме, 10000 — вдесятеро дольше).
+    // Свойство мира, а не черта: множитель нельзя класть в ген, иначе поедет
+    // бюджет преимуществ (см. core::WorldPropertiesComponent).
+    //
+    // Поголовье от него не едет: и взросление, и отдых после родов — доли
+    // той же самой жизни, значит растягиваются во столько же раз. Число
+    // потомков за жизнь остаётся тем же, растягивается только время.
+    int lifespan = 10000;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GoblinConfig, tribes, count, mutation_rate)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GoblinConfig, tribes, count, mutation_rate, lifespan)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Random.hpp"
+#include "core/PlantKind.hpp"
 #include "core/Scale.hpp"
 #include "core/Trees.hpp"
 #include "core/components/PlantComponent.hpp"
@@ -88,7 +89,7 @@ int rootMinerals(World& world, int x, int y) {
 // Посадить дерево вида archetype в клетку (x, y), если оно там уместится и
 // прокормится. false — не уместилось; вызывающая сторона просто идёт
 // дальше, это не ошибка.
-bool plantTree(World& world, int x, int y, const PlantGenomeComponent& archetype, float mutationRate,
+bool plantTree(World& world, int x, int y, const PlantGenomeComponent& archetype, float mutationRate, int lifespan,
                std::uint64_t& state) {
     if (world.area().isBlocked(x, y) || hasPlant(world, x, y) || treeNear(world, x, y)) {
         return false;
@@ -127,7 +128,8 @@ bool plantTree(World& world, int x, int y, const PlantGenomeComponent& archetype
     // Иначе вся куртина умирала бы одним тиком через десятки тысяч тиков
     // после начала мира.
     PlantComponent plant;
-    plant.age = static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(std::max(1, genome.maxAge))));
+    plant.age = static_cast<int>(
+        randomBelow(state, static_cast<std::uint64_t>(std::max(1, plantMaxAgeOf(genome, lifespan)))));
     plant.growth = std::min(kFull, plant.age * genome.growthRate);
 
     // Крупицы дерево берёт не из воздуха: столько, сколько нужно на его
@@ -220,7 +222,8 @@ void seedTrees(World& world, const PlantParams& params, unsigned seed) {
         };
         seedNest(
             world.area(), perSpecies, kGroveRadius, suitableCenter,
-            [&](int x, int y) { return plantTree(world, x, y, archetype, mutationRate, state); }, state);
+            [&](int x, int y) { return plantTree(world, x, y, archetype, mutationRate, params.treeLifespan, state); },
+            state);
     }
 }
 

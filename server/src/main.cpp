@@ -85,6 +85,9 @@ goblins::PlantParams toPlantParams(const goblins::PlantConfig& config) {
     params.bushCoverage = config.bush_coverage;
     params.mutationRate = config.mutation_rate;
     params.humusDecayPeriod = config.humus_decay_period;
+    params.grassLifespan = config.grass_lifespan;
+    params.treeLifespan = config.tree_lifespan;
+    params.bushLifespan = config.bush_lifespan;
     return params;
 }
 
@@ -97,6 +100,8 @@ goblins::AnimalParams toAnimalParams(const goblins::AnimalConfig& config) {
     params.predatorSpecies = config.predator_species;
     params.predatorCount = config.predator_count;
     params.mutationRate = config.mutation_rate;
+    params.herbivoreLifespan = config.herbivore_lifespan;
+    params.predatorLifespan = config.predator_lifespan;
     return params;
 }
 
@@ -110,6 +115,7 @@ goblins::GoblinParams toGoblinParams(const goblins::GoblinConfig& config) {
     params.tribes = config.tribes;
     params.count = config.count;
     params.mutationRate = config.mutation_rate;
+    params.lifespan = config.lifespan;
     return params;
 }
 

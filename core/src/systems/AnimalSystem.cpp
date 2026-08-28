@@ -31,6 +31,7 @@
 #include "core/Needs.hpp"
 #include "core/Scale.hpp"
 #include "core/Share.hpp"
+#include "core/Strike.hpp"
 #include "core/TileSnapshot.hpp"
 #include "core/Walk.hpp"
 
@@ -51,9 +52,8 @@ namespace {
 // которой в core/Needs.hpp живут голод и жажда: у этого закона стало двое
 // вызывающих, и тело у гоблина то же самое, что у животного.
 //
-// Здесь осталось то, что относится к животному и только к нему: болезнь от
-// тесноты сородичей, сторонение чужого вида, пороги желаний, размножение,
-// блуждание и охота.
+// Здесь осталось то, что относится к животному и только к нему: сторонение
+// чужого вида, пороги желаний, размножение, блуждание и охота.
 
 // Стресса за объедание больше нет. Он был второй смертью поверх первой:
 // куст и так теряет ровно ту биомассу, которую с него скусили, и стадо,
@@ -64,53 +64,34 @@ namespace {
 // и участок оставался лысым навсегда. Теперь скушенный куст отрастает,
 // как отрастал бы после засухи, и вымирания луга под стадом не случается.
 
-// Болезнь — третья беда того же здоровья, и она единственная приходит не от
-// нехватки, а от избытка: чем теснее стоит стадо, тем быстрее по нему идёт
-// зараза.
+// Болезни от тесноты здесь больше нет, и это стоит объяснить: она была
+// третьей бедой здоровья и держала численность стада — теснее стоят свои,
+// быстрее идёт зараза.
 //
-// Ради этого она и заведена. Стадо, которому хватает травы, растёт, пока
-// не съест луг под корень, и тогда вымирает целиком — половина миров без
-// единого хищника кончается именно так. Голод останавливает его слишком
-// поздно: он приходит, когда луга уже нет. Болезнь останавливает раньше и
-// по другой причине — не "еды не хватило", а "нас стало слишком много на
-// одном месте", то есть ровно тем, чем в живом мире и держится численность.
+// Снята она не потому, что вредила, а потому, что делала ДВЕ вещи, и обе
+// уже делаются иначе. Численность держит условие сытости: желание пары
+// копится только у того, кому хватает еды и воды (adult && content ниже), —
+// объело стадо луг, поднялся голод, и размножение встало раньше, чем пришла
+// смерть. Ровно тот порядок, ради которого болезнь и заводилась, только без
+// отдельного закона и одинаково для всех, у кого есть желания: у гоблина он
+// тот же самый. Второе — рассеивание своих по местности — теперь не нужно
+// вовсе: стадо должно стоять кучно (core/Walk.hpp, WalkHerd).
 //
-// Считается по СВОЕМУ виду, а не по всем травоядным разом: заражается
-// подобное подобным. Отсюда даром получается и то, чего в модели не было, —
-// повод видам разойтись: сплошной луг одного вида косит сам себя, а
-// вперемешку стоящие виды мешают друг другу меньше.
-//
-// Радиус — не зоркость (genome.perception), а короткое, одинаковое для всех
-// расстояние: заражаются от соприкосновения, а не от того, что увидели друг
-// друга через полкарты.
-//
-// kDiseaseCrowd — сколько соседей своего вида ещё НЕ теснота. Порог не
-// украшение и не поблажка: заживление упирается в потолок здоровья, болезнь
-// вычитается уже после него, а желание пары копится только у целого зверя
-// (health >= kFull). Без порога хватало одного соседа, чтобы животное
-// никогда больше не захотело потомства, — а сойтись двоим для встречи всё
-// равно надо. Поголовье при этом только убывало, без всяких хищников.
-//
-// Отсюда и вся форма закона: пара — не толпа, мать с телёнком — не толпа, а
-// вот шестеро на тринадцати клетках уже теснота. Стадо, разросшееся сверх
-// порога, сперва перестаёт плодиться и только потом начинает умирать —
-// численность держится тем, что размножение глохнет раньше, чем приходит
-// смерть.
-constexpr int kDiseaseRadius = 2;
-constexpr int kDiseaseCrowd = 3;
-constexpr int kDiseaseHarm = 1;
+// Заодно ушла асимметрия, из-за которой этот закон был неказист: он
+// касался одних травоядных. Хищник, гоблин и травоядное живут одним телом
+// (core/Body.hpp), и беда, придуманная для одного из троих, в это тело не
+// помещалась.
 
 // Насколько травоядное сторонится чужого вида — того, кто ест ту же траву.
-// Второй закон про "чужие рядом", парный болезни: та разводит по местности
-// своих (теснота одного вида), этот — чужих.
+// Единственный оставшийся закон про "чужие рядом": своих больше ничто не
+// разводит, а чужих разводит это.
 //
 // Это НЕ страх, и разница здесь несущая. Страх — желание (Flee), и чтобы
 // победить, ему надо перебить и голод, и желание пары, а перебив — оставить
 // зверя голодным и без потомства; на тесной карте два вида так заперли бы
-// размножение друг другу (та же ловушка, в которую уже попадала болезнь).
-// Сторонение живёт этажом ниже желаний — в выборе ноги (core/Walk.hpp,
-// WalkShy): зверь не бросает еды и никуда не бежит, он лишь предпочитает ту
-// сторону поляны, где чужого нет.
+// размножение друг другу. Сторонение живёт этажом ниже желаний — в выборе
+// ноги (core/Walk.hpp, WalkShy): зверь не бросает еды и никуда не бежит, он
+// лишь предпочитает ту сторону поляны, где чужого нет.
 //
 // Пробовалось и страхом: kRivalFear = 500 против порога желаний 350 и
 // инерции 150. Считать это было незачем — закон не сработал ни разу:
@@ -122,6 +103,24 @@ constexpr int kDiseaseHarm = 1;
 // своей травы, просто подходит к ней с другой стороны. Больше половины
 // kAimPull ставить нельзя — тогда чужак начнёт уводить от самой еды.
 constexpr int kRivalShyness = 300;
+
+// Насколько охотящийся хищник сторонится ПОСТОРОННЕЙ добычи — той, за
+// которой он сейчас не идёт.
+//
+// Цель он выбирает верно и заново каждый тик: берёт отбившегося, а не того,
+// вокруг кого стоит полстада (kHuntCompany, core/Hunting.hpp). Но выбранная
+// цель — это ещё не дорога к ней, а бьёт хищника всякий, у кого зубы в
+// соседней клетке, охотятся на него или нет. Идя к одиночке напрямик через
+// стадо, он собирал по дороге удары от тех, кого не трогал, и погибал, не
+// дойдя.
+//
+// Сторонение, а не запрет и не страх, и это ровно тот случай, ради которого
+// WalkShy написан: хищник не бросает охоты и никуда не сворачивает — он лишь
+// заходит с той стороны, где посторонних нет. Вес больше травоядного (300):
+// чужой вид у травоядного лишь ест ту же траву, а посторонняя добыча у
+// хищника отнимает здоровье. Больше половины kAimPull ставить всё равно
+// нельзя — тогда стадо начнёт уводить хищника от самой добычи.
+constexpr int kBystanderShyness = 450;
 
 // Желания. Ниже kDesireFloor желание никуда не гонит — животное считается
 // довольным и просто бродит. kDesireSwitch — насколько сильнее должно быть
@@ -174,10 +173,12 @@ constexpr std::uint64_t kRoamTicks = 40;
 
 // --- Хищничество ---
 
-// Голод, с которого выходят на охоту (kHuntHunger), досягаемость зубов
-// (kAttackReach) и порог годного мяса (kMinBiteMeat) лежат в
+// Голод, с которого выходят на охоту (kHuntHunger), осторожность к крупной
+// добыче (kHuntCaution) и порог годного мяса (kMinBiteMeat) лежат в
 // core/Hunting.hpp вместе с самим выбором добычи: этот закон спрашивает не
 // только система, но и наблюдатель — он рисует найденную дорогу на карте.
+// Досягаемость удара (kStrikeReach) переехала в core/Strike.hpp: дотягиваются
+// теперь все, а не одни зубы.
 
 // --- Падаль пугает ---
 // Во что превращается лежащая на клетке туша для травоядного, которое на
@@ -194,24 +195,6 @@ constexpr std::uint64_t kRoamTicks = 40;
 // события, ложащиеся на одну клетку и тающие каждый по-своему, — это один
 // закон, записанный дважды.
 constexpr int kCarcassFearWeight = 700;
-
-// --- Рога и хромота ---
-// Удаётся ли жертве достать хищника в ответ, решает её собственная
-// меткость (genome->goreChance) — не общее для всего мира число: розыгрыш,
-// а не правило, иначе всякий укус рогатого был бы для хищника одинаково
-// наказуем, и охота выродилась бы в арифметику.
-//
-// Насколько долго хромает хищник, получивший рогами в полную силу
-// (defense == kFull, взрослая жертва), и во сколько раз он при этом
-// медленнее, — края шкалы, по которой едет defense жертвы (см. п.8
-// "Зубы"): слабо вооружённый вид калечит короче и слабее, а не только
-// короче. 70% скорости при максимальном вложении — заведомо меньше, чем у
-// любого травоядного в мире: хромой не догонит никого, пока не заживёт, а
-// не настолько беспомощен, чтобы этот срок стал для него смертным
-// приговором сам по себе — отходной период после охоты и так самый
-// уязвимый момент хищника.
-constexpr int kLameMaxTicks = 150;
-constexpr int kLameShare = 700;
 
 // --- Намерения ---
 // Собираются при обходе животных и исполняются после него. Отдельный шаг
@@ -237,16 +220,22 @@ struct MateIntent {
     Sex sex = Sex::Female;
 };
 
-// Удар. Урон складывается, а не делится: двое хищников, вцепившихся в одну
-// жертву, наносят вдвое больше — здесь делить нечего, и порядок обхода на
-// сумму не влияет.
-struct AttackIntent {
-    int prey = 0;
-    int damage = 0;
-    // Кто ударил. Нужен затем, что удар бывает обоюдным: рогатая жертва
-    // достаёт укусившего в ответ (п.8), и без имени бьющего некому было бы
-    // хромать.
-    int attacker = 0;
+// Намерение ударить: кто и кого. Ни силы, ни исхода здесь нет — их считает
+// общий закон удара (core/Strike.hpp) при разрешении, из размера и меткости
+// бьющего.
+//
+// Намерения собираются, а не исполняются на месте, по той же причине, что и
+// доли в core/Share.hpp: двое, стоящие рядом, бьют друг друга в ОДИН тик, и
+// исход не должен зависеть от того, кого EnTT хранит раньше. Урон при этом
+// складывается, а не делится: двое, вцепившихся в одного, валят его вдвое
+// быстрее.
+//
+// Ролей у сторон нет. Хищник бьёт добычу, за которой шёл; травоядное бьёт
+// того хищника, от кого уже не убежать. Это одно и то же намерение и один и
+// тот же закон, а не удар и ответ на него.
+struct StrikeIntent {
+    int target = 0;
+    int striker = 0;
 };
 
 // Живое животное в снимке этого тика. Указатели на компоненты держать
@@ -385,7 +374,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<ShareIntent> drinks;
     std::vector<StepIntent> steps;
     std::vector<MateIntent> matings;
-    std::vector<AttackIntent> attacks;
+    std::vector<StrikeIntent> strikes;
 
     // Откуда исходит опасность — считается в проходе 3 и используется в
     // проходе 4. Живёт здесь, а не в компоненте: система не хранит
@@ -398,6 +387,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // конкретных координат у такого страха нет, а читать их всё равно
     // значило бы бежать в сторону клетки (0, 0).
     std::vector<bool> hasThreat(animals.size(), false);
+    // Кто именно пугает — номер в снимке. Нужен затем, что бегущему мало
+    // знать, куда бежать: если бежать уже поздно, он бьёт, и бьёт именно
+    // того, от кого не ушёл (core/Strike.hpp).
+    std::vector<int> threatOwner(animals.size(), -1);
     // Где ближайший чужой вид травоядных — считается в проходе 3 вместе со
     // страхом, а используется в проходе 4, при выборе шага (kRivalShyness).
     // Живёт здесь по той же причине, что и threatX/threatY: система не
@@ -406,6 +399,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<int> rivalX(animals.size(), 0);
     std::vector<int> rivalY(animals.size(), 0);
     std::vector<bool> hasRival(animals.size(), false);
+    // Где ближайший СВОЙ — тем же способом и для того же прохода, только с
+    // обратным знаком: к своим тянет (core/Walk.hpp, WalkHerd). Считается
+    // для всех, а не для одних травоядных: хищники друг другу тоже свои, и
+    // ходить парами им ничто не мешает.
+    std::vector<int> kinX(animals.size(), 0);
+    std::vector<int> kinY(animals.size(), 0);
+    std::vector<bool> hasKin(animals.size(), false);
 
     // Где стоят хищники — отдельным коротким списком, собранным один раз
     // за тик. Страх ищется перебором, и перебирать весь мир ради горстки
@@ -418,10 +418,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // каждого.
     std::vector<int> predatorX;
     std::vector<int> predatorY;
-    for (const Animal& other : animals) {
-        if (other.predator) {
-            predatorX.push_back(other.x);
-            predatorY.push_back(other.y);
+    // Обратный указатель в снимок: страх называет клетку, а бить надо
+    // конкретного зверя (см. threatOwner).
+    std::vector<int> predatorOwner;
+    for (std::size_t b = 0; b < animals.size(); ++b) {
+        if (animals[b].predator) {
+            predatorX.push_back(animals[b].x);
+            predatorY.push_back(animals[b].y);
+            predatorOwner.push_back(static_cast<int>(b));
         }
     }
 
@@ -441,60 +445,25 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const auto& genome = *animal.genome;
         auto& desire = *animal.desire;
 
-        const int size = bodySize(state.growth);
-
         // Что время сделало с телом: расход на существование, взросление,
         // пищеварение, здоровье. Закон общий для всего живого и живёт в
         // core/Body.hpp — тело у гоблина то же самое.
-        advanceBody(state, genome, tick, animal.id);
-
-        // Болезнь: чем теснее вокруг стоят свои, тем быстрее по стаду идёт
-        // зараза (см. kDiseaseHarm). Не решение животного и не желание, а
-        // то же здоровье, что отнимают голод и жажда, — поэтому и считается
-        // здесь, в теле, а не среди желаний.
-        //
-        // Своих — значит своего вида и своей диеты. Перебор по всем
-        // животным того же тика: их десятки, и обходится он дешевле, чем
-        // просмотр клеток вокруг (тот же приём, что у страха ниже).
-        //
-        // Хищников это не касается: их в мире единицы, тесноты у них не
-        // бывает, а численность им держит не зараза, а голод.
-        if (!animal.predator) {
-            int crowd = 0;
-            for (std::size_t b = 0; b < animals.size(); ++b) {
-                if (b == a || animals[b].predator || animals[b].genome->species != genome.species) {
-                    continue;
-                }
-                const int dx = animals[b].x - animal.x;
-                const int dy = animals[b].y - animal.y;
-                if (dx * dx + dy * dy <= kDiseaseRadius * kDiseaseRadius) {
-                    ++crowd;
-                }
-            }
-            // Считается только теснота СВЕРХ kDiseaseCrowd: пара — не толпа,
-            // и мать с телёнком тоже. Порог здесь не смягчение, а условие
-            // того, чтобы стадо вообще могло размножаться: заживление
-            // упирается в потолок здоровья, болезнь вычитается уже после
-            // него, а желание пары копится только у целого зверя
-            // (kFull, см. content ниже). Без порога один-единственный сосед
-            // навсегда лишал животное потомства — а сойтись для встречи
-            // двоим всё равно надо, и оба тут же переставали хотеть пары.
-            // Поголовье от этого могло только убывать, без всяких хищников.
-            const int crush = crowd - kDiseaseCrowd;
-            if (crush > 0) {
-                state.health -= kDiseaseHarm * crush;
-            }
-        }
+        // Долголетие вида — свойство мира, а не генома: у травоядного и
+        // хищника свои множители, и таблицы черт у них тоже свои.
+        const int lifespan =
+            animal.predator ? worldProperties.predatorLifespan : worldProperties.herbivoreLifespan;
+        advanceBody(state, genome, lifespan, tick, animal.id);
 
         // Смерть от старости, от условий или от чужих зубов. Проверяется
-        // здесь, а не внутри advanceBody, и это не мелочь: болезнь отнимает
-        // здоровье уже после общего закона тела, и умереть от неё животное
-        // обязано в тот же тик, а не в следующий.
+        // здесь, а не внутри advanceBody, и это не мелочь: у тела могут быть
+        // беды, отнимающие здоровье уже ПОСЛЕ общего закона (см. core/Body.hpp
+        // — так было у болезни, так работает удар в п.8), и умереть от них
+        // животное обязано в тот же тик, а не в следующий.
         //
         // Entity исчезает не сейчас, а при разрешении очереди команд
         // (05_Entity.md, п.5), и тело ложится падалью — одинаково, от чего
         // бы животное ни умерло.
-        if (bodyDied(state, genome)) {
+        if (bodyDied(state, genome, lifespan)) {
             enqueueDeath(commands, animal.entity, animal.x, animal.y);
             alive[a] = false;
             continue;
@@ -572,6 +541,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     animal.fear = scare;
                     threatX[a] = predatorX[b];
                     threatY[a] = predatorY[b];
+                    threatOwner[a] = predatorOwner[b];
                     hasThreat[a] = true;
                 }
             }
@@ -583,9 +553,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             // ходу — см. "Шаг" ниже и kRivalShyness.
             //
             // Свой вид сюда не попадает намеренно: сторониться своих значило
-            // бы разогнать собственное стадо и остаться без пары. Что делает
-            // с чужими СВОЙ вид, сказано отдельно и по-другому — это болезнь
-            // от тесноты (kDiseaseCrowd выше), то есть тело, а не походка.
+            // бы разогнать собственное стадо и остаться без пары. Своих,
+            // наоборот, тянет друг к другу — но это уже не сторонение, а
+            // отдельное слагаемое шага (core/Walk.hpp, WalkHerd).
             //
             // Перебор по всем животным, а не по короткому списку, как у
             // хищников: чужой вид — это почти всё поголовье травоядных, и
@@ -629,17 +599,61 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             }
         }
 
-        const bool adult = state.age >= genome.maturityAge && state.growth >= kBreedingGrowth;
+        // Ближайший свой — тот, к кому тянет на ходу. Свой значит своего
+        // вида и своей диеты: стадо собирается из тех, кто и есть стадо, а
+        // не из всех, кто рядом пасётся.
+        //
+        // Считается для всех, включая хищников: закон один, и держаться
+        // вместе не запрещено никому. Ближе kHerdKeep сородич не считается
+        // вовсе — иначе стадо сошлось бы в одну клетку (см. WalkHerd).
+        {
+            const int sightCells = std::max(1, genome.perception);
+            int kinDistance = 0;
+            for (std::size_t b = 0; b < animals.size(); ++b) {
+                if (b == a || !alive[b] || animals[b].predator != animal.predator ||
+                    animals[b].genome->species != genome.species) {
+                    continue;
+                }
+                const int dx = animals[b].x - animal.x;
+                const int dy = animals[b].y - animal.y;
+                const int distance = dx * dx + dy * dy;
+                if (distance <= kHerdKeep * kHerdKeep || distance > sightCells * sightCells) {
+                    continue;
+                }
+                if (hasKin[a] && distance >= kinDistance) {
+                    continue;
+                }
+                kinX[a] = animals[b].x;
+                kinY[a] = animals[b].y;
+                hasKin[a] = true;
+                kinDistance = distance;
+            }
+        }
+
+        const bool adult = state.age >= maturityAgeOf(genome, lifespan) && state.growth >= kBreedingGrowth;
+        // Готова ли мать заплатить за роды. Два условия, и оба — про цену, а
+        // не про настроение: не отдыхает после прошлых родов и накопила
+        // крупиц на целого детёныша (см. п.10, где они отдаются).
+        //
+        // Спрашивается здесь, до накопления желания, а не при встрече:
+        // иначе пары сходились бы впустую и обнуляли желание друг другу, а
+        // крупный вид, которому крупиц нужно втрое больше, не приносил бы
+        // потомства вовсе, вечно встречаясь и вечно не рожая.
+        //
+        // Условие одно на оба пола: самец белка не отдаёт, но и он, пока не
+        // дорос, ничего не сможет. Заводить разные правила для полов ради
+        // этого значило бы описать один закон дважды.
+        const bool canBearYoung = state.recovery == 0 && state.protein >= proteinNeedOf(genome);
         // Не бедствует: ни голод, ни жажда не дошли до предела, и нет
         // накопленного стресса — то есть в последние десятки тиков запасы
         // не кончались совсем.
         const bool content = state.health >= kFull && animal.hunger < kCalmNeed && animal.thirst < kCalmNeed;
-        if (adult && content) {
+        if (adult && content && canBearYoung) {
             // Желание пары — единственное, которого в теле не прочитать: оно
             // копится со временем у того, кому больше нечего хотеть.
             desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
         }
-        desire.current = chooseDesire(animal, adult && content);
+        desire.current = chooseDesire(animal, adult && content && canBearYoung);
     }
 
     // Добыча в том виде, в каком её видит хищник (core/Hunting.hpp): где
@@ -652,8 +666,22 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         if (!alive[b] || animals[b].predator) {
             continue;
         }
+        // Сколько своих стоит рядом с ней — столько защитников встретит
+        // хищник, подойдя вплотную (kHuntCompany, core/Hunting.hpp).
+        // Перебор по всем животным, как и у страха: их десятки, и обходится
+        // он дешевле просмотра клеток вокруг.
+        int company = 0;
+        for (std::size_t c = 0; c < animals.size(); ++c) {
+            if (c == b || !alive[c] || animals[c].predator) {
+                continue;
+            }
+            if (std::abs(animals[c].x - animals[b].x) <= kCompanyRadius &&
+                std::abs(animals[c].y - animals[b].y) <= kCompanyRadius) {
+                ++company;
+            }
+        }
         preys.push_back(HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed,
-                                  animals[b].genome->defense,
+                                  bodySize(*animals[b].state, *animals[b].genome), company,
                                   treeAt[index(animals[b].x, animals[b].y)] != 0});
         preyOwner.push_back(static_cast<int>(b));
     }
@@ -686,7 +714,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const auto& genome = *animal.genome;
         auto& desire = *animal.desire;
         const std::size_t here = index(animal.x, animal.y);
-        const int size = bodySize(state.growth);
+        const int size = bodySize(state, genome);
 
         // Случайность собирается из seed мира, номера тика и постоянного
         // идентификатора животного (core/Random.hpp). Не из координат, как
@@ -705,6 +733,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         bool hasTarget = false;
         int targetX = animal.x;
         int targetY = animal.y;
+        // Кого сторониться на ходу. У травоядного это ближайший чужой вид,
+        // посчитанный ещё в п.3; у охотящегося хищника — ближайшая
+        // ПОСТОРОННЯЯ добыча, и посчитать её раньше нельзя: пока цель не
+        // выбрана, неизвестно, кто посторонний.
+        WalkShy shy =
+            hasRival[a] ? WalkShy{walkDirectionTo(animal.x, animal.y, rivalX[a], rivalY[a]), kRivalShyness}
+                        : WalkShy{};
 
         // Хромой ходит медленнее — и это ЕДИНСТВЕННОЕ, что делает с ним
         // увечье (см. InjuryComponent). Больше ничего и не нужно: скорость
@@ -806,16 +841,49 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // дорогу на карте, и разъехаться им негде.
                     reachOf.build(world.area(), animal.x, animal.y, reach, standable);
                     const HuntChoice choice = chooseHuntTarget(
-                        reachOf, Hunter{animal.x, animal.y, reach, effectiveSpeed, animal.hunger}, preys,
+                        reachOf, Hunter{animal.x, animal.y, reach, effectiveSpeed, animal.hunger, size}, preys,
                         [&](int nx, int ny) { return carcassMeat[index(nx, ny)]; }, random);
 
                     // Добыча в пределах досягаемости зубов — бьём, и никуда
                     // при этом не идём.
                     if (choice.kind == HuntChoice::Kind::Prey && choice.atTeeth) {
-                        attacks.push_back(AttackIntent{preyOwner[static_cast<std::size_t>(choice.prey)],
-                                                       genome.attack * size / kFull, static_cast<int>(a)});
+                        strikes.push_back(
+                            StrikeIntent{preyOwner[static_cast<std::size_t>(choice.prey)], static_cast<int>(a)});
                         busy = true;
                         break;
+                    }
+
+                    // Посторонняя добыча — та, за которой хищник сейчас НЕ
+                    // идёт. Её он обходит стороной (kBystanderShyness): цель
+                    // выбрана верно, а бьёт его всякий, у кого зубы в
+                    // соседней клетке, охотятся на него или нет. Прежде он
+                    // шёл к одиночке напрямик через стадо и собирал удары по
+                    // дороге.
+                    //
+                    // Считается здесь, а не в п.3 вместе с прочими соседями:
+                    // пока цель не выбрана, неизвестно, кто посторонний, — а
+                    // цель хищник выбирает заново каждый тик, значит и
+                    // сторониться ему каждый тик приходится других.
+                    const int chosen = choice.kind == HuntChoice::Kind::Prey
+                                            ? preyOwner[static_cast<std::size_t>(choice.prey)]
+                                            : -1;
+                    int bystanderDistance = 0;
+                    for (std::size_t b = 0; b < animals.size(); ++b) {
+                        if (static_cast<int>(b) == chosen || animals[b].predator || !alive[b]) {
+                            continue;
+                        }
+                        const int dx = animals[b].x - animal.x;
+                        const int dy = animals[b].y - animal.y;
+                        const int distance = dx * dx + dy * dy;
+                        if (distance > reach * reach) {
+                            continue;
+                        }
+                        if (shy.direction >= 0 && distance >= bystanderDistance) {
+                            continue;
+                        }
+                        shy = WalkShy{walkDirectionTo(animal.x, animal.y, animals[b].x, animals[b].y),
+                                      kBystanderShyness};
+                        bystanderDistance = distance;
                     }
 
                     // Цель шага — не сама добыча и не туша, а следующая
@@ -959,11 +1027,38 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 }
                 break;
             }
-            case Desire::Flee:
+            case Desire::Flee: {
                 // От опасности не идут "к цели" — от неё уходят, поэтому
                 // направление шага считается ниже отдельно, а цели у
                 // бегущего нет.
+                //
+                // А вот драться бегущий может: зубы в соседней клетке — и
+                // это всё условие (core/Strike.hpp). Не ответ на укус и не
+                // особое решение, а то же самое действие, каким хищник бьёт
+                // добычу, просто повод другой.
+                //
+                // Проверки "а можно ли ещё убежать" здесь нет и не должно
+                // быть. Она была — "бьёт, если преследователь не медленнее",
+                // — и оказалась пустой: низ хищничьей полосы скорости выше
+                // верхней середины травоядной (core/generation/
+                // AnimalGenetics.hpp), поэтому "не уйти" было верно для
+                // всех и всегда. Условие, которое никогда ничего не решает,
+                // хуже отсутствия условия: его читают как закон.
+                //
+                // То, ради чего оно заводилось — чтобы хищника не забивало
+                // всё стадо разом, — решается не здесь, а раньше: хищник
+                // выбирает одиночку (kHuntCompany, core/Hunting.hpp). Не
+                // тем, что стадо не бьёт, а тем, что в стадо не лезут.
+                //
+                // Бежать животное при этом не перестаёт: шаг ниже оно всё
+                // равно сделает прочь. Удар — не занятие, а то, что выходит
+                // само, когда зубы уже рядом.
+                if (hasThreat[a] && threatOwner[a] >= 0 &&
+                    strikeReaches(animal.x, animal.y, threatX[a], threatY[a])) {
+                    strikes.push_back(StrikeIntent{threatOwner[a], static_cast<int>(a)});
+                }
                 break;
+            }
             case Desire::Idle:
                 break;
         }
@@ -1090,12 +1185,15 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // с травой, с падалью и с другим животным идут свободно — заняты
         // для животного только вода и камень (core/Path.hpp).
         //
-        // Кого сторониться: травоядное — ближайшего чужого вида (п.3 выше).
-        // Не бросая при этом ни еды, ни пути к паре: сторонение только
-        // выбирает, с какой стороны подойти (core/Walk.hpp, WalkShy).
-        const WalkShy shy =
-            hasRival[a] ? WalkShy{walkDirectionTo(animal.x, animal.y, rivalX[a], rivalY[a]), kRivalShyness}
-                        : WalkShy{};
+        // Кого сторониться — посчитано выше: травоядному ближайший чужой
+        // вид, охотящемуся хищнику ближайшая посторонняя добыча. Ни тот, ни
+        // другой при этом ничего не бросает: сторонение лишь выбирает, с
+        // какой стороны подойти (core/Walk.hpp, WalkShy).
+        // К кому тянуться: к ближайшему своему, если тот дальше kHerdKeep
+        // (п.3 выше). Ровно этим стадо и держится кучей — не строем и не
+        // командой, а тем, что каждому чуть выгоднее шагнуть в сторону своих.
+        const WalkHerd herd =
+            hasKin[a] ? WalkHerd{walkDirectionTo(animal.x, animal.y, kinX[a], kinY[a]), kHerdPull} : WalkHerd{};
         // Утоптанность зверю пока ноль: топчут и притягиваются к тропам
         // сегодня только гоблины (docs/plan/10_Goblins_roadmap.md, шаг 4).
         // Закон при этом общий и написан для всех, кто ходит
@@ -1104,7 +1202,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // в фазу шагов ниже. Две строки, и ни одной больше.
         const auto trodden = [](int, int) { return 0; };
         const WalkStep step =
-            chooseStep(*animal.memory, animal.x, animal.y, aim, shy, standable, trodden, random);
+            chooseStep(*animal.memory, animal.x, animal.y, aim, shy, herd, standable, trodden, random);
+
         if (!step.moved) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
@@ -1255,60 +1354,42 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         for (std::size_t k = n; k < m; ++k) {
             auto& state = *animals[static_cast<std::size_t>(drinks[k].claimant)].state;
             const auto& genome = *animals[static_cast<std::size_t>(drinks[k].claimant)].genome;
-            state.water = std::min(genome.waterCapacity, state.water + drinks[k].want);
+            state.water = std::min(waterCapacityOf(genome), state.water + drinks[k].want);
         }
         n = m;
     }
 
-    // --- 8. Зубы ---
-    // Урон складывается: двое хищников на одной жертве валят её вдвое
-    // быстрее. Смерть от ран разрешается здесь же, а не на следующем тике,
-    // — иначе убитое животное успело бы ещё раз пошевелиться. Каждая
-    // жертва хоронится один раз, сколько бы зубов в ней ни сомкнулось.
-    for (const auto& attack : attacks) {
-        const auto prey = static_cast<std::size_t>(attack.prey);
-        if (!alive[prey]) {
+    // --- 8. Удары ---
+    // Все удары тика разрешаются разом, одним законом и без ролей: нет ни
+    // нападающего, ни защищающегося, есть намерения, собранные в проходе 4
+    // (StrikeIntent). Двое, стоящие рядом, бьют друг друга в этот же тик, и
+    // ни один из двух не бьёт "в ответ".
+    //
+    // Разом — по той же причине, что и доли в core/Share.hpp: исход не
+    // должен зависеть от того, кого EnTT хранит раньше. Бьют все живые на
+    // начало прохода, поэтому убитый успевает ударить того, кто его убил, —
+    // и это верно по сути: удары в одном тике одновременны.
+    //
+    // Урон складывается: двое на одном валят его вдвое быстрее. Смерть от
+    // ран разрешается здесь же, а не на следующем тике, — иначе убитое
+    // животное успело бы ещё раз пошевелиться. Каждый хоронится один раз,
+    // сколько бы ударов в нём ни сошлось.
+    for (const auto& strike : strikes) {
+        const auto target = static_cast<std::size_t>(strike.target);
+        const auto striker = static_cast<std::size_t>(strike.striker);
+        if (!alive[target] || !alive[striker]) {
             continue;
         }
-        animals[prey].state->health -= attack.damage;
-
-        // Рога. Жертва, у которой есть чем бодаться, достаёт укусившего в
-        // ответ — не всегда, а как повезёт: попадает ли удар вообще, решает
-        // её же меткость (genome->goreChance), а не общее для всего мира
-        // число. Удар по рогам не отнимает у хищника здоровья, но оставляет
-        // его хромым, и на это время он перестаёт кого-либо догонять (см.
-        // InjuryComponent).
-        //
-        // Розыгрыш собирается из seed мира, тика и имён обоих зверей
-        // (core/Random.hpp): системе не нужно ничего помнить, а разные пары
-        // в один тик получают разный исход.
-        const auto attacker = static_cast<std::size_t>(attack.attacker);
-        const int defense = animals[prey].genome->defense;
-        if (defense > 0 && alive[attacker]) {
-            std::uint64_t gore =
-                mixSeed(animalSeed, mixSeed(tick, mixSeed(animals[prey].id, animals[attacker].id)));
-            if (static_cast<int>(randomBelow(gore, kFull)) < animals[prey].genome->goreChance) {
-                // Мелкий бодает слабее взрослого — тем же размером, каким
-                // считается и всё остальное в теле.
-                const int preySize = bodySize(animals[prey].state->growth);
-                // Оба измерения хромоты — из одного и того же defense: срок
-                // (как раньше) и теперь ещё тяжесть. Слабо вооружённый вид
-                // калечит слабее, а не только короче — kLameShare здесь не
-                // плоское значение, а худший край шкалы, к которому лишь
-                // приближается защита неполного вложения.
-                const int lame = kLameMaxTicks * defense / kFull * preySize / kFull;
-                const int lameShare = kFull - (kFull - kLameShare) * defense / kFull * preySize / kFull;
-                if (lame > 0) {
-                    auto& injury = *animals[attacker].injury;
-                    // Не складывается: два укуса подряд не удваивают срок и
-                    // не удваивают тяжесть, а оставляют больший срок и
-                    // больший вред. Хромота — состояние, а не счётчик
-                    // полученных ударов.
-                    injury.lameTicks = std::max(injury.lameTicks, lame);
-                    injury.lameShare = std::min(injury.lameShare, lameShare);
-                }
-            }
+        const Animal& who = animals[striker];
+        const Animal& whom = animals[target];
+        const StrikeOutcome outcome =
+            resolveStrike(bodySize(*who.state, *who.genome), bodySize(*whom.state, *whom.genome),
+                          who.genome->hitChance, animalSeed, tick, who.id, whom.id);
+        if (outcome.damage <= 0) {
+            continue; // промах
         }
+        animals[target].state->health -= outcome.damage;
+        applyLameness(*animals[target].injury, outcome);
     }
     for (std::size_t a = 0; a < animals.size(); ++a) {
         if (!alive[a] || animals[a].state->health > 0) {
@@ -1396,25 +1477,40 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // материнские. Ровно тот же обмен, что у растения с семенем.
         const int givenEnergy = mother.state->energy * kBirthEnergyShare / kFull;
         mother.state->energy -= givenEnergy;
-        calf.energy = std::min(givenEnergy, childGenome.energyCapacity);
+        calf.energy = std::min(givenEnergy, energyCapacityOf(childGenome));
 
         const int givenWater = mother.state->water * kBirthWaterShare / kFull;
         mother.state->water -= givenWater;
-        calf.water = std::min(givenWater, childGenome.waterCapacity);
+        calf.water = std::min(givenWater, waterCapacityOf(childGenome));
 
-        // Белок детёнышу — доля материнского, а не одна крупица. Крупица
-        // — это ровно то, что нужно семечку травы, но не телу зверя:
-        // детёныш, которому нужно девять крупиц на взрослый размер, с
-        // одной остаётся мелким надолго, а мелкий хищник не может ни
-        // охотиться (сила удара считается от размера), ни принести
-        // потомство. Мать вкладывает в него треть накопленного — столько
-        // же, сколько отдаёт запасов.
-        const int givenProtein = std::max(0, mother.state->protein / 3);
+        // Белок детёнышу — ВЕСЬ, сколько нужно ему на полный рост, а не
+        // доля материнского. Отсюда две вещи разом.
+        //
+        // Недорослей больше не бывает как явления. Прежде мать отдавала
+        // треть своего, и телёнок крупного вида оставался мелким на всю
+        // жизнь: расти ему было не из чего, а мелкий не может ни охотиться
+        // (удар считается от размера), ни принести потомство. Теперь
+        // потолок роста у новорождённого полный, и сдерживает его только
+        // возраст.
+        //
+        // Роды дорожают ровно по величине вида: крупному нужно втрое больше
+        // крупиц, чем мелкому, и копит он их втрое дольше. Отдельного
+        // "штрафа за размер" для этого заводить не пришлось — цена и есть
+        // само вещество тела.
+        //
+        // Платёжеспособность проверена ЗАРАНЕЕ, при накоплении желания (см.
+        // "Желания" выше): мать без полного белка пары не хочет вовсе. Иначе
+        // двое ходили бы встречаться впустую, обнуляя желание друг другу.
+        const int givenProtein = std::min(mother.state->protein, proteinNeedOf(childGenome));
         mother.state->protein -= givenProtein;
         calf.protein = givenProtein;
-        calf.growth = childGenome.proteinNeed > 0
-                           ? std::min(calf.growth, calf.protein * kFull / childGenome.proteinNeed)
-                           : calf.growth;
+        calf.growth = std::min(calf.growth, calf.protein * kFull / proteinNeedOf(childGenome));
+
+        // Отдых матери — доля её собственной жизни (birthRestOf,
+        // core/Body.hpp). Пока он не истёк, желание пары не копится вовсе.
+        const int motherLifespan =
+            mother.predator ? worldProperties.predatorLifespan : worldProperties.herbivoreLifespan;
+        mother.state->recovery = birthRestOf(*mother.genome, motherLifespan);
 
         mother.desire->mating = 0;
         father.desire->mating = 0;
@@ -1521,15 +1617,22 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kMeatPerSize", kMeatPerSize});
     out.push_back({g, "kHuntHunger", kHuntHunger});
     out.push_back({g, "kCarcassRot", kCarcassRot});
-    out.push_back({g, "kAttackReach", static_cast<float>(kAttackReach)});
+    out.push_back({g, "kStrikeReach", static_cast<float>(kStrikeReach)});
     out.push_back({g, "kHuntCaution", static_cast<float>(kHuntCaution)});
-    out.push_back({g, "kDiseaseRadius", static_cast<float>(kDiseaseRadius)});
-    out.push_back({g, "kDiseaseCrowd", static_cast<float>(kDiseaseCrowd)});
-    out.push_back({g, "kDiseaseHarm", kDiseaseHarm});
+    out.push_back({g, "kHuntPreyShare", kHuntPreyShare});
+    out.push_back({g, "kHuntCompany", static_cast<float>(kHuntCompany)});
+    out.push_back({g, "kCompanyRadius", static_cast<float>(kCompanyRadius)});
     out.push_back({g, "kRivalShyness", kRivalShyness});
     out.push_back({g, "kCarcassFearWeight", kCarcassFearWeight});
+    out.push_back({g, "kStrikePerSize", kStrikePerSize});
     out.push_back({g, "kLameMaxTicks", static_cast<float>(kLameMaxTicks)});
     out.push_back({g, "kLameShare", kLameShare});
+    out.push_back({g, "kMinLameShare", kMinLameShare});
+    out.push_back({g, "kEnergyPerSize", static_cast<float>(kEnergyPerSize)});
+    out.push_back({g, "kWaterPerSize", static_cast<float>(kWaterPerSize)});
+    out.push_back({g, "kProteinPerSize", static_cast<float>(kProteinPerSize)});
+    out.push_back({g, "kMaturityShare", static_cast<float>(kMaturityShare)});
+    out.push_back({g, "kBirthRestShare", static_cast<float>(kBirthRestShare)});
 
     // Веса шага (core/Walk.hpp) — своей группой: они не про жизнь животного,
     // а про его походку, и подбираются вместе, друг против друга.

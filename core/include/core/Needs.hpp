@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "core/Body.hpp"
 #include "core/Scale.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
@@ -31,16 +32,14 @@ namespace goblins {
 // на собственный рост — это один и тот же позыв есть, и удовлетворяются они
 // одной и той же травой.
 inline int hungerOf(const AnimalComponent& state, const AnimalGenomeComponent& genome) {
-    const int energyDeficit =
-        genome.energyCapacity > 0 ? kFull - state.energy * kFull / genome.energyCapacity : kFull;
-    const int proteinDeficit = genome.proteinNeed > 0 ? kFull - state.protein * kFull / genome.proteinNeed : 0;
+    const int energyDeficit = kFull - state.energy * kFull / energyCapacityOf(genome);
+    const int proteinDeficit = kFull - state.protein * kFull / proteinNeedOf(genome);
     return std::clamp(std::max(energyDeficit, proteinDeficit), 0, kFull);
 }
 
 // Жажда, 0..kFull.
 inline int thirstOf(const AnimalComponent& state, const AnimalGenomeComponent& genome) {
-    return std::clamp(genome.waterCapacity > 0 ? kFull - state.water * kFull / genome.waterCapacity : kFull, 0,
-                      kFull);
+    return std::clamp(kFull - state.water * kFull / waterCapacityOf(genome), 0, kFull);
 }
 
 } // namespace goblins

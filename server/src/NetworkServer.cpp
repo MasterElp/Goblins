@@ -406,7 +406,8 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
                 .desire = desire.current,
                 .species = genome.species,
                 .predator = registry.all_of<PredatorComponent>(entity),
-                .sex = animal.sex});
+                .sex = animal.sex,
+                .adultSize = genome.adultSize});
         });
     // По идентификатору, и только по нему. Порядок обязан быть одинаковым
     // от тика к тику — иначе дельта видела бы изменение там, где мир не
@@ -562,6 +563,7 @@ nlohmann::json NetworkServer::animalToJson(const LayerSnapshot::AnimalView& anim
             {"growth", animal.growth},
             {"health", animal.health},
             {"sex", sexName(animal.sex)},
+            {"adult_size", animal.adultSize},
             {"desire", desireName(animal.desire)}};
 }
 
@@ -575,8 +577,8 @@ nlohmann::json NetworkServer::animalsToJson(const std::vector<LayerSnapshot::Ani
 
 nlohmann::json NetworkServer::animalsDeltaJson(const std::vector<LayerSnapshot::AnimalView>& previous,
                                                 const std::vector<LayerSnapshot::AnimalView>& current) {
-    // Вид, диета и пол животного не меняются за всю его жизнь, поэтому в
-    // дельте их нет вовсе: они приезжают один раз, в карточке. Само слияние
+    // Вид, диета, пол и размер взрослого не меняются за всю его жизнь,
+    // поэтому в дельте их нет вовсе: они приезжают один раз, в карточке. Само слияние
     // — общий закон (creaturesDeltaJson выше).
     return creaturesDeltaJson(previous, current, animalToJson,
                               [](std::size_t, const LayerSnapshot::AnimalView&,
@@ -780,6 +782,7 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
             }
             const auto& preyPosition = registry.get<const PositionComponent>(other);
             const auto& preyGenome = registry.get<const AnimalGenomeComponent>(other);
+            const auto& preyBody = registry.get<const AnimalComponent>(other);
             // Под кроной добычу не высматривают (kCoverSight,
             // core/Hunting.hpp). Наблюдатель обязан видеть ровно то же, что
             // и хищник, иначе нарисованная дорога разойдётся с настоящей.
@@ -790,12 +793,31 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
                     break;
                 }
             }
-            preys.push_back(
-                HuntPrey{preyPosition.x, preyPosition.y, preyGenome.speed, preyGenome.defense, underTree});
+            // Сколько своих стоит рядом с ней (kHuntCompany, core/Hunting.hpp).
+            // Считается тем же способом, что и в самой системе: наблюдатель
+            // обязан выбрать ту же цель, иначе нарисованная дорога поведёт
+            // не туда, куда пойдёт хищник.
+            int company = 0;
+            for (const auto neighbour :
+                 registry.view<const AnimalComponent, const PositionComponent>(
+                     entt::exclude<GoblinComponent, PredatorComponent>)) {
+                if (neighbour == other) {
+                    continue;
+                }
+                const auto& at = registry.get<const PositionComponent>(neighbour);
+                if (std::abs(at.x - preyPosition.x) <= kCompanyRadius &&
+                    std::abs(at.y - preyPosition.y) <= kCompanyRadius) {
+                    ++company;
+                }
+            }
+            preys.push_back(HuntPrey{preyPosition.x, preyPosition.y, preyGenome.speed,
+                                      bodySize(preyBody, preyGenome), company, underTree});
         }
 
         const HuntChoice choice = chooseHuntTarget(
-            reach, Hunter{position.x, position.y, sight, genome.speed, hungerOf(animal, genome)}, preys,
+            reach,
+            Hunter{position.x, position.y, sight, genome.speed, hungerOf(animal, genome), bodySize(animal, genome)},
+            preys,
             [&world](int x, int y) { return tileFactsAt(world, x, y).carcass; },
             mixSeed(static_cast<std::uint64_t>(properties.animalRandomSeed), mixSeed(tick, id)));
         if (choice.kind != HuntChoice::Kind::None) {
@@ -1242,7 +1264,7 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             const std::optional<RestPlace> restHere = restPlaceAt(world_, position.x, position.y);
             const int restQuality = restHere ? restQualityOf(*restHere) : 0;
             watched["doing"] =
-                goblinActivity(desire.current, place, hands, bodySize(body.growth), restQuality,
+                goblinActivity(desire.current, place, hands, bodySize(body, genome), restQuality,
                                 home != nullptr && home->x == position.x && home->y == position.y);
 
             // Годность места под ногами — числом рядом с порогом, по которому

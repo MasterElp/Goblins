@@ -14,6 +14,12 @@ namespace {
 // world_init; теперь он постоянный, и присылать нечего.
 constexpr float kFromHundredths = 0.01f;
 
+// Размер взрослого приезжает тысячными (adult_size, core/Scale.hpp), а не
+// сотыми: он единственное поле карточки, которое живёт в шкале мира, а не в
+// шкале показа, и округлять его до сотых значило бы терять разницу между
+// близкими видами.
+constexpr float kFromThousandths = 0.001f;
+
 // Слой в дельте — плоский массив пар "индекс тайла, новое значение"
 // (см. протокол в server/NetworkServer.hpp). Индекс проверяется:
 // сообщение приходит извне, и битые данные не должны приводить к записи
@@ -49,6 +55,7 @@ WorldState::Animal parseAnimal(const nlohmann::json& animal) {
     // рисуется здоровым, а не мёртвым. Сотые, как и всё остальное в слоях.
     parsed.health = animal.value("health", 100) * kFromHundredths;
     parsed.predator = animal.value("kind", std::string{}) == "predator";
+    parsed.adultSize = animal.value("adult_size", 1000) * kFromThousandths;
     parsed.sex = animal.value("sex", std::string{});
     parsed.desire = animal.value("desire", std::string{});
     return parsed;

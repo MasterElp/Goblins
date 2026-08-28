@@ -25,12 +25,9 @@ namespace goblins {
 // поведении, и потому отложено осознанно, а не забыто.
 //
 // Чего здесь НЕТ и почему:
-//   - болезнь от тесноты: она про скученность СВОИХ сородичей, а поселение
-//     тесно по самой своей сути. Один и тот же порог означал бы для стада
-//     "разойдитесь", а для деревни "не собирайтесь" — это разные законы, и
-//     живут они у тех, к кому относятся;
-//   - память ног (fadeWalkMemory) и заживление хромоты: первое —
-//     core/Walk.hpp, второе — про рога, которых у гоблина нет;
+//   - удар и хромота: это не то, что тело делает само, а то, что с ним
+//     делает другое тело, — core/Strike.hpp;
+//   - память ног (fadeWalkMemory): core/Walk.hpp;
 //   - страх: он считается не из своего тела, а из чужого присутствия (см.
 //     core/Needs.hpp).
 
@@ -170,26 +167,157 @@ constexpr int kBirthEnergyShare = 450;
 constexpr int kBirthWaterShare = 300;
 constexpr int kNewbornGrowth = 80;
 
-// Размер тела по развитости: от kMinSizeShare у новорождённого до kFull у
-// взрослого. Спрашивают его отовсюду, где величина зависит от того,
-// насколько существо выросло, — расход, укус, шаг, удар, вес туши.
-inline int bodySize(int growth) {
-    return kMinSizeShare + (kFull - kMinSizeShare) * growth / kFull;
+// --- Размер и то, что из него следует ---
+//
+// Размер взрослого — черта генома (adult_size), и притом черта-ниша: она
+// ничего не стоит в бюджете преимуществ, потому что крупным быть не лучше и
+// не хуже, а иначе (core/generation/Genetics.hpp, weight == 0). Платит за
+// размер сам мир: крупный больше ест, дольше растёт и требует больше
+// вещества.
+//
+// Ради чего он заведён. Хищнику и гоблину нужна БИОМАССА в тик, а на карте
+// видно ПОГОЛОВЬЕ. Пока все взрослые были одного размера, связать одно с
+// другим было нечем: единственный способ дать хищникам больше мяса — больше
+// голов, и мир зарастал мелочью. Теперь та же кормовая база выражается
+// вдвое-втрое меньшим числом зверей покрупнее.
+//
+// Отсюда же и четыре величины ниже. Все они прежде были отдельными чертами,
+// и все они на деле — не выбор вида, а следствие его величины: большое тело
+// вмещает больше, требует больше вещества и дольше растёт. Оставлять их
+// покупаемыми значило бы позволить виду быть крупным даром.
+//
+// Постоянные общие для всех трёх диет намеренно: тело у травоядного,
+// хищника и гоблина одно и то же (см. шапку файла), и заводить здесь
+// исключение по диете значило бы разводить это тело надвое. Разница между
+// ними остаётся там, где она и была, — в диапазонах черт: у хищника выше
+// полоса размера (он крупнее того, кого ест) и своя полоса расхода.
+
+// Энергии влезает в тело на полный размер. Отсюда и время жизни без еды:
+// kEnergyPerSize / energy_upkeep тиков, и величина эта от размера не
+// зависит — расход растёт вместе с баком.
+//
+// Число не подобрано, а выведено: это kMeatPerSize * kEnergyPerBiomass
+// (core/Carcass.hpp, выше), то есть ровно энергия туши СВОЕГО размера.
+// Тем и держится закон, без которого хищники вымирали в каждом прогоне:
+// желудок обязан вмещать добычу целиком, иначе зверь наедается с трети
+// туши, бросает остальное, и следующая охота нужна ему раньше, чем он
+// успевает окупить прошлую.
+//
+// Травоядному та же мерка достаётся заодно, и это её цена: бак у него
+// вышел заметно больше прежнего, а значит и наполняется дольше — голод у
+// стада держится выше при том же корме. Поскольку голод теперь единственный
+// регулятор численности (болезни от тесноты больше нет), это ГЛАВНОЕ число
+// всей правки: выше — стадо голоднее и плодится реже, ниже — хищник не
+// доедает добычу. Встречный рычаг, если стадо перестанет плодиться вовсе, —
+// kCalmNeed в AnimalSystem.
+constexpr int kEnergyPerSize = 208000;
+
+// Воды — на тот же полный размер.
+constexpr int kWaterPerSize = 42000;
+
+// Целых крупиц белка на полный рост. Не меньше одной: тело, которому не
+// нужно ни крупицы, росло бы из ничего.
+constexpr int kProteinPerSize = 6;
+
+// Какую долю своей жизни существо растёт. Взрослеет всякий к четверти
+// предельного возраста, какова бы ни была эта жизнь.
+//
+// От размера срок взросления больше НЕ зависит, и это исправление, а не
+// упрощение. Пока он считался как 2500 * размер, крупный вид взрослел к
+// 7500 при жизни в 8947 — то есть проводил в детстве почти всю её и до
+// порога размножения (kBreedingGrowth) не доживал вовсе. Беда была
+// врождённой: размер — черта-ниша без цены, а предельный возраст покупается
+// бюджетом, и разъехаться им ничто не мешало. Вид мог выпасть крупным и
+// короткоживущим — мёртвым с рождения, без единого потомка за всю историю.
+//
+// Долей от собственной жизни такой вид становится НЕВОЗМОЖЕН, а не просто
+// редок: до взрослого доживает всякий, кто доживает до трёх четвертей себя.
+// А цена величины никуда не делась — за неё по-прежнему платят белком,
+// кормом и клеткой луга, на которой крупному может не хватить травы.
+constexpr int kMaturityShare = 250;
+
+// Сколько существо отдыхает после родов — доля предельного возраста.
+//
+// Долей, а не числом тиков, по той же причине, что и взросление: срок
+// обязан течь в том же времени, в каком живёт сам вид. Иначе долгожитель,
+// которому мир растянули жизнь вдесятеро, начал бы плодиться вдесятеро чаще
+// за жизнь, и поголовье поехало бы от одной лишь настройки долголетия.
+//
+// Вместе с kMaturityShare это и держит численность на месте при любом
+// множителе жизни: и детство, и отдых между родами растягиваются ровно во
+// столько же раз, во сколько сама жизнь, — значит число потомков за жизнь
+// не меняется, растягивается только время.
+constexpr int kBirthRestShare = 125;
+
+// Размер тела: от kMinSizeShare доли взрослого у новорождённого до полного
+// adult_size у выросшего. Спрашивают его отовсюду, где величина зависит от
+// того, насколько существо выросло И насколько оно велико само по себе, —
+// расход, укус, шаг, удар, вес туши.
+inline int bodySize(int growth, int adultSize) {
+    return adultSize * (kMinSizeShare + (kFull - kMinSizeShare) * growth / kFull) / kFull;
+}
+
+inline int bodySize(const AnimalComponent& state, const AnimalGenomeComponent& genome) {
+    return bodySize(state.growth, genome.adultSize);
+}
+
+inline int energyCapacityOf(const AnimalGenomeComponent& genome) {
+    return kEnergyPerSize * genome.adultSize / kFull;
+}
+
+inline int waterCapacityOf(const AnimalGenomeComponent& genome) {
+    return kWaterPerSize * genome.adultSize / kFull;
+}
+
+inline int proteinNeedOf(const AnimalGenomeComponent& genome) {
+    return std::max(1, kProteinPerSize * genome.adultSize / kFull);
+}
+
+// Сколько существо живёт и когда взрослеет — с поправкой на долголетие вида
+// (WorldPropertiesComponent, в тысячных: kFull — как записано в геноме,
+// 10000 — вдесятеро дольше).
+//
+// Множитель приходит СНАРУЖИ, а не сидит в геноме, и это не мелочь: умножь
+// сам ген — и вложение черты посчитается против неумноженных границ таблицы
+// (advantageOf, core/generation/Genetics.hpp), обрежется до единицы, и весь
+// бюджет преимуществ поедет молча. Долголетие — свойство мира, как скорость
+// мутаций, а не выбор вида.
+//
+// Число приносит вызывающий — тем же способом, каким feedBody получает цену
+// куска: тело по-прежнему не знает ни про диеты, ни про виды.
+inline int maxAgeOf(const AnimalGenomeComponent& genome, int lifespan) {
+    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.maxAge) * lifespan / kFull));
+}
+
+inline int maturityAgeOf(const AnimalGenomeComponent& genome, int lifespan) {
+    return std::max(1, maxAgeOf(genome, lifespan) * kMaturityShare / kFull);
+}
+
+// Сколько тиков мать отдыхает после родов.
+inline int birthRestOf(const AnimalGenomeComponent& genome, int lifespan) {
+    return std::max(1, maxAgeOf(genome, lifespan) * kBirthRestShare / kFull);
 }
 
 // Что время делает с телом за один тик: расход на существование,
 // взросление, пищеварение, здоровье.
 //
 // Смерть здесь НЕ проверяется, и это не забывчивость. Между здоровьем и
-// смертью у каждого свои беды: у животного — болезнь от тесноты, у гоблина
-// когда-нибудь будет своя. Отними их сам и спроси bodyDied после — иначе
+// смертью у каждого свои беды: удар (core/Strike.hpp) отнимает здоровье уже
+// после общего закона тела. Отними их сам и спроси bodyDied после — иначе
 // беда этого тика убьёт только на следующем.
 //
 // tick и id нужны пищеварению: отсчёт сдвинут на постоянный идентификатор,
 // иначе всё поголовье испражнялось бы одним и тем же тиком.
-inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& genome, std::uint64_t tick,
-                        std::uint64_t id) {
-    const int size = bodySize(state.growth);
+inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& genome, int lifespan,
+                        std::uint64_t tick, std::uint64_t id) {
+    const int size = bodySize(state, genome);
+
+    // Отдых после родов утекает по тику за тик — срок, а не скорость
+    // (core/Scale.hpp). Здесь, в теле, а не среди желаний: мать не решает
+    // отдыхать, она просто ещё не готова.
+    if (state.recovery > 0) {
+        --state.recovery;
+    }
 
     // Цена существования. Тратится всегда — стоящее на месте животное
     // тоже живёт.
@@ -215,9 +343,9 @@ inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& gen
     // дробная скорость (kFull / maturityAge) выражается целыми числами, и
     // телу нечего помнить между тиками — возраст оно и так хранит.
     if (state.growth < kFull && state.energy > 0) {
-        const int proteinCeiling = genome.proteinNeed > 0 ? state.protein * kFull / genome.proteinNeed : kFull;
+        const int proteinCeiling = state.protein * kFull / proteinNeedOf(genome);
         const int ceiling = std::min(kFull, std::max(state.growth, proteinCeiling));
-        const int maturity = std::max(1, genome.maturityAge);
+        const int maturity = maturityAgeOf(genome, lifespan);
         const int gain = state.age * kFull / maturity - ageBefore * kFull / maturity;
         state.growth = std::clamp(state.growth + gain, 0, ceiling);
     }
@@ -244,8 +372,8 @@ inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& gen
 // Кончилось ли тело: от старости или оттого, что здоровье вышло. Причины
 // разные, исход один — тело ложится падалью (см. enqueueDeath в
 // core/Carcass.hpp).
-inline bool bodyDied(const AnimalComponent& state, const AnimalGenomeComponent& genome) {
-    return state.age >= genome.maxAge || state.health <= 0;
+inline bool bodyDied(const AnimalComponent& state, const AnimalGenomeComponent& genome, int lifespan) {
+    return state.age >= maxAgeOf(genome, lifespan) || state.health <= 0;
 }
 
 // Что делает с телом съеденный кусок. Закон один на все диеты, а вот цена
@@ -267,8 +395,8 @@ inline void feedBody(AnimalComponent& state, const AnimalGenomeComponent& genome
     if (eaten <= 0) {
         return;
     }
-    state.energy = std::min(genome.energyCapacity, state.energy + eaten * energyPerBiomass);
-    state.water = std::min(genome.waterCapacity, state.water + eaten * kWaterPerFood);
+    state.energy = std::min(energyCapacityOf(genome), state.energy + eaten * energyPerBiomass);
+    state.water = std::min(waterCapacityOf(genome), state.water + eaten * kWaterPerFood);
 }
 
 // Куда девается крупица белка, попавшая в тело: в запас, а если тело больше
@@ -276,7 +404,7 @@ inline void feedBody(AnimalComponent& state, const AnimalGenomeComponent& genome
 // — собственная потребность на полный рост: больше своего размера в себе не
 // унесёшь.
 inline void takeProtein(AnimalComponent& state, const AnimalGenomeComponent& genome, int grains) {
-    const int cap = std::max(1, genome.proteinNeed);
+    const int cap = proteinNeedOf(genome);
     for (int grain = 0; grain < grains; ++grain) {
         if (state.protein < cap) {
             ++state.protein;
