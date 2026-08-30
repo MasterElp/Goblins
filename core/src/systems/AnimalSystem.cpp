@@ -196,6 +196,31 @@ constexpr std::uint64_t kRoamTicks = 40;
 // закон, записанный дважды.
 constexpr int kCarcassFearWeight = 700;
 
+// --- Страх от ран ---
+// Насколько пугает чужая сила того, у кого не осталось целости. Полная
+// величина — это раненный НАСМЕРТЬ рядом с равным по величине врагом; на
+// деле страх выходит меньше во столько раз, во сколько тело ещё цело.
+//
+// Второй источник страха и первый, общий для всех. Прежде страх был
+// свойством одной диеты: "хищник ни от кого не бегает — на него в этом мире
+// не охотятся". Это было верно ровно до тех пор, пока рога отвечали одной
+// хромотой. Теперь добыча его убивает, а отступать он не умел вовсе — и
+// охотился при здоровье 270 из 1000, пока не погибал. Замер: у всех
+// охотящихся хищников здоровье 270..787, при этом энергии в баках
+// половина и больше. Умирали они ранеными, а не голодными.
+//
+// Величина подобрана против порога желаний (kDesireFloor = 350): при
+// половине утраченной целости и равном по величине враге страх выходит 500
+// — потрёпанный уходит; при четверти утраченной — 250, ниже порога:
+// поцарапанный продолжает охоту.
+//
+// Расстояние в эту величину НЕ входит, в отличие от страха добычи, и это не
+// упущение. Добыча боится приближения зубов, а раненый боится места, где
+// его бьют: пока опасный в поле зрения, он уходит, а не приплясывает у края
+// досягаемости. Оттого он и покидает стадо целиком, а потом берёт одиночку
+// — ровно то, ради чего заведён и выбор отбившегося (kHuntCompany).
+constexpr int kWoundFear = kFull;
+
 // --- Намерения ---
 // Собираются при обходе животных и исполняются после него. Отдельный шаг
 // нужен там же, где и в PlantSystem: на один куст, одну тушу и один
@@ -421,11 +446,16 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // Обратный указатель в снимок: страх называет клетку, а бить надо
     // конкретного зверя (см. threatOwner).
     std::vector<int> predatorOwner;
+    // Величина тела каждого: страх мерится не наличием зубов, а тем, чьи они
+    // (см. ниже). Считается здесь, один раз за тик, а не заново для каждого
+    // травоядного.
+    std::vector<int> predatorSize;
     for (std::size_t b = 0; b < animals.size(); ++b) {
         if (animals[b].predator) {
             predatorX.push_back(animals[b].x);
             predatorY.push_back(animals[b].y);
             predatorOwner.push_back(static_cast<int>(b));
+            predatorSize.push_back(bodySize(*animals[b].state, *animals[b].genome));
         }
     }
 
@@ -508,12 +538,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         animal.hunger = hungerOf(state, genome);
         animal.thirst = thirstOf(state, genome);
 
-        // Страх: насколько близко видна опасность. Хищник ни от кого не
-        // бегает — на него в этом мире не охотятся (09_Animals.md, п.2).
+        // Страх складывается из двух источников, и берётся БОЛЬШИЙ, а не
+        // сумма: они об разном. Первый — "вижу зубы", он есть только у
+        // добычи и от ран не зависит: здоровое травоядное обязано убегать
+        // ровно так же, как раненое, иначе пищевая цепь поедет в другую
+        // сторону. Второй — "я ранен, а рядом тот, кто добьёт", и он общий
+        // для всех (kWoundFear ниже).
         animal.fear = 0;
         if (!animal.predator) {
             const int sightCells = std::max(1, genome.perception);
             const float sight = static_cast<float>(sightCells);
+            const int mySize = std::max(1, bodySize(state, genome));
             for (std::size_t b = 0; b < predatorX.size(); ++b) {
                 const int dx = predatorX[b] - animal.x;
                 const int dy = predatorY[b] - animal.y;
@@ -521,6 +556,24 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 if (distance > sight) {
                     continue;
                 }
+                // Страшен не всякий, у кого зубы, а тот, кто способен ими
+                // что-то сделать. Мерка та же, что решает исход удара
+                // (core/Strike.hpp), — отношение размеров: хищник вровень
+                // пугает в полную силу, вдвое меньший — вполовину, и до
+                // порога желаний такой страх уже не дотягивает.
+                //
+                // Без этого весь молодняк хищников выбивался в первые
+                // тики. Взрослое травоядное вчетверо-впятеро крупнее
+                // недоросля, а бьёт всякий, кого напугали: отношение пять
+                // даёт урон 1750 при здоровье 1000 — то есть насмерть с
+                // одного попадания, ещё до того, как у жертвы появится
+                // хоть какой-то страх. Замер: шестьдесят хищников
+                // превращались в тридцать за десять тиков при ЛЮБЫХ
+                // правках боя, потому что дело было не в бое.
+                //
+                // Заодно это и просто верно: стадо не разбегается от
+                // котёнка и не топчет его.
+                const int danger = std::min(kFull, predatorSize[b] * kFull / mySize);
                 // Увидел — беги. Страх растёт по мере приближения зубов, но
                 // и на самом краю видимости он уже выше порога желаний
                 // (kDesireFloor): замеченный хищник — всегда повод уходить,
@@ -536,7 +589,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // считать корень из суммы квадратов целыми числами незачем,
                 // а хранится всё равно целое (core/Scale.hpp).
                 const int scare =
-                    kDesireFloor + static_cast<int>((kFull - kDesireFloor) * (1.0f - distance / sight));
+                    (kDesireFloor + static_cast<int>((kFull - kDesireFloor) * (1.0f - distance / sight))) *
+                    danger / kFull;
                 if (scare > animal.fear) {
                     animal.fear = scare;
                     threatX[a] = predatorX[b];
@@ -596,6 +650,44 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 std::min(kFull, carcassMeat[index(animal.x, animal.y)] * kCarcassFearWeight / kMeatPerSize);
             if (dread > animal.fear) {
                 animal.fear = dread;
+            }
+        }
+
+        // Страх от ран — общий для всех, у кого есть тело. Раненый боится
+        // того, кто способен его добить, и уходит залечиваться; целый не
+        // боится никого, поэтому здоровый хищник охотится ровно как
+        // охотился — новый источник ничего не меняет, пока его не поранят.
+        //
+        // Опасность мерится тем же отношением размеров, каким считается
+        // исход удара (core/Strike.hpp): заяц рядом с раненым волком не
+        // страшен, лось страшен. Своё поголовье в счёт не идёт — свои не
+        // бьют своих, врагом бывает только другая диета.
+        //
+        // Перебор по всем животным, а не по короткому списку: у хищника
+        // опасны травоядные, а их сотни, и отдельного списка для них нет.
+        // Тот же приём и та же цена, что у поиска чужого вида ниже.
+        const int hurt = kFull - std::clamp(state.health, 0, kFull);
+        if (hurt > 0) {
+            const int mySize = std::max(1, bodySize(state, genome));
+            const int sightCells = std::max(1, genome.perception);
+            for (std::size_t b = 0; b < animals.size(); ++b) {
+                if (b == a || !alive[b] || animals[b].predator == animal.predator) {
+                    continue;
+                }
+                const int dx = animals[b].x - animal.x;
+                const int dy = animals[b].y - animal.y;
+                if (dx * dx + dy * dy > sightCells * sightCells) {
+                    continue;
+                }
+                const int danger = bodySize(*animals[b].state, *animals[b].genome) * kFull / mySize;
+                const int scare = std::clamp(kWoundFear * hurt / kFull * danger / kFull, 0, kFull);
+                if (scare > animal.fear) {
+                    animal.fear = scare;
+                    threatX[a] = animals[b].x;
+                    threatY[a] = animals[b].y;
+                    threatOwner[a] = static_cast<int>(b);
+                    hasThreat[a] = true;
+                }
             }
         }
 
@@ -741,19 +833,28 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             hasRival[a] ? WalkShy{walkDirectionTo(animal.x, animal.y, rivalX[a], rivalY[a]), kRivalShyness}
                         : WalkShy{};
 
-        // Хромой ходит медленнее — и это ЕДИНСТВЕННОЕ, что делает с ним
-        // увечье (см. InjuryComponent). Больше ничего и не нужно: скорость
-        // решает и погоню, и бегство, а половины хода не хватает, чтобы
-        // догнать хоть кого-нибудь.
+        // Хромота отнимает ПОГОНЮ, а не ход. Хромой зверь идёт своими
+        // ногами, но догнать никого не может: увечная скорость входит в
+        // выбор добычи (core/Hunting.hpp — хищник пропускает тех, кто не
+        // медленнее его), а сам шаг делается прежней.
         //
-        // Одна величина на оба места, где скорость вообще участвует: и на
-        // сам шаг, и на выбор добычи. Выбор — не косметика: хищник
-        // пропускает тех, кто не медленнее его (core/Hunting.hpp), и если
-        // хромота не войдёт в это сравнение, он побежит за той добычей,
-        // догнать которую уже не может, и будет жечь силы впустую.
-        const int effectiveSpeed = animal.injury->lameTicks > 0
-                                        ? genome.speed * animal.injury->lameShare / kFull
-                                        : genome.speed;
+        // Прежде это была одна величина на оба места, и она убивала
+        // хищников. Одно и то же число служило двум противоположным целям:
+        // "хромой не догонит" и "хромой не уйдёт". Вторая цель не
+        // задумывалась вовсе, но выходила сама, и выходила смертельной:
+        // удар крупного травоядного (отношение размеров до пяти) ронял
+        // скорость к полу в три десятых, то есть НИЖЕ скорости всего, что
+        // хищника окружает. Уйти из стада он после первого же удара не мог
+        // ни при каком страхе и ни при каком выборе цели — его добивали не
+        // спеша. Замер: ни один из десяти выживших не смог бы оторваться
+        // (293..644 против 757 у быстрейшего травоядного).
+        //
+        // Цена решения названа прямо: укус больше не замедляет добычу, и
+        // догонять со второго раза хищнику нечем. Взамен и рога делают ровно
+        // то, ради чего заведены, — срывают охоту, не превращая её в казнь.
+        const int chaseSpeed = animal.injury->lameTicks > 0
+                                    ? genome.speed * animal.injury->lameShare / kFull
+                                    : genome.speed;
 
         // Куда животное вообще может встать (core/Hunting.hpp, standableAt):
         // не за границей Области, не на занятый непроходимым объектом тайл и
@@ -841,7 +942,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // дорогу на карте, и разъехаться им негде.
                     reachOf.build(world.area(), animal.x, animal.y, reach, standable);
                     const HuntChoice choice = chooseHuntTarget(
-                        reachOf, Hunter{animal.x, animal.y, reach, effectiveSpeed, animal.hunger, size}, preys,
+                        reachOf, Hunter{animal.x, animal.y, reach, chaseSpeed, animal.hunger, size}, preys,
                         [&](int nx, int ny) { return carcassMeat[index(nx, ny)]; }, random);
 
                     // Добыча в пределах досягаемости зубов — бьём, и никуда
@@ -1081,7 +1182,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // Дробным оно уезжало туда же, просто этого не было видно; целое
         // состояние мира обязано жить в тех пределах, которые о нём
         // объявлены (см. AnimalComponent::stepProgress).
-        state.stepProgress = std::min(state.stepProgress + effectiveSpeed, 2 * kFull - 1);
+        state.stepProgress = std::min(state.stepProgress + genome.speed, 2 * kFull - 1);
         if (state.stepProgress < kFull) {
             continue;
         }
