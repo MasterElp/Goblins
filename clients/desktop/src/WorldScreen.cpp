@@ -937,7 +937,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                         GoblinSprites::source(goblin.tribe,
                                               GoblinSprites::poseOf(goblin.desire, walking, loaded),
                                               GoblinSprites::stageOf(goblin.growth),
-                                              GoblinSprites::frameOf(goblin.id, snapshot.tick), goblin.facing),
+                                              GoblinSprites::frameOf(goblin.id, snapshot.tick),
+                                              GoblinSprites::Facing{goblin.facing, goblin.verticalStep}),
                         Rectangle{screenX, screenY, tileSizeF, tileSizeF}, Vector2{0, 0}, 0.0f, WHITE);
                 } else {
                     const Color color = TileColors::goblinTribe(goblin.tribe);

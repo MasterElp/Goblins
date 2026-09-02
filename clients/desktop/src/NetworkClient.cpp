@@ -389,11 +389,17 @@ void NetworkClient::applyGoblinChanges(const nlohmann::json& message) {
             }
             auto& goblin = working_.goblins[index];
             const int x = triples[p + 1].get<int>();
-            // Шаг строго вверх или вниз сторону не меняет: обе одинаково
-            // неверны, и выбор между ними заставил бы идущего по вертикали
-            // дёргаться от тика к тику.
+            const int y = triples[p + 2].get<int>();
+            // Боковая составляющая важнее отвесной, и потому спрашивается
+            // первой: у косого шага есть обе, и со стороны такой шаг
+            // выглядит боковым, а не отвесным.
             if (x != goblin.x) {
                 goblin.facing = x > goblin.x ? 1 : -1;
+                goblin.verticalStep = 0;
+            } else if (y != goblin.y) {
+                // Отвесный: боковой составляющей нет вовсе, и сторона
+                // остаётся прежней — ей просто нечем смениться.
+                goblin.verticalStep = y > goblin.y ? 1 : -1;
             }
             goblin.stepTick = working_.tick;
         }

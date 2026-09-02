@@ -1,6 +1,7 @@
 #include "GoblinSprites.hpp"
 
 #include <array>
+#include <cstddef>
 #include <vector>
 
 #include "SpriteAtlas.hpp"
@@ -10,8 +11,32 @@ namespace GoblinSprites {
 
 namespace {
 
+// Сколько видов у занятия: сбоку, со спины, навстречу.
+//
+// Три вида — только у ходьбы и у ноши, у остальных один, и это не экономия
+// на кадрах. Направление есть у того, кто ИДЁТ; у стоящего, жующего и
+// лежащего его в мире нет вовсе — там последний шаг уже ничего не значит, и
+// рисовать по нему спину значило бы отвечать на незаданный вопрос.
+constexpr std::array<int, kPoses> kPoseViews = {1, 3, 3, 1, 1, 1, 1};
+
+// Виды в том порядке, в каком они лежат в списке имён.
+enum class View { Side = 0, Away, Toward };
+
+// Где начинаются кадры занятия внутри одного возраста. Считается из
+// kPoseViews, а не выписано числами: числа разъехались бы со списком имён
+// молча — рисунок остался бы рисунком, просто занятия перепутались бы
+// местами.
+constexpr int poseFirst(int pose) {
+    int first = 0;
+    for (int i = 0; i < pose; ++i) {
+        first += kPoseViews[static_cast<std::size_t>(i)] * kFrames;
+    }
+    return first;
+}
+constexpr int kFramesPerStage = poseFirst(kPoses);
+
 // Имена кадров в файле рисунка. Порядок здесь — порядок, в котором их
-// спрашивают отсюда же (frameAt ниже): возраст, занятие, кадр. В самом
+// спрашивают отсюда же (frameAt ниже): возраст, занятие, вид, кадр. В самом
 // ресурсе он может быть любым — кадры ищутся по имени (Assets::frameIndex),
 // и вот этот список тому единственная причина.
 //
@@ -19,14 +44,30 @@ namespace {
 // возвращает его stageOf. Список, идущий не в ту сторону, что число из
 // stageOf, — самая тихая из возможных ошибок: рисунок остаётся рисунком,
 // просто дети выглядят взрослыми.
-constexpr std::array<const char*, kStages * kPoses * kFrames> kFrameNames = {
-    "child.stand.a", "child.stand.b", "child.walk.a",  "child.walk.b",  "child.carry.a",
-    "child.carry.b", "child.eat.a",   "child.eat.b",   "child.drink.a", "child.drink.b",
-    "child.rest.a",  "child.rest.b",  "child.work.a",  "child.work.b",
+constexpr std::array<const char*, kStages * kFramesPerStage> kFrameNames = {
+    "child.stand.a",         "child.stand.b",
+    "child.walk.side.a",     "child.walk.side.b",
+    "child.walk.away.a",     "child.walk.away.b",
+    "child.walk.toward.a",   "child.walk.toward.b",
+    "child.carry.side.a",    "child.carry.side.b",
+    "child.carry.away.a",    "child.carry.away.b",
+    "child.carry.toward.a",  "child.carry.toward.b",
+    "child.eat.a",           "child.eat.b",
+    "child.drink.a",         "child.drink.b",
+    "child.rest.a",          "child.rest.b",
+    "child.work.a",          "child.work.b",
 
-    "adult.stand.a", "adult.stand.b", "adult.walk.a",  "adult.walk.b",  "adult.carry.a",
-    "adult.carry.b", "adult.eat.a",   "adult.eat.b",   "adult.drink.a", "adult.drink.b",
-    "adult.rest.a",  "adult.rest.b",  "adult.work.a",  "adult.work.b",
+    "adult.stand.a",         "adult.stand.b",
+    "adult.walk.side.a",     "adult.walk.side.b",
+    "adult.walk.away.a",     "adult.walk.away.b",
+    "adult.walk.toward.a",   "adult.walk.toward.b",
+    "adult.carry.side.a",    "adult.carry.side.b",
+    "adult.carry.away.a",    "adult.carry.away.b",
+    "adult.carry.toward.a",  "adult.carry.toward.b",
+    "adult.eat.a",           "adult.eat.b",
+    "adult.drink.a",         "adult.drink.b",
+    "adult.rest.a",          "adult.rest.b",
+    "adult.work.a",          "adult.work.b",
 };
 
 // Обводка. Тот же цвет, которым ромб обводился до всякого рисунка (см.
@@ -87,11 +128,15 @@ const SpriteAtlas::Baked& baked() {
 // не падают: возраст с номером больше, чем ступеней, — вопрос к тому, кто
 // его посчитал, а не повод уронить клиент (то же правило, что и в
 // SpriteAtlas::Sheet::source).
-int frameAt(Pose pose, int stage, int frame) {
+//
+// Вид, которого у занятия нет, становится боковым, а не заворачивается: у
+// жующего кадр со спины не "следующий по кругу", его нет вовсе.
+int frameAt(Pose pose, int stage, int frame, View view) {
     const int p = static_cast<int>(pose) < 0 ? 0 : static_cast<int>(pose) % kPoses;
     const int s = stage < 0 ? 0 : stage % kStages;
     const int f = frame < 0 ? 0 : frame % kFrames;
-    return (s * kPoses + p) * kFrames + f;
+    const int v = static_cast<int>(view) < kPoseViews[static_cast<std::size_t>(p)] ? static_cast<int>(view) : 0;
+    return s * kFramesPerStage + poseFirst(p) + v * kFrames + f;
 }
 
 } // namespace
@@ -104,12 +149,20 @@ const Texture2D& atlas() {
     return baked().sheet.texture();
 }
 
-Rectangle source(int tribe, Pose pose, int stage, int frame, int facing) {
-    Rectangle piece = baked().source(tribe, frameAt(pose, stage, frame));
-    if (facing < 0) {
-        // Отрицательная ширина — то, как raylib просят отразить кусок по
-        // горизонтали. Рисунок нарисован смотрящим вправо, второго набора
-        // кадров на левую сторону нет вовсе (см. goblin.spr).
+Rectangle source(int tribe, Pose pose, int stage, int frame, Facing facing) {
+    const View view = facing.vertical < 0 ? View::Away : facing.vertical > 0 ? View::Toward : View::Side;
+    Rectangle piece = baked().source(tribe, frameAt(pose, stage, frame, view));
+    // Отражается ТОЛЬКО боковой вид — он один и нарисован повёрнутым.
+    // Отрицательная ширина — то, как raylib просят отразить кусок по
+    // горизонтали; второго набора кадров на левую сторону нет вовсе (см.
+    // goblin.spr).
+    //
+    // Спине и лицу сторона не нужна, но дело не только в этом: фигура стоит
+    // на кадре не ровно посередине, и зеркало сдвинуло бы её на пару
+    // пикселей вбок. Идущий вверх прыгал бы поперёк клетки в зависимости от
+    // того, куда он шагнул до того, — а это как раз то самое дёрганье,
+    // ради избавления от которого отвесному шагу и завели свой кадр.
+    if (view == View::Side && facing.side < 0) {
         piece.width = -piece.width;
     }
     return piece;
