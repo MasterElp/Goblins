@@ -1196,6 +1196,11 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             // "flee", пока животное бежит.
             groups.push_back(makeGroup("Desires", {{"hunger", hungerOf(animal, genome)},
                                                     {"thirst", thirstOf(animal, genome)},
+                                                    // Усталость — из немногого, что в теле не
+                                                    // прочитать: она и есть то, что накопилось
+                                                    // (FatigueComponent). Оттого её здесь видно
+                                                    // числом, а не по одному лишь "rest" в желании.
+                                                    {"fatigue", fatigueOf(registry, entity)},
                                                     {"mating", desire.mating}}));
             groups.push_back(makeGenomeGroup(predator ? predatorTraits() : herbivoreTraits(), genome));
 

@@ -11,6 +11,7 @@
 #include "core/components/AnimalSpeciesComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
 #include "core/components/DesireComponent.hpp"
+#include "core/components/FatigueComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
 #include "core/components/InjuryComponent.hpp"
@@ -25,6 +26,7 @@
 #include "core/Body.hpp"
 #include "core/Carcass.hpp"
 #include "core/Desires.hpp"
+#include "core/Fatigue.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Hunting.hpp"
 #include "core/Mating.hpp"
@@ -253,6 +255,9 @@ struct Animal {
     DesireComponent* desire = nullptr;
     MovementComponent* memory = nullptr;
     InjuryComponent* injury = nullptr;
+    // Усталость. Общее для всего живого (core/Fatigue.hpp): устают все, кто
+    // ходит, и гоблин отличается здесь только тем, ГДЕ ложится.
+    FatigueComponent* tired = nullptr;
 
     // Голод, жажда и страх живут здесь, в снимке тика, а не в компоненте.
     // Все три и раньше пересчитывались из тела и из чужого присутствия
@@ -279,6 +284,11 @@ Desire chooseDesire(const Animal& animal, bool readyToMate) {
     const int mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0;
 
     const Urgency candidates[] = {
+        // Отдых стоит первым и потому проигрывает при равенстве всем
+        // остальным: усталость никого не убивает, а голод, жажда и зубы
+        // убивают. Лечь животное должно тогда, когда его больше ничто не
+        // гонит, — тот же порядок и по той же причине, что у гоблина.
+        {static_cast<int>(Desire::Rest), animal.tired->fatigue},
         {static_cast<int>(Desire::Food), animal.hunger},
         {static_cast<int>(Desire::Water), animal.thirst},
         {static_cast<int>(Desire::Mate), mating},
@@ -291,6 +301,7 @@ Desire chooseDesire(const Animal& animal, bool readyToMate) {
         case Desire::Water: currentUrgency = animal.thirst; break;
         case Desire::Mate: currentUrgency = mating; break;
         case Desire::Flee: currentUrgency = animal.fear; break;
+        case Desire::Rest: currentUrgency = animal.tired->fatigue; break;
         case Desire::Idle: break;
     }
 
@@ -327,7 +338,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<Animal> animals;
     auto animalView =
         registry.view<AnimalComponent, AnimalGenomeComponent, DesireComponent, IdentityComponent,
-                       InjuryComponent, MovementComponent, PositionComponent>();
+                       InjuryComponent, MovementComponent, PositionComponent, FatigueComponent>();
     for (const auto entity : animalView) {
         const auto& position = animalView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
@@ -339,7 +350,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                                   &animalView.get<AnimalGenomeComponent>(entity),
                                   &animalView.get<DesireComponent>(entity),
                                   &animalView.get<MovementComponent>(entity),
-                                  &animalView.get<InjuryComponent>(entity)});
+                                  &animalView.get<InjuryComponent>(entity),
+                                  &animalView.get<FatigueComponent>(entity)});
     }
 
     // Падаль живёт своей жизнью и без животных (гниёт), поэтому выйти
@@ -453,6 +465,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const int lifespan =
             animal.predator ? worldProperties.predatorLifespan : worldProperties.herbivoreLifespan;
         advanceBody(state, genome, lifespan, tick, animal.id);
+
+        // Силы убывают от того, что животное живо. Шаг добавит своё ниже, в
+        // фазе шагов, а отдых вычтет своё в фазе решений: и то, и другое —
+        // следствия того, чем оно занято, и считать их здесь, до выбора
+        // занятия, было бы гаданием (core/Fatigue.hpp).
+        tireBy(animal.tired->fatigue, kFatigueTick);
 
         // Смерть от старости, от условий или от чужих зубов. Проверяется
         // здесь, а не внутри advanceBody, и это не мелочь: у тела могут быть
@@ -1059,6 +1077,21 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 }
                 break;
             }
+            case Desire::Rest: {
+                // Лёг там, где стоял. Отдых — единственное занятие, которое
+                // НИЧЕГО не забирает у мира: животное просто не идёт никуда,
+                // и от этого ему становится легче.
+                //
+                // Места оно не выбирает, и это не упрощение, а следствие
+                // (см. Desire::Rest): искать хорошую клетку имеет смысл
+                // тому, кто сможет к ней вернуться, — а зверь не помнит мест.
+                // Годность клетки (core/Rest.hpp) для него не считается
+                // вовсе: посчитанное и никем не используемое число хуже
+                // непосчитанного, его читают как закон.
+                restBy(animal.tired->fatigue, kRestRelief);
+                busy = true;
+                break;
+            }
             case Desire::Idle:
                 break;
         }
@@ -1209,6 +1242,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         }
 
         state.energy = std::max(0, state.energy - kStepEnergy * size / kFull);
+        // Шаг стоит не только энергии, но и сил: ходьба утомляет сильнее,
+        // чем стояние, и именно это отличает обошедшего полкарты от того,
+        // кто простоял у куста (core/Fatigue.hpp).
+        tireBy(animal.tired->fatigue, kFatigueStep);
         steps.push_back(StepIntent{static_cast<int>(a), step.x, step.y});
     }
 
@@ -1530,6 +1567,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             w.registry().emplace<DesireComponent>(entity, DesireComponent{});
             w.registry().emplace<MovementComponent>(entity);
             w.registry().emplace<InjuryComponent>(entity);
+            // Силы полны: новорождённый ещё никуда не ходил.
+            w.registry().emplace<FatigueComponent>(entity);
             // Диета наследуется без вариантов: у травоядных родителей не
             // родится хищник.
             if (predatorChild) {
@@ -1633,6 +1672,15 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kProteinPerSize", static_cast<float>(kProteinPerSize)});
     out.push_back({g, "kMaturityShare", static_cast<float>(kMaturityShare)});
     out.push_back({g, "kBirthRestShare", static_cast<float>(kBirthRestShare)});
+
+    // Усталость (core/Fatigue.hpp) — своей группой, и не под именем животных:
+    // закон общий для всех, кто ходит, и крутится он сразу для зверя и для
+    // гоблина. Перечислена она здесь, а не в списке GoblinSystem, только
+    // потому, что перечислить её надо один раз, а животные в цикле раньше.
+    constexpr const char* f = "Fatigue";
+    out.push_back({f, "kFatigueTick", kFatigueTick});
+    out.push_back({f, "kFatigueStep", kFatigueStep});
+    out.push_back({f, "kRestRelief", kRestRelief});
 
     // Веса шага (core/Walk.hpp) — своей группой: они не про жизнь животного,
     // а про его походку, и подбираются вместе, друг против друга.

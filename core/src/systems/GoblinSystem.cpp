@@ -11,6 +11,7 @@
 #include "core/Carry.hpp"
 #include "core/Carcass.hpp"
 #include "core/Desires.hpp"
+#include "core/Fatigue.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Hunting.hpp"
 #include "core/Knowledge.hpp"
@@ -69,28 +70,10 @@ constexpr int kBreedingGrowth = 900;
 constexpr int kCalmNeed = 750;
 constexpr int kMateDesire = 600;
 
-// Усталость: сколько её прибывает за тик просто оттого, что гоблин жив, и
-// сколько сверх того стоит сделанный шаг.
-//
-// Целыми числами за тик, без накопителя (core/Scale.hpp). Ходьба дороже
-// стояния втрое — иначе усталость была бы просто вторым возрастом и не
-// значила бы ничего: она должна отличать того, кто обошёл полкарты, от
-// того, кто простоял у куста.
-//
-// Размером тела не делится, в отличие от расхода энергии: маленький устаёт
-// не меньше взрослого, а скорее больше. Делать из этого черту генома было
-// бы преждевременно — сперва надо увидеть, что усталость вообще делает с
-// поведением.
-constexpr int kFatigueTick = 1;
-constexpr int kFatigueStep = 3;
-
-// Сколько усталости уходит за тик отдыха. Заметно больше, чем прибывает:
-// отдых должен занимать меньшую часть жизни, чем дорога, иначе поселение
-// будет состоять из лежащих.
-//
-// Прибывает при этом и во время отдыха (kFatigueTick вычитается из этого
-// числа, а не отменяется): гоблин отдыхает, но не перестаёт жить.
-constexpr int kRestRelief = 8;
+// Усталость и отдых числами не описываются здесь вовсе: закон общий для
+// всех, кто ходит, и живёт в core/Fatigue.hpp. Гоблинского в нём ровно
+// одно — то, что гоблин ложится не где стоит, а на годном месте
+// (core/Rest.hpp).
 
 // Сколько ягод срывает за тик взрослый гоблин (у мелкого — доля от размера
 // тела, как и укус). Три штуки: полный куст (kBerryMax = 12,
@@ -174,8 +157,9 @@ struct Goblin {
     const AnimalGenomeComponent* genome = nullptr;
     GoblinDesireComponent* desire = nullptr;
     MovementComponent* memory = nullptr;
-    // Усталость. Общее для всего живого (FatigueComponent), просто устаёт
-    // пока только гоблин: унять её нечем тому, у кого нет желания Rest.
+    // Усталость. Общее для всего живого (FatigueComponent, core/Fatigue.hpp):
+    // устают все, кто ходит, и гоблинского здесь только место, на котором он
+    // ложится.
     FatigueComponent* tired = nullptr;
     // Память мест. Единственное, чего у зверя нет вовсе.
     KnowledgeComponent* mind = nullptr;
@@ -356,7 +340,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // ниже, в фазе шагов, а отдых вычтет своё в фазе решений: и то, и
         // другое — следствия того, чем он занят, и считать их здесь, до
         // выбора занятия, было бы гаданием.
-        goblin.tired->fatigue = std::min(kFull, goblin.tired->fatigue + kFatigueTick);
+        tireBy(goblin.tired->fatigue, kFatigueTick);
 
         // Память тает сама. Не изнашивание и не уборка: именно забывание и
         // заставляет возвращаться — помни гоблин вечно, ему хватило бы
@@ -765,7 +749,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     // забирает у мира: гоблин просто не идёт никуда, и от
                     // этого ему становится легче. Оттого место для отдыха
                     // ничем и не кончается, в отличие от куста и туши.
-                    goblin.tired->fatigue = std::max(0, goblin.tired->fatigue - kRestRelief);
+                    restBy(goblin.tired->fatigue, kRestRelief);
                     remember(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y);
                     busy = true;
                     break;
@@ -1086,7 +1070,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // Шаг стоит не только энергии, но и сил: ходьба утомляет сильнее,
         // чем стояние, и именно это отличает обошедшего полкарты от того,
         // кто простоял у куста.
-        goblin.tired->fatigue = std::min(kFull, goblin.tired->fatigue + kFatigueStep);
+        tireBy(goblin.tired->fatigue, kFatigueStep);
         steps.push_back(StepIntent{static_cast<int>(g), step.x, step.y});
     }
 
@@ -1593,10 +1577,6 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({b, "kTwigHarvest", static_cast<float>(kTwigHarvest)});
     out.push_back({b, "kHarvestMinGrowth", static_cast<float>(kHarvestMinGrowth)});
     out.push_back({g, "kRoamTicks", static_cast<float>(kRoamTicks)});
-    out.push_back({g, "kFatigueTick", kFatigueTick});
-    out.push_back({g, "kFatigueStep", kFatigueStep});
-    out.push_back({g, "kRestRelief", kRestRelief});
-
     // Годность места для отдыха — свои слагаемые (core/Rest.hpp): их
     // подбирают вместе, друг против друга, и смотреть на них надо рядом.
     constexpr const char* r = "Goblins (rest)";
