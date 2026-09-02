@@ -241,15 +241,19 @@ inline Color herbivoreSpecies(int species) {
 // краснота хищников, и гоблин не должен читаться ни тем, ни другим. Шесть —
 // верхний предел числа племён (core::kMaxGoblinTribes); номер больше просто
 // повторит цвет, а не выйдет за границы.
+// Наружу число нужно тому, кто печёт спрайты сразу на все племена
+// (GoblinSprites), — ровно та же надобность, что и у деревьев.
+constexpr int kGoblinTribeCount = 6;
+
 inline Color goblinTribe(int tribe) {
-    static const Color palette[6] = {
+    static const Color palette[kGoblinTribeCount] = {
         {94, 176, 158, 255}, {66, 132, 150, 255},  {132, 200, 172, 255},
         {78, 108, 142, 255}, {148, 186, 200, 255}, {104, 148, 132, 255},
     };
     if (tribe < 0) {
         return palette[0];
     }
-    return palette[tribe % 6];
+    return palette[tribe % kGoblinTribeCount];
 }
 
 // Падаль — красновато-бурое пятно поверх почвы, заметно теплее перегноя:

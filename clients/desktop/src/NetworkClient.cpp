@@ -370,7 +370,35 @@ void NetworkClient::applyGoblinChanges(const nlohmann::json& message) {
     if (!message.contains("goblins") || !message["goblins"].is_object()) {
         return;
     }
-    applyCreatureChanges(working_.goblins, message["goblins"], parseGoblin, [](auto&& applyPairs) {
+    // Шаг читается ДО того, как его применят, и в этом весь смысл отдельного
+    // прохода: сторона, в которую гоблин смотрит, — это разница между "было"
+    // и "стало", а после applyCreatureChanges "было" уже не осталось нигде.
+    // В протоколе ни того, ни другого нет вовсе (см. WorldState::Goblin):
+    // сам шаг виден по тому, что клетка приехала в дельте.
+    //
+    // Индексы здесь те же, что и там, — места в ПРЕЖНЕМ списке, до удаления
+    // ушедших и вставки родившихся, — поэтому проход и стоит перед вызовом, а
+    // не после него.
+    const auto& changes = message["goblins"];
+    if (changes.contains("pos") && changes["pos"].is_array()) {
+        const auto& triples = changes["pos"];
+        for (std::size_t p = 0; p + 2 < triples.size(); p += 3) {
+            const auto index = triples[p].get<std::size_t>();
+            if (index >= working_.goblins.size()) {
+                continue;
+            }
+            auto& goblin = working_.goblins[index];
+            const int x = triples[p + 1].get<int>();
+            // Шаг строго вверх или вниз сторону не меняет: обе одинаково
+            // неверны, и выбор между ними заставил бы идущего по вертикали
+            // дёргаться от тика к тику.
+            if (x != goblin.x) {
+                goblin.facing = x > goblin.x ? 1 : -1;
+            }
+            goblin.stepTick = working_.tick;
+        }
+    }
+    applyCreatureChanges(working_.goblins, changes, parseGoblin, [](auto&& applyPairs) {
         applyPairs("fatigue", [](WorldState::Goblin& g, const nlohmann::json& v) {
             g.fatigue = v.get<int>() * kFromHundredths;
         });

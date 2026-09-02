@@ -15,6 +15,7 @@
 #include "BuildSprites.hpp"
 #include "ConstantsOverlay.hpp"
 #include "GenomeGraph.hpp"
+#include "GoblinSprites.hpp"
 #include "InfoPanel.hpp"
 #include "KeysPanel.hpp"
 #include "MapTexture.hpp"
@@ -895,12 +896,23 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             }
         }
 
-        // Гоблины — поверх той же карты и тем же способом, но ромбом:
-        // форма отличает их от зверя с первого взгляда, не полагаясь на
-        // цвет (кружок и квадрат уже заняты полом животного, а на мелком
-        // тайле цвета сливаются). Пол внутри ромба — размером: самец
-        // крупнее. Цвет — по племени, палитра холодная (TileColors).
+        // Гоблины — поверх той же карты и тем же способом, что дерево и
+        // постройка: рисунком (GoblinSprites). Он отвечает не на вопрос
+        // "где гоблин" — на него отвечал и ромб, — а на те, ради которых на
+        // гоблина смотрят: чем занят, куда идёт, вырос ли. Двадцать
+        // одинаковых ромбов у ручья и двадцать пьющих — это два разных
+        // ответа, и второй виден без единого щелчка по карте.
+        //
+        // Рисунок — те же шестнадцать пикселей на клетку, что у дерева, и
+        // мельче шести от него остаётся каша: тогда гоблин снова рисуется
+        // ромбом, той самой фигурой, какой он рисовался до всяких кадров.
+        // Это не запасной путь на случай беды, а тот же гоблин, изображённый
+        // настолько подробно, насколько его видно. Ромб отличает его от
+        // зверя, не полагаясь на цвет (кружок и квадрат уже заняты полом
+        // животного, а на мелком тайле цвета сливаются), а размер внутри
+        // ромба говорит про пол и рост.
         if (showGoblins) {
+            const bool drawSprites = tileSize >= 6 && GoblinSprites::ready();
             for (const auto& goblin : snapshot.goblins) {
                 const float screenX = static_cast<float>(goblin.x) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(goblin.y) * tileSizeF - viewY + kHudHeight;
@@ -908,24 +920,45 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     screenY > viewportH + kHudHeight) {
                     continue;
                 }
-                const Color color = TileColors::goblinTribe(goblin.tribe);
-                const float scale = goblin.sex == "male" ? 0.32f : 0.26f;
-                const float radius = std::max(1.5f, tileSizeF * (scale + 0.16f * goblin.growth));
                 const float centerX = screenX + tileSizeF * 0.5f;
                 const float centerY = screenY + tileSizeF * 0.5f;
-                const Vector2 top{centerX, centerY - radius};
-                const Vector2 right{centerX + radius, centerY};
-                const Vector2 bottom{centerX, centerY + radius};
-                const Vector2 left{centerX - radius, centerY};
-                // Два треугольника, а не DrawPoly: у raylib многоугольник
-                // рисуется от угла поворота, и ромб из него выходит косым.
-                DrawTriangle(top, left, right, color);
-                DrawTriangle(left, bottom, right, color);
-                if (tileSizeF >= 8.0f) {
-                    DrawTriangleLines(top, left, right, Color{20, 34, 32, 200});
-                    DrawTriangleLines(left, bottom, right, Color{20, 34, 32, 200});
+                if (drawSprites) {
+                    // Занятие складывается из трёх вещей, и ни одной из них
+                    // по отдельности не хватает: желание говорит, зачем он
+                    // тут, шаг — делает он это или ещё идёт, руки — налегке
+                    // или с охапкой (см. GoblinSprites::poseOf).
+                    //
+                    // Еда и материал в руках здесь одно и то же: со стороны
+                    // видна охапка, а не то, из чего она набрана.
+                    const bool walking = GoblinSprites::walkingNow(goblin.stepTick, snapshot.tick);
+                    const bool loaded = goblin.carried > 0.0f || goblin.material > 0.0f;
+                    DrawTexturePro(
+                        GoblinSprites::atlas(),
+                        GoblinSprites::source(goblin.tribe,
+                                              GoblinSprites::poseOf(goblin.desire, walking, loaded),
+                                              GoblinSprites::stageOf(goblin.growth),
+                                              GoblinSprites::frameOf(goblin.id, snapshot.tick), goblin.facing),
+                        Rectangle{screenX, screenY, tileSizeF, tileSizeF}, Vector2{0, 0}, 0.0f, WHITE);
+                } else {
+                    const Color color = TileColors::goblinTribe(goblin.tribe);
+                    const float scale = goblin.sex == "male" ? 0.32f : 0.26f;
+                    const float radius = std::max(1.5f, tileSizeF * (scale + 0.16f * goblin.growth));
+                    const Vector2 top{centerX, centerY - radius};
+                    const Vector2 right{centerX + radius, centerY};
+                    const Vector2 bottom{centerX, centerY + radius};
+                    const Vector2 left{centerX - radius, centerY};
+                    // Два треугольника, а не DrawPoly: у raylib многоугольник
+                    // рисуется от угла поворота, и ромб из него выходит косым.
+                    DrawTriangle(top, left, right, color);
+                    DrawTriangle(left, bottom, right, color);
+                    if (tileSizeF >= 8.0f) {
+                        DrawTriangleLines(top, left, right, Color{20, 34, 32, 200});
+                        DrawTriangleLines(left, bottom, right, Color{20, 34, 32, 200});
+                    }
                 }
-                // Раненого видно так же, как и зверя.
+                // Раненого видно так же, как и зверя, и одинаково при любой
+                // подробности рисунка: полоска — не часть облика гоблина, а
+                // отметка поверх него.
                 if (goblin.health < 0.99f && tileSizeF >= 6.0f) {
                     const float barWidth = tileSizeF * 0.7f;
                     DrawRectangle(static_cast<int>(centerX - barWidth * 0.5f), static_cast<int>(screenY + 1.0f),
