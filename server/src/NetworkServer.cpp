@@ -40,6 +40,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/FatigueComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/KnowledgeComponent.hpp"
@@ -90,6 +91,14 @@ nlohmann::json changedCells(const std::vector<int>& previous, const std::vector<
         }
     }
     return pairs;
+}
+
+// Усталость существа. Спрашивается осторожно, как и ноша: усталость —
+// свой компонент (FatigueComponent), и того, у кого его нет, она не
+// касается вовсе. Ноль здесь — честный ответ, а не заглушка.
+int fatigueOf(const entt::registry& registry, entt::entity entity) {
+    const auto* tired = registry.try_get<const FatigueComponent>(entity);
+    return tired != nullptr ? tired->fatigue : 0;
 }
 
 } // namespace
@@ -453,7 +462,10 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
                 .growth = toWire(body.growth),
                 .health = toWire(body.health),
                 .desire = desire.current,
-                .fatigue = toWire(registry.get<const GoblinComponent>(entity).fatigue),
+                // try_get, а не get: усталость — свой компонент, и её может
+                // не быть вовсе (FatigueComponent). Ноль здесь честен —
+                // "усталости за ним не числится".
+                .fatigue = toWire(fatigueOf(registry, entity)),
                 .carried = toWire(carriedFood(registry, entity)),
                 .material = toWire(carriedMaterial(registry, entity)),
                 .tribe = genome.species,
@@ -1249,10 +1261,9 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             // Усталость — среди желаний, а не среди тела: голод и жажда
             // стоят рядом с ней по той же причине — это то, что гонит, а не
             // то, из чего гоблин состоит.
-            const auto& own = registry.get<const GoblinComponent>(entity);
             groups.push_back(makeGroup("Desires", {{"hunger", hungerOf(body, genome)},
                                                     {"thirst", thirstOf(body, genome)},
-                                                    {"fatigue", own.fatigue},
+                                                    {"fatigue", fatigueOf(registry, entity)},
                                                     {"mating", desire.mating}}));
 
             // Место под ногами и то, чем гоблин на нём занят. Обе вещи об

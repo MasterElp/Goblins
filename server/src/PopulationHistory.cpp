@@ -187,10 +187,10 @@ std::vector<int> countGoblins(const World& world) {
     const auto& tribes = registry.get<const GoblinTribesComponent>(world.worldEntity());
     std::vector<int> counts(tribes.tribes.size(), 0);
     registry.view<const AnimalComponent, const AnimalGenomeComponent, const GoblinComponent>().each(
-        // GoblinComponent в списке параметров есть: с тех пор как в нём
-        // появилась усталость, он перестал быть пустым тегом, и each его
-        // передаёт. Пустой не передавался бы — EnTT их не хранит.
-        [&](const AnimalComponent& /*body*/, const AnimalGenomeComponent& genome, const GoblinComponent&) {
+        // GoblinComponent в списке параметров нет, хотя в списке вида есть:
+        // это снова пустой тег (усталость уехала в FatigueComponent), а
+        // пустых типов EnTT не хранит и в each не передаёт.
+        [&](const AnimalComponent& /*body*/, const AnimalGenomeComponent& genome) {
             if (genome.species >= 0 && static_cast<std::size_t>(genome.species) < counts.size()) {
                 ++counts[static_cast<std::size_t>(genome.species)];
             }
@@ -203,7 +203,8 @@ std::vector<int> averageGoblinGenome(const World& world) {
     const auto traits = goblinTraits();
     return averageGenome(traits, traits.size(), [&](auto&& visit) {
         registry.view<const AnimalComponent, const AnimalGenomeComponent, const GoblinComponent>().each(
-            [&](const AnimalComponent& /*body*/, const AnimalGenomeComponent& genome, const GoblinComponent&) {
+            // Тег в параметрах не значится: пустой, см. countGoblins выше.
+            [&](const AnimalComponent& /*body*/, const AnimalGenomeComponent& genome) {
                 visit(genome);
             });
     });

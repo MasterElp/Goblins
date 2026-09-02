@@ -33,6 +33,7 @@
 #include "core/components/BuildingComponent.hpp"
 #include "core/components/CarriedComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
+#include "core/components/FatigueComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinDesireComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
@@ -173,9 +174,9 @@ struct Goblin {
     const AnimalGenomeComponent* genome = nullptr;
     GoblinDesireComponent* desire = nullptr;
     MovementComponent* memory = nullptr;
-    // Своё, гоблинское: усталость. Тело (AnimalComponent) у него общее со
-    // зверем, а это — нет.
-    GoblinComponent* own = nullptr;
+    // Усталость. Общее для всего живого (FatigueComponent), просто устаёт
+    // пока только гоблин: унять её нечем тому, у кого нет желания Rest.
+    FatigueComponent* tired = nullptr;
     // Память мест. Единственное, чего у зверя нет вовсе.
     KnowledgeComponent* mind = nullptr;
     // Руки. Общее для всего живого (core/Carry.hpp), просто носит пока
@@ -211,7 +212,7 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool has
     // ничто не гонит, — и это не поблажка, а точное описание того, чем
     // отдых отличается от еды.
     const Urgency candidates[] = {
-        {static_cast<int>(GoblinDesire::Rest), goblin.own->fatigue},
+        {static_cast<int>(GoblinDesire::Rest), goblin.tired->fatigue},
         // Запасание — сразу после отдыха и раньше всего остального в списке,
         // то есть проигрывает и голоду, и жажде, и паре: набирать впрок имеет
         // смысл только сытым.
@@ -230,7 +231,7 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool has
         case GoblinDesire::Food: currentUrgency = goblin.hunger; break;
         case GoblinDesire::Water: currentUrgency = goblin.thirst; break;
         case GoblinDesire::Mate: currentUrgency = mating; break;
-        case GoblinDesire::Rest: currentUrgency = goblin.own->fatigue; break;
+        case GoblinDesire::Rest: currentUrgency = goblin.tired->fatigue; break;
         case GoblinDesire::Haul: currentUrgency = hauling; break;
         case GoblinDesire::Build: currentUrgency = building; break;
         case GoblinDesire::Idle: break;
@@ -268,8 +269,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     std::vector<Goblin> goblins;
     auto goblinView =
         registry.view<AnimalComponent, AnimalGenomeComponent, GoblinDesireComponent, IdentityComponent,
-                       MovementComponent, PositionComponent, GoblinComponent, KnowledgeComponent,
-                       CarriedComponent>();
+                       MovementComponent, PositionComponent, GoblinComponent, FatigueComponent,
+                       KnowledgeComponent, CarriedComponent>();
     for (const auto entity : goblinView) {
         const auto& position = goblinView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
@@ -280,7 +281,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                   &goblinView.get<AnimalGenomeComponent>(entity),
                                   &goblinView.get<GoblinDesireComponent>(entity),
                                   &goblinView.get<MovementComponent>(entity),
-                                  &goblinView.get<GoblinComponent>(entity),
+                                  &goblinView.get<FatigueComponent>(entity),
                                   &goblinView.get<KnowledgeComponent>(entity),
                                   &goblinView.get<CarriedComponent>(entity)});
     }
@@ -355,7 +356,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // ниже, в фазе шагов, а отдых вычтет своё в фазе решений: и то, и
         // другое — следствия того, чем он занят, и считать их здесь, до
         // выбора занятия, было бы гаданием.
-        goblin.own->fatigue = std::min(kFull, goblin.own->fatigue + kFatigueTick);
+        goblin.tired->fatigue = std::min(kFull, goblin.tired->fatigue + kFatigueTick);
 
         // Память тает сама. Не изнашивание и не уборка: именно забывание и
         // заставляет возвращаться — помни гоблин вечно, ему хватило бы
@@ -764,7 +765,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     // забирает у мира: гоблин просто не идёт никуда, и от
                     // этого ему становится легче. Оттого место для отдыха
                     // ничем и не кончается, в отличие от куста и туши.
-                    goblin.own->fatigue = std::max(0, goblin.own->fatigue - kRestRelief);
+                    goblin.tired->fatigue = std::max(0, goblin.tired->fatigue - kRestRelief);
                     remember(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y);
                     busy = true;
                     break;
@@ -1085,7 +1086,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // Шаг стоит не только энергии, но и сил: ходьба утомляет сильнее,
         // чем стояние, и именно это отличает обошедшего полкарты от того,
         // кто простоял у куста.
-        goblin.own->fatigue = std::min(kFull, goblin.own->fatigue + kFatigueStep);
+        goblin.tired->fatigue = std::min(kFull, goblin.tired->fatigue + kFatigueStep);
         steps.push_back(StepIntent{static_cast<int>(g), step.x, step.y});
     }
 
@@ -1543,6 +1544,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             w.registry().emplace<GoblinDesireComponent>(entity, GoblinDesireComponent{});
             w.registry().emplace<MovementComponent>(entity);
             w.registry().emplace<GoblinComponent>(entity);
+            // Силы полны: новорождённый ещё никуда не ходил.
+            w.registry().emplace<FatigueComponent>(entity);
             // Голова пустая: родившийся не помнит ничего и узнаёт мир сам.
             // Наследовать память было бы наследованием опыта — а он берётся
             // жизнью, не рождением (02_CorePrinciples.md, п.6).
