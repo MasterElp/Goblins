@@ -80,6 +80,53 @@ WorldState::Goblin parseGoblin(const nlohmann::json& goblin) {
     return parsed;
 }
 
+// Шаг существа: куда оно повернулось и когда шагнуло.
+//
+// Один закон на зверя и на гоблина, и обязан быть одним: оба ходят по одной
+// карте и оба рисуются повёрнутыми туда, куда шагнули. Скопировать его вторым
+// разом значило бы завести два закона там, где он один.
+//
+// Читается ДО applyCreatureChanges: сторона — это разница между "было" и
+// "стало", а после него "было" уже не осталось нигде. Индексы там и здесь
+// одни и те же — места в ПРЕЖНЕМ списке, до удаления ушедших и вставки
+// родившихся, — поэтому проход и стоит перед вызовом.
+//
+// Ни стороны, ни тика шага в протоколе нет вовсе: сам шаг виден по тому, что
+// клетка приехала в дельте (см. WorldState::Animal).
+//
+// vertical зовётся на каждом шаге и получает 0, когда у шага была боковая
+// составляющая. Отвесный кадр есть только у гоблина, и зверю о нём знать
+// незачем — оттого это и вынесено наружу, а не решается здесь.
+template <typename Card, typename Vertical>
+void rememberSteps(std::vector<Card>& list, const nlohmann::json& changes, std::uint64_t tick,
+                    Vertical&& vertical) {
+    if (!changes.contains("pos") || !changes["pos"].is_array()) {
+        return;
+    }
+    const auto& triples = changes["pos"];
+    for (std::size_t p = 0; p + 2 < triples.size(); p += 3) {
+        const auto index = triples[p].get<std::size_t>();
+        if (index >= list.size()) {
+            continue;
+        }
+        Card& card = list[index];
+        const int x = triples[p + 1].get<int>();
+        const int y = triples[p + 2].get<int>();
+        // Боковая составляющая важнее отвесной, и потому спрашивается первой:
+        // у косого шага есть обе, и со стороны такой шаг выглядит боковым, а
+        // не отвесным.
+        if (x != card.x) {
+            card.facing = x > card.x ? 1 : -1;
+            vertical(card, 0);
+        } else if (y != card.y) {
+            // Отвесный: боковой составляющей нет вовсе, и сторона остаётся
+            // прежней — ей просто нечем смениться.
+            vertical(card, y > card.y ? 1 : -1);
+        }
+        card.stepTick = tick;
+    }
+}
+
 // Применение изменений к списку существ — ОДИН закон на всех, у кого такой
 // список есть.
 //
@@ -350,7 +397,10 @@ void NetworkClient::applyAnimalChanges(const nlohmann::json& message) {
     if (!message.contains("animals") || !message["animals"].is_object()) {
         return;
     }
-    applyCreatureChanges(working_.animals, message["animals"], parseAnimal, [](auto&&) {});
+    const auto& changes = message["animals"];
+    // Отвесный шаг зверю не нужен: кадров со спины у него нет (WolfSprites).
+    rememberSteps(working_.animals, changes, working_.tick, [](WorldState::Animal&, int) {});
+    applyCreatureChanges(working_.animals, changes, parseAnimal, [](auto&&) {});
 }
 
 void NetworkClient::applyGoblins(const nlohmann::json& message) {
@@ -370,40 +420,9 @@ void NetworkClient::applyGoblinChanges(const nlohmann::json& message) {
     if (!message.contains("goblins") || !message["goblins"].is_object()) {
         return;
     }
-    // Шаг читается ДО того, как его применят, и в этом весь смысл отдельного
-    // прохода: сторона, в которую гоблин смотрит, — это разница между "было"
-    // и "стало", а после applyCreatureChanges "было" уже не осталось нигде.
-    // В протоколе ни того, ни другого нет вовсе (см. WorldState::Goblin):
-    // сам шаг виден по тому, что клетка приехала в дельте.
-    //
-    // Индексы здесь те же, что и там, — места в ПРЕЖНЕМ списке, до удаления
-    // ушедших и вставки родившихся, — поэтому проход и стоит перед вызовом, а
-    // не после него.
     const auto& changes = message["goblins"];
-    if (changes.contains("pos") && changes["pos"].is_array()) {
-        const auto& triples = changes["pos"];
-        for (std::size_t p = 0; p + 2 < triples.size(); p += 3) {
-            const auto index = triples[p].get<std::size_t>();
-            if (index >= working_.goblins.size()) {
-                continue;
-            }
-            auto& goblin = working_.goblins[index];
-            const int x = triples[p + 1].get<int>();
-            const int y = triples[p + 2].get<int>();
-            // Боковая составляющая важнее отвесной, и потому спрашивается
-            // первой: у косого шага есть обе, и со стороны такой шаг
-            // выглядит боковым, а не отвесным.
-            if (x != goblin.x) {
-                goblin.facing = x > goblin.x ? 1 : -1;
-                goblin.verticalStep = 0;
-            } else if (y != goblin.y) {
-                // Отвесный: боковой составляющей нет вовсе, и сторона
-                // остаётся прежней — ей просто нечем смениться.
-                goblin.verticalStep = y > goblin.y ? 1 : -1;
-            }
-            goblin.stepTick = working_.tick;
-        }
-    }
+    rememberSteps(working_.goblins, changes, working_.tick,
+                   [](WorldState::Goblin& goblin, int vertical) { goblin.verticalStep = vertical; });
     applyCreatureChanges(working_.goblins, changes, parseGoblin, [](auto&& applyPairs) {
         applyPairs("fatigue", [](WorldState::Goblin& g, const nlohmann::json& v) {
             g.fatigue = v.get<int>() * kFromHundredths;

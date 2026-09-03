@@ -21,6 +21,7 @@
 #include "MapTexture.hpp"
 #include "PlantSprites.hpp"
 #include "TreeSprites.hpp"
+#include "WolfSprites.hpp"
 #include "PopulationGraph.hpp"
 #include "TileColors.hpp"
 
@@ -890,6 +891,13 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // (красная палитра против охристой) и тем, что рисуется крупнее:
         // на карте его должно быть видно первым.
         if (showAnimals) {
+            // Хищник рисуется волком, травоядное осталось значком, и это не
+            // недоделка. О звере, который ест траву, карта отвечает на один
+            // вопрос — сколько его и какой он величины, — и значок отвечает на
+            // него лучше рисунка, потому что честно вырождается в точку на
+            // отдалённой карте. О хищнике спрашивают другое: где он и не
+            // крадётся ли он сейчас, — и на это кружок не отвечал ничем.
+            const bool drawWolves = tileSize >= 6 && WolfSprites::ready();
             for (const auto& animal : snapshot.animals) {
                 const float screenX = static_cast<float>(animal.x) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(animal.y) * tileSizeF - viewY + kHudHeight;
@@ -915,7 +923,26 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     std::max(1.0f, tileSizeF * (scale + 0.16f * animal.growth) * bodyScale);
                 const float centerX = screenX + tileSizeF * 0.5f;
                 const float centerY = screenY + tileSizeF * 0.5f;
-                if (animal.sex == "male") {
+                if (animal.predator && drawWolves) {
+                    // Величина тела остаётся и у рисунка: ради неё
+                    // adult_size и заводился — десять крупных читаются как
+                    // фауна, сорок одинаковых мелких как насекомые. Взрослый
+                    // зверь обычного размера занимает ровно клетку, крупный
+                    // вид выходит за неё.
+                    const float side = tileSizeF * bodyScale * (0.80f + 0.20f * animal.growth);
+                    // Низом на нижний край клетки, а не по центру: зверь
+                    // стоит на земле, как и гоблин, и тень у него нарисована
+                    // под лапами.
+                    const Rectangle at{centerX - side * 0.5f, screenY + tileSizeF - side, side, side};
+                    const bool walking = WolfSprites::walkingNow(animal.stepTick, snapshot.tick);
+                    DrawTexturePro(WolfSprites::atlas(),
+                                   WolfSprites::source(animal.species,
+                                                       WolfSprites::poseOf(animal.desire, walking),
+                                                       WolfSprites::stageOf(animal.growth),
+                                                       WolfSprites::frameOf(animal.id, snapshot.tick),
+                                                       animal.facing),
+                                   at, Vector2{0, 0}, 0.0f, WHITE);
+                } else if (animal.sex == "male") {
                     DrawRectangle(static_cast<int>(centerX - radius), static_cast<int>(centerY - radius),
                                   std::max(1, static_cast<int>(radius * 2.0f)),
                                   std::max(1, static_cast<int>(radius * 2.0f)), color);
@@ -924,8 +951,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 }
                 // Тёмная обводка — чтобы светлое животное не терялось на
                 // светлой почве; только когда тайл достаточно крупный,
-                // иначе она съест сам значок.
-                if (tileSizeF >= 8.0f) {
+                // иначе она съест сам значок. Волку она не нужна: под ним
+                // нарисована своя тень, и обводка обвела бы не зверя, а
+                // клетку, в которой он стоит.
+                if (tileSizeF >= 8.0f && !(animal.predator && drawWolves)) {
                     DrawCircleLines(static_cast<int>(centerX), static_cast<int>(centerY), radius + 1.0f,
                                     Color{30, 24, 18, 200});
                 }

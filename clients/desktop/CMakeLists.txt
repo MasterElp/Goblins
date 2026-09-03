@@ -23,6 +23,7 @@ add_executable(client
     src/BuildSprites.cpp
     src/GoblinSprites.cpp
     src/PlantSprites.cpp
+    src/WolfSprites.cpp
     src/ConstantsOverlay.cpp
     src/PopulationGraph.cpp
     src/GenomeGraph.cpp

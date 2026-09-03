@@ -214,15 +214,19 @@ inline Color tree(int species, float growth) {
 // холодно-красная: хищника надо отличать от добычи мгновенно и не путать
 // ни с травой, ни с ней. Шесть — верхний предел числа видов хищников
 // (core::kMaxPredatorSpecies).
+// Наружу число нужно тому, кто печёт спрайты сразу на все виды
+// (WolfSprites), — та же надобность, что и у деревьев, травы и гоблинов.
+constexpr int kPredatorSpeciesCount = 6;
+
 inline Color predatorSpecies(int species) {
-    static const Color palette[6] = {
+    static const Color palette[kPredatorSpeciesCount] = {
         {198, 74, 60, 255}, {150, 56, 74, 255},  {226, 106, 78, 255},
         {124, 60, 92, 255}, {176, 92, 108, 255}, {214, 132, 120, 255},
     };
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 6];
+    return palette[species % kPredatorSpeciesCount];
 }
 
 // Цвета видов травоядных — по индексу вида, как и у травы, но палитра
