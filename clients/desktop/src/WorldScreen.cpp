@@ -19,6 +19,7 @@
 #include "InfoPanel.hpp"
 #include "KeysPanel.hpp"
 #include "MapTexture.hpp"
+#include "PlantSprites.hpp"
 #include "TreeSprites.hpp"
 #include "PopulationGraph.hpp"
 #include "TileColors.hpp"
@@ -741,7 +742,23 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         const bool drawBuildings = showGoblins && tileSize >= 6 && BuildSprites::ready() &&
                                    snapshot.canopy.size() >= cellCount && snapshot.bedding.size() >= cellCount &&
                                    snapshot.site.size() >= cellCount;
-        if (drawTrees || drawBuildings) {
+        // Трава и куст — тем же обходом, что дерево и постройка, но по другой
+        // причине: заслонять им нечего, из клетки они не торчат, и порядок
+        // строк им безразличен. Обход общий просто потому, что он один и уже
+        // идёт по видимым клеткам, а второй такой же стоил бы ровно вдвое.
+        //
+        // Порог выше древесного (десять против шести): у былинки ширина в
+        // пиксель, и на клетке мельче десяти половина их выпадает вовсе —
+        // выходит не трава, а сор. Ниже порога клетка остаётся тем, чем она
+        // нарисована в текстуре карты, — подмешкой цвета, и это тот же луг,
+        // изображённый настолько подробно, насколько его видно.
+        const bool drawPlantSprites = showPlants && tileSize >= 10 &&
+                                      snapshot.plantSpeciesAt.size() >= cellCount &&
+                                      snapshot.plantGrowth.size() >= cellCount;
+        const bool drawGrass = drawPlantSprites && PlantSprites::grassReady();
+        const bool drawBushes = drawPlantSprites && PlantSprites::bushReady() &&
+                                snapshot.bushSpeciesAt.size() >= cellCount;
+        if (drawTrees || drawBuildings || drawGrass || drawBushes) {
             const int firstX = std::max(0, static_cast<int>(std::floor(viewX / tileSizeF)));
             const int lastX = std::min(snapshot.areaWidth - 1,
                                         static_cast<int>(std::floor((viewX + viewportW) / tileSizeF)));
@@ -771,6 +788,33 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     const std::size_t cell = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
                     const float screenX = static_cast<float>(x) * tileSizeF - viewX;
                     const float screenY = static_cast<float>(y) * tileSizeF - viewY + kHudHeight;
+
+                    // Трава и куст — под всем остальным: они лежат на земле,
+                    // а не на том, что на ней стоит. Растение на клетке одно
+                    // (где куст, там нет травы), поэтому и ветка одна.
+                    if (drawBushes && snapshot.bushSpeciesAt[cell] >= 0) {
+                        const int stage = PlantSprites::stageOf(snapshot.plantGrowth[cell]);
+                        const Rectangle at{screenX, screenY, tileSizeF, tileSizeF};
+                        DrawTexturePro(PlantSprites::bushAtlas(),
+                                       PlantSprites::bush(snapshot.bushSpeciesAt[cell], stage,
+                                                          PlantSprites::frameOf(x, y, now)),
+                                       at, Vector2{0, 0}, 0.0f, WHITE);
+                        // Ягоды поверх куста и не качаются вместе с ним: они
+                        // висят на ветках, а качается верх кома.
+                        if (cell < snapshot.berries.size() && snapshot.berries[cell] > 0) {
+                            DrawTexturePro(PlantSprites::bushAtlas(),
+                                           PlantSprites::berries(snapshot.berries[cell]), at, Vector2{0, 0},
+                                           0.0f, WHITE);
+                        }
+                    } else if (drawGrass && snapshot.plantSpeciesAt[cell] >= 0) {
+                        DrawTexturePro(PlantSprites::grassAtlas(),
+                                       PlantSprites::grass(snapshot.plantSpeciesAt[cell],
+                                                           PlantSprites::stageOf(snapshot.plantGrowth[cell]),
+                                                           PlantSprites::variantOf(x, y),
+                                                           PlantSprites::frameOf(x, y, now)),
+                                       Rectangle{screenX, screenY, tileSizeF, tileSizeF}, Vector2{0, 0}, 0.0f,
+                                       WHITE);
+                    }
 
                     // Постройки — снизу вверх в том же порядке, в каком они
                     // лежат на самом деле: подстилка на земле, замысел и

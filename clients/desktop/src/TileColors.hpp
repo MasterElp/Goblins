@@ -65,8 +65,12 @@ inline float mineralsFraction(int minerals) {
 // (core::kMaxGrassSpecies); если сервер когда-нибудь пришлёт индекс больше,
 // цвет просто повторится (остаток от деления), а не приведёт к выходу за
 // границы.
+// Наружу число нужно тому, кто печёт спрайты сразу на все виды
+// (PlantSprites), — та же надобность, что и у деревьев с гоблинами.
+constexpr int kGrassSpeciesCount = 12;
+
 inline Color plantSpecies(int species) {
-    static const Color palette[12] = {
+    static const Color palette[kGrassSpeciesCount] = {
         {150, 202, 124, 255}, {192, 216, 118, 255}, {130, 190, 158, 255}, {214, 224, 136, 255},
         {166, 208, 166, 255}, {138, 196, 186, 255}, {202, 210, 114, 255}, {160, 186, 120, 255},
         {182, 226, 160, 255}, {134, 176, 138, 255}, {224, 232, 170, 255}, {146, 206, 190, 255},
@@ -74,7 +78,7 @@ inline Color plantSpecies(int species) {
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 12];
+    return palette[species % kGrassSpeciesCount];
 }
 
 // Трава поверх почвы — не квадрат, а лёгкая подмешка цвета вида: сквозь
@@ -90,14 +94,16 @@ inline Color plant(Color soilColor, int species, float growth) {
 // плотнее травы и ниже дерева, и на карте он должен читаться как гуща на
 // лугу, а не как ещё один оттенок луга. Четыре — верхний предел числа видов
 // (core::kMaxBushSpecies).
+constexpr int kBushSpeciesCount = 4;
+
 inline Color bushSpecies(int species) {
-    static const Color palette[4] = {
+    static const Color palette[kBushSpeciesCount] = {
         {74, 118, 72, 255}, {96, 124, 64, 255}, {66, 110, 92, 255}, {104, 112, 60, 255},
     };
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 4];
+    return palette[species % kBushSpeciesCount];
 }
 
 // Куст поверх почвы — подмешка сильнее травяной: куст землю закрывает, а
