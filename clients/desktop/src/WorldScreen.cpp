@@ -858,6 +858,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     if (drawSprites) {
                         DrawTexturePro(TreeSprites::atlas(),
                                        TreeSprites::source(species, TreeSprites::stageOf(growth),
+                                                            TreeSprites::variantOf(x, y),
                                                             TreeSprites::frameOf(x, y, now)),
                                        standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
                     } else {
