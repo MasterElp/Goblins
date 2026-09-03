@@ -66,14 +66,14 @@ SpriteAtlas::Palette paletteOf(int species) {
 // хоть одного кадра — не рисуем ничем (SpriteAtlas::bake): олень, стоящий
 // вместо того, чтобы бежать, хуже кружка, потому что выглядит как ответ, а
 // отвечает неверно.
-const SpriteAtlas::Baked& baked() {
-    static const SpriteAtlas::Baked result = [] {
+const SpriteAtlas::Detailed& baked() {
+    static const SpriteAtlas::Detailed result = [] {
         std::vector<SpriteAtlas::Palette> palettes;
         palettes.reserve(TileColors::kHerbivoreSpeciesCount);
         for (int species = 0; species < TileColors::kHerbivoreSpeciesCount; ++species) {
             palettes.push_back(paletteOf(species));
         }
-        return SpriteAtlas::bake("deer", palettes, kFrameNames);
+        return SpriteAtlas::bakeDetailed("deer", palettes, kFrameNames);
     }();
     return result;
 }
@@ -90,16 +90,20 @@ int frameAt(Pose pose, int kind, int frame) {
 
 } // namespace
 
-bool ready() {
-    return baked().complete;
+Detail detailFor(float tileSize) {
+    return baked().detailFor(tileSize);
 }
 
-const Texture2D& atlas() {
-    return baked().sheet.texture();
+bool ready(Detail detail) {
+    return baked().ready(detail);
 }
 
-Rectangle source(int species, Pose pose, int kind, int frame, int facing) {
-    Rectangle piece = baked().source(species, frameAt(pose, kind, frame));
+const Texture2D& atlas(Detail detail) {
+    return baked().texture(detail);
+}
+
+Rectangle source(Detail detail, int species, Pose pose, int kind, int frame, int facing) {
+    Rectangle piece = baked().sheet(detail).source(species, frameAt(pose, kind, frame));
     if (facing < 0) {
         // Отрицательная ширина — то, как raylib просят отразить кусок по
         // горизонтали. Зверь нарисован во всю ширину кадра, от хвоста до

@@ -65,26 +65,26 @@ SpriteAtlas::Palette bushPalette(int species) {
 // хоть одного кадра — не рисуем ничем (SpriteAtlas::bake): куст, показанный
 // ростком, хуже, чем куст, показанный оттенком клетки, потому что выглядит
 // как ответ, а отвечает неверно.
-const SpriteAtlas::Baked& grassBaked() {
-    static const SpriteAtlas::Baked result = [] {
+const SpriteAtlas::Detailed& grassBaked() {
+    static const SpriteAtlas::Detailed result = [] {
         std::vector<SpriteAtlas::Palette> palettes;
         palettes.reserve(TileColors::kGrassSpeciesCount);
         for (int species = 0; species < TileColors::kGrassSpeciesCount; ++species) {
             palettes.push_back(grassPalette(species));
         }
-        return SpriteAtlas::bake("grass", palettes, kGrassFrames);
+        return SpriteAtlas::bakeDetailed("grass", palettes, kGrassFrames);
     }();
     return result;
 }
 
-const SpriteAtlas::Baked& bushBaked() {
-    static const SpriteAtlas::Baked result = [] {
+const SpriteAtlas::Detailed& bushBaked() {
+    static const SpriteAtlas::Detailed result = [] {
         std::vector<SpriteAtlas::Palette> palettes;
         palettes.reserve(TileColors::kBushSpeciesCount);
         for (int species = 0; species < TileColors::kBushSpeciesCount; ++species) {
             palettes.push_back(bushPalette(species));
         }
-        return SpriteAtlas::bake("bush", palettes, kBushFrames);
+        return SpriteAtlas::bakeDetailed("bush", palettes, kBushFrames);
     }();
     return result;
 }
@@ -100,27 +100,35 @@ int frameAt(int stage, int frame) {
 
 } // namespace
 
-bool grassReady() {
-    return grassBaked().complete;
+Detail grassDetailFor(float tileSize) {
+    return grassBaked().detailFor(tileSize);
 }
 
-bool bushReady() {
-    return bushBaked().complete;
+Detail bushDetailFor(float tileSize) {
+    return bushBaked().detailFor(tileSize);
 }
 
-const Texture2D& grassAtlas() {
-    return grassBaked().sheet.texture();
+bool grassReady(Detail detail) {
+    return grassBaked().ready(detail);
 }
 
-const Texture2D& bushAtlas() {
-    return bushBaked().sheet.texture();
+bool bushReady(Detail detail) {
+    return bushBaked().ready(detail);
 }
 
-Rectangle grass(int species, int stage, int variant, int frame) {
+const Texture2D& grassAtlas(Detail detail) {
+    return grassBaked().texture(detail);
+}
+
+const Texture2D& bushAtlas(Detail detail) {
+    return bushBaked().texture(detail);
+}
+
+Rectangle grass(Detail detail, int species, int stage, int variant, int frame) {
     const int s = stage < 0 ? 0 : stage % kStages;
     const int v = variant < 0 ? 0 : variant % kGrassVariants;
     const int f = frame < 0 ? 0 : frame % kFrames;
-    return grassBaked().source(species, (s * kGrassVariants + v) * kFrames + f);
+    return grassBaked().sheet(detail).source(species, (s * kGrassVariants + v) * kFrames + f);
 }
 
 int variantOf(int x, int y) {
@@ -130,18 +138,18 @@ int variantOf(int x, int y) {
     return ((x * 3 + y * 7) % kGrassVariants + kGrassVariants) % kGrassVariants;
 }
 
-Rectangle bush(int species, int stage, int frame) {
-    return bushBaked().source(species, frameAt(stage, frame));
+Rectangle bush(Detail detail, int species, int stage, int frame) {
+    return bushBaked().sheet(detail).source(species, frameAt(stage, frame));
 }
 
-Rectangle berries(int count) {
+Rectangle berries(Detail detail, int count) {
     // Половина полного куста — граница между "горсть" и "полон"
     // (TileColors::kBerriesVisualCap, оно же kBerryMax мира). Ступеней две, а
     // не шкала: на клетке в шестнадцать пикселей разница между семью ягодами
     // и восемью не видна никакому глазу, а между горстью и полным кустом —
     // видна, и ровно её и спрашивают, глядя на карту.
     const bool many = static_cast<float>(count) >= TileColors::kBerriesVisualCap * 0.5f;
-    return bushBaked().source(0, many ? kBerriesMany : kBerriesFew);
+    return bushBaked().sheet(detail).source(0, many ? kBerriesMany : kBerriesFew);
 }
 
 int stageOf(float growth) {

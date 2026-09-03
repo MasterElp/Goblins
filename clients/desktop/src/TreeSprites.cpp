@@ -65,33 +65,37 @@ SpriteAtlas::Palette paletteOf(int species) {
 // хватает хоть одного кадра — не рисуем ничем (SpriteAtlas::bake): дерево
 // без своего возраста хуже, чем дерево прямоугольником, потому что
 // выглядит как дерево не того возраста.
-const SpriteAtlas::Baked& baked() {
-    static const SpriteAtlas::Baked result = [] {
+const SpriteAtlas::Detailed& baked() {
+    static const SpriteAtlas::Detailed result = [] {
         std::vector<SpriteAtlas::Palette> palettes;
         palettes.reserve(TileColors::kTreeSpeciesCount);
         for (int species = 0; species < TileColors::kTreeSpeciesCount; ++species) {
             palettes.push_back(paletteOf(species));
         }
-        return SpriteAtlas::bake("tree", palettes, kFrameNames);
+        return SpriteAtlas::bakeDetailed("tree", palettes, kFrameNames);
     }();
     return result;
 }
 
 } // namespace
 
-bool ready() {
-    return baked().complete;
+Detail detailFor(float tileSize) {
+    return baked().detailFor(tileSize);
 }
 
-const Texture2D& atlas() {
-    return baked().sheet.texture();
+bool ready(Detail detail) {
+    return baked().ready(detail);
 }
 
-Rectangle source(int species, int stage, int variant, int frame) {
+const Texture2D& atlas(Detail detail) {
+    return baked().texture(detail);
+}
+
+Rectangle source(Detail detail, int species, int stage, int variant, int frame) {
     const int s = stage < 0 ? 0 : stage % kStages;
     const int v = variant < 0 ? 0 : variant % kVariants;
     const int f = frame < 0 ? 0 : frame % kFrames;
-    return baked().source(species, (s * kVariants + v) * kFrames + f);
+    return baked().sheet(detail).source(species, (s * kVariants + v) * kFrames + f);
 }
 
 int variantOf(int x, int y) {

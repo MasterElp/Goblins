@@ -757,8 +757,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         const bool drawPlantSprites = showPlants && tileSize >= 10 &&
                                       snapshot.plantSpeciesAt.size() >= cellCount &&
                                       snapshot.plantGrowth.size() >= cellCount;
-        const bool drawGrass = drawPlantSprites && PlantSprites::grassReady();
-        const bool drawBushes = drawPlantSprites && PlantSprites::bushReady() &&
+        const auto grassDetail = PlantSprites::grassDetailFor(tileSizeF);
+        const auto bushDetail = PlantSprites::bushDetailFor(tileSizeF);
+        const bool drawGrass = drawPlantSprites && PlantSprites::grassReady(grassDetail);
+        const bool drawBushes = drawPlantSprites && PlantSprites::bushReady(bushDetail) &&
                                 snapshot.bushSpeciesAt.size() >= cellCount;
         if (drawTrees || drawBuildings || drawGrass || drawBushes) {
             const int firstX = std::max(0, static_cast<int>(std::floor(viewX / tileSizeF)));
@@ -773,7 +775,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             // до спрайтов — тонким стволом в треть клетки. Это не запасной
             // путь на случай беды, а тот же предмет, изображённый настолько
             // подробно, насколько его видно.
-            const bool drawSprites = tileSize >= 6 && TreeSprites::ready();
+            // Подробность у каждого рисунка своя: у дерева кадр вдвое выше, у
+            // травы с кустом — ровно клетка, и крупный лист у одного может
+            // быть, а у другого нет.
+            const auto treeDetail = TreeSprites::detailFor(tileSizeF);
+            const bool drawSprites = tileSize >= 6 && TreeSprites::ready(treeDetail);
             const int trunkWidth = std::max(1, tileSize / 3);
             const int trunkHeight = std::max(1, tileSize * 2);
             // Время берётся раз на всю рощу: качание считается от него и от
@@ -797,25 +803,26 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     if (drawBushes && snapshot.bushSpeciesAt[cell] >= 0) {
                         const int stage = PlantSprites::stageOf(snapshot.plantGrowth[cell]);
                         const Rectangle at{screenX, screenY, tileSizeF, tileSizeF};
-                        DrawTexturePro(PlantSprites::bushAtlas(),
-                                       PlantSprites::bush(snapshot.bushSpeciesAt[cell], stage,
-                                                          PlantSprites::frameOf(x, y, now)),
+                        const int frame = PlantSprites::frameOf(x, y, now);
+                        DrawTexturePro(PlantSprites::bushAtlas(bushDetail),
+                                       PlantSprites::bush(bushDetail, snapshot.bushSpeciesAt[cell],
+                                                          stage, frame),
                                        at, Vector2{0, 0}, 0.0f, WHITE);
                         // Ягоды поверх куста и не качаются вместе с ним: они
                         // висят на ветках, а качается верх кома.
                         if (cell < snapshot.berries.size() && snapshot.berries[cell] > 0) {
-                            DrawTexturePro(PlantSprites::bushAtlas(),
-                                           PlantSprites::berries(snapshot.berries[cell]), at, Vector2{0, 0},
-                                           0.0f, WHITE);
+                            DrawTexturePro(PlantSprites::bushAtlas(bushDetail),
+                                           PlantSprites::berries(bushDetail, snapshot.berries[cell]),
+                                           at, Vector2{0, 0}, 0.0f, WHITE);
                         }
                     } else if (drawGrass && snapshot.plantSpeciesAt[cell] >= 0) {
-                        DrawTexturePro(PlantSprites::grassAtlas(),
-                                       PlantSprites::grass(snapshot.plantSpeciesAt[cell],
-                                                           PlantSprites::stageOf(snapshot.plantGrowth[cell]),
-                                                           PlantSprites::variantOf(x, y),
+                        const int stage = PlantSprites::stageOf(snapshot.plantGrowth[cell]);
+                        DrawTexturePro(PlantSprites::grassAtlas(grassDetail),
+                                       PlantSprites::grass(grassDetail, snapshot.plantSpeciesAt[cell],
+                                                           stage, PlantSprites::variantOf(x, y),
                                                            PlantSprites::frameOf(x, y, now)),
-                                       Rectangle{screenX, screenY, tileSizeF, tileSizeF}, Vector2{0, 0}, 0.0f,
-                                       WHITE);
+                                       Rectangle{screenX, screenY, tileSizeF, tileSizeF}, Vector2{0, 0},
+                                       0.0f, WHITE);
                     }
 
                     // Постройки — снизу вверх в том же порядке, в каком они
@@ -856,10 +863,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     const int species = snapshot.treeSpeciesAt[cell];
                     const float growth = snapshot.plantGrowth[cell];
                     if (drawSprites) {
-                        DrawTexturePro(TreeSprites::atlas(),
-                                       TreeSprites::source(species, TreeSprites::stageOf(growth),
-                                                            TreeSprites::variantOf(x, y),
-                                                            TreeSprites::frameOf(x, y, now)),
+                        DrawTexturePro(TreeSprites::atlas(treeDetail),
+                                       TreeSprites::source(treeDetail, species,
+                                                           TreeSprites::stageOf(growth),
+                                                           TreeSprites::variantOf(x, y),
+                                                           TreeSprites::frameOf(x, y, now)),
                                        standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
                     } else {
                         DrawRectangle(static_cast<int>(screenX) + (tileSize - trunkWidth) / 2,
@@ -899,8 +907,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             // него лучше рисунка, потому что честно вырождается в точку на
             // отдалённой карте. О хищнике спрашивают другое: где он и не
             // крадётся ли он сейчас, — и на это кружок не отвечал ничем.
-            const bool drawWolves = tileSize >= 6 && WolfSprites::ready();
-            const bool drawDeer = tileSize >= 6 && DeerSprites::ready();
+            const auto wolfDetail = WolfSprites::detailFor(tileSizeF);
+            const auto deerDetail = DeerSprites::detailFor(tileSizeF);
+            const bool drawWolves = tileSize >= 6 && WolfSprites::ready(wolfDetail);
+            const bool drawDeer = tileSize >= 6 && DeerSprites::ready(deerDetail);
             for (const auto& animal : snapshot.animals) {
                 const float screenX = static_cast<float>(animal.x) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(animal.y) * tileSizeF - viewY + kHudHeight;
@@ -943,8 +953,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     // и один порог на обоих врал бы про одного из них.
                     if (animal.predator) {
                         const bool walking = WolfSprites::walkingNow(animal.stepTick, snapshot.tick);
-                        DrawTexturePro(WolfSprites::atlas(),
-                                       WolfSprites::source(animal.species,
+                        DrawTexturePro(WolfSprites::atlas(wolfDetail),
+                                       WolfSprites::source(wolfDetail, animal.species,
                                                            WolfSprites::poseOf(animal.desire, walking),
                                                            WolfSprites::stageOf(animal.growth),
                                                            WolfSprites::frameOf(animal.id, snapshot.tick),
@@ -952,8 +962,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                                        at, Vector2{0, 0}, 0.0f, WHITE);
                     } else {
                         const bool walking = DeerSprites::walkingNow(animal.stepTick, snapshot.tick);
-                        DrawTexturePro(DeerSprites::atlas(),
-                                       DeerSprites::source(animal.species,
+                        DrawTexturePro(DeerSprites::atlas(deerDetail),
+                                       DeerSprites::source(deerDetail, animal.species,
                                                            DeerSprites::poseOf(animal.desire, walking),
                                                            DeerSprites::kindOf(animal.growth, animal.sex),
                                                            DeerSprites::frameOf(animal.id, snapshot.tick),

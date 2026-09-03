@@ -2,6 +2,8 @@
 
 #include <raylib.h>
 
+#include "SpriteAtlas.hpp"
+
 // Рисунки травы и кустов: три возраста по два кадра качания, свои цвета на
 // каждый вид.
 //
@@ -57,8 +59,17 @@ constexpr int kGrassVariants = 3;
 // кадров; клетка тогда остаётся тем, чем она нарисована в самой текстуре
 // карты, — подмешкой цвета (см. MapTexture). Тот же предмет, изображённый
 // настолько подробно, насколько его видно.
-bool grassReady();
-bool bushReady();
+// Подробность — общая на все рисунки (SpriteAtlas::Detail): у травы и у куста
+// свой мелкий лист (кадр 16x16) и свой крупный (32x32). Порог у каждого свой,
+// потому что негодным может оказаться один из двух: куста крупного нет — трава
+// всё равно рисуется крупной.
+using Detail = SpriteAtlas::Detail;
+
+Detail grassDetailFor(float tileSize);
+Detail bushDetailFor(float tileSize);
+
+bool grassReady(Detail detail);
+bool bushReady(Detail detail);
 
 // Атласы: строка — вид растения, столбец — кадр. Пекутся при первом
 // обращении (нужен уже созданный GL-контекст) и живут до конца работы окна —
@@ -68,12 +79,12 @@ bool bushReady();
 // Атласа два, а не один, потому что раскрасок у них разное число: у травы
 // двенадцать видов, у куста четыре, и общий лист заставил бы печь травяные
 // кадры в кустовых цветах и наоборот.
-const Texture2D& grassAtlas();
-const Texture2D& bushAtlas();
+const Texture2D& grassAtlas(Detail detail);
+const Texture2D& bushAtlas(Detail detail);
 
 // Где в атласе лежит нужный кадр.
-Rectangle grass(int species, int stage, int variant, int frame);
-Rectangle bush(int species, int stage, int frame);
+Rectangle grass(Detail detail, int species, int stage, int variant, int frame);
+Rectangle bush(Detail detail, int species, int stage, int frame);
 
 // Какой кустик травы стоит на этой клетке. От клетки, а не от случая: случай
 // пересчитывался бы каждый кадр, и луг бы кипел.
@@ -83,7 +94,7 @@ int variantOf(int x, int y);
 // (BuildSprites::material): куст один и тот же, обобран он или полон.
 // Кадров два, горсть и полный куст, и берутся они по числу ягод на клетке —
 // счётному, как оно и приходит в слое.
-Rectangle berries(int count);
+Rectangle berries(Detail detail, int count);
 
 // Возраст по развитости растения (0..1, как она приходит в снапшоте).
 int stageOf(float growth);

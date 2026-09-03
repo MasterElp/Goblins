@@ -2,8 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <map>
-#include <string>
 #include <vector>
 
 #include "SpriteAtlas.hpp"
@@ -140,20 +138,16 @@ SpriteAtlas::Palette paletteOf(int tribe) {
 //
 // Раскраска у обоих листов ОДНА, и в этом весь смысл общей paletteOf: два
 // листа — это два масштаба одного и того же гоблина, а не два гоблина.
-const SpriteAtlas::Baked& bakeSheet(const char* art) {
-    std::vector<SpriteAtlas::Palette> palettes;
-    palettes.reserve(TileColors::kGoblinTribeCount);
-    for (int tribe = 0; tribe < TileColors::kGoblinTribeCount; ++tribe) {
-        palettes.push_back(paletteOf(tribe));
-    }
-    static std::map<std::string, SpriteAtlas::Baked> sheets;
-    return sheets.emplace(art, SpriteAtlas::bake(art, palettes, kFrameNames)).first->second;
-}
-
-const SpriteAtlas::Baked& baked(Detail detail) {
-    static const SpriteAtlas::Baked& coarse = bakeSheet("goblin");
-    static const SpriteAtlas::Baked& fine = bakeSheet("goblin_fine");
-    return detail == Detail::Fine ? fine : coarse;
+const SpriteAtlas::Detailed& baked() {
+    static const SpriteAtlas::Detailed result = [] {
+        std::vector<SpriteAtlas::Palette> palettes;
+        palettes.reserve(TileColors::kGoblinTribeCount);
+        for (int tribe = 0; tribe < TileColors::kGoblinTribeCount; ++tribe) {
+            palettes.push_back(paletteOf(tribe));
+        }
+        return SpriteAtlas::bakeDetailed("goblin", palettes, kFrameNames);
+    }();
+    return result;
 }
 
 // Место кадра в списке имён. Номера вне пределов заворачиваются остатком, а
@@ -174,26 +168,20 @@ int frameAt(Pose pose, int stage, int frame, View view) {
 } // namespace
 
 Detail detailFor(float tileSize) {
-    // Порог — размер самого крупного кадра: ниже него крупный лист пришлось
-    // бы ужимать, а ужатый он грязнее мелкого, нарисованного как раз на эту
-    // величину.
-    if (tileSize < static_cast<float>(kFineSize) || !baked(Detail::Fine).complete) {
-        return Detail::Coarse;
-    }
-    return Detail::Fine;
+    return baked().detailFor(tileSize);
 }
 
 bool ready(Detail detail) {
-    return baked(detail).complete;
+    return baked().ready(detail);
 }
 
 const Texture2D& atlas(Detail detail) {
-    return baked(detail).sheet.texture();
+    return baked().texture(detail);
 }
 
 Rectangle source(Detail detail, int tribe, Pose pose, int stage, int frame, Facing facing) {
     const View view = facing.vertical < 0 ? View::Away : facing.vertical > 0 ? View::Toward : View::Side;
-    Rectangle piece = baked(detail).source(tribe, frameAt(pose, stage, frame, view));
+    Rectangle piece = baked().sheet(detail).source(tribe, frameAt(pose, stage, frame, view));
     // Отражается ТОЛЬКО боковой вид — он один и нарисован повёрнутым.
     // Отрицательная ширина — то, как raylib просят отразить кусок по
     // горизонтали; второго набора кадров на левую сторону нет вовсе (см.

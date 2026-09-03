@@ -89,6 +89,35 @@ Baked bake(const std::string& art, std::span<const Palette> palettes, std::span<
     return out;
 }
 
+bool Detailed::ready(Detail detail) const {
+    return sheet(detail).complete;
+}
+
+const Baked& Detailed::sheet(Detail detail) const {
+    return detail == Detail::Fine ? fine : coarse;
+}
+
+const Texture2D& Detailed::texture(Detail detail) const {
+    return sheet(detail).sheet.texture();
+}
+
+Detail Detailed::detailFor(float tileSize) const {
+    // Порог — ширина кадра крупного листа, а не выписанное число: заведи
+    // кто-нибудь лист другого размера, и число разъехалось бы с ним молча.
+    if (!fine.complete || tileSize < static_cast<float>(fine.sheet.width())) {
+        return Detail::Coarse;
+    }
+    return Detail::Fine;
+}
+
+Detailed bakeDetailed(const std::string& art, std::span<const Palette> palettes,
+                      std::span<const char* const> frameNames) {
+    Detailed out;
+    out.coarse = bake(art, palettes, frameNames);
+    out.fine = bake(art + "_fine", palettes, frameNames);
+    return out;
+}
+
 Rectangle Sheet::source(int palette, int frame) const {
     if (!ready_) {
         return Rectangle{0, 0, 0, 0};

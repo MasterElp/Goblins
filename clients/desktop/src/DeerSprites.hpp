@@ -5,6 +5,8 @@
 
 #include <raylib.h>
 
+#include "SpriteAtlas.hpp"
+
 // Рисунки травоядных: олень сбоку, четыре занятия по два кадра, три облика,
 // свои цвета на каждый вид.
 //
@@ -50,19 +52,25 @@ enum class Pose {
 };
 constexpr int kPoses = 4;
 
-// Есть ли чем рисовать. false — ресурс не нашёлся или в нём не хватает
-// кадров; травоядное тогда остаётся тем же значком, каким оно рисуется на
-// мелком масштабе (см. WorldScreen).
-bool ready();
+// Подробность — общая на все рисунки (SpriteAtlas::Detail): листа два, мелкий
+// и крупный.
+using Detail = SpriteAtlas::Detail;
+
+// Какой лист брать при такой клетке. Нет крупного или он неполон — мелкий.
+Detail detailFor(float tileSize);
+
+// Есть ли чем рисовать этим листом. Негоден мелкий — травоядное остаётся тем
+// же значком, каким оно рисуется на мелком масштабе (см. WorldScreen).
+bool ready(Detail detail);
 
 // Атлас: строка — вид травоядного, столбец — кадр.
-const Texture2D& atlas();
+const Texture2D& atlas(Detail detail);
 
 // Где в атласе лежит нужный кадр. facing — сторона: >= 0 мордой вправо,
 // < 0 влево (кусок возвращается отрицательной ширины, и DrawTexturePro
 // отражает его сам). Видов со спины и навстречу у зверя нет — по той же
 // причине, что и у волка.
-Rectangle source(int species, Pose pose, int kind, int frame, int facing);
+Rectangle source(Detail detail, int species, Pose pose, int kind, int frame, int facing);
 
 // Облик по развитости тела (0..1, как она приходит в снапшоте) и полу.
 // Порог взрослости тот же, которым мир отделяет взрослого (kBreedingGrowth в
