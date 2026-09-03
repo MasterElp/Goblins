@@ -14,6 +14,7 @@
 
 #include "BuildSprites.hpp"
 #include "ConstantsOverlay.hpp"
+#include "DeerSprites.hpp"
 #include "GenomeGraph.hpp"
 #include "GoblinSprites.hpp"
 #include "InfoPanel.hpp"
@@ -898,6 +899,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             // отдалённой карте. О хищнике спрашивают другое: где он и не
             // крадётся ли он сейчас, — и на это кружок не отвечал ничем.
             const bool drawWolves = tileSize >= 6 && WolfSprites::ready();
+            const bool drawDeer = tileSize >= 6 && DeerSprites::ready();
             for (const auto& animal : snapshot.animals) {
                 const float screenX = static_cast<float>(animal.x) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(animal.y) * tileSizeF - viewY + kHudHeight;
@@ -923,7 +925,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     std::max(1.0f, tileSizeF * (scale + 0.16f * animal.growth) * bodyScale);
                 const float centerX = screenX + tileSizeF * 0.5f;
                 const float centerY = screenY + tileSizeF * 0.5f;
-                if (animal.predator && drawWolves) {
+                const bool asSprite = animal.predator ? drawWolves : drawDeer;
+                if (asSprite) {
                     // Величина тела остаётся и у рисунка: ради неё
                     // adult_size и заводился — десять крупных читаются как
                     // фауна, сорок одинаковых мелких как насекомые. Взрослый
@@ -934,14 +937,28 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     // стоит на земле, как и гоблин, и тень у него нарисована
                     // под лапами.
                     const Rectangle at{centerX - side * 0.5f, screenY + tileSizeF - side, side, side};
-                    const bool walking = WolfSprites::walkingNow(animal.stepTick, snapshot.tick);
-                    DrawTexturePro(WolfSprites::atlas(),
-                                   WolfSprites::source(animal.species,
-                                                       WolfSprites::poseOf(animal.desire, walking),
-                                                       WolfSprites::stageOf(animal.growth),
-                                                       WolfSprites::frameOf(animal.id, snapshot.tick),
-                                                       animal.facing),
-                                   at, Vector2{0, 0}, 0.0f, WHITE);
+                    // Память шага у хищника и у травоядного разной длины, и
+                    // спрашивается она у своего модуля: волк быстр, олень нет,
+                    // и один порог на обоих врал бы про одного из них.
+                    if (animal.predator) {
+                        const bool walking = WolfSprites::walkingNow(animal.stepTick, snapshot.tick);
+                        DrawTexturePro(WolfSprites::atlas(),
+                                       WolfSprites::source(animal.species,
+                                                           WolfSprites::poseOf(animal.desire, walking),
+                                                           WolfSprites::stageOf(animal.growth),
+                                                           WolfSprites::frameOf(animal.id, snapshot.tick),
+                                                           animal.facing),
+                                       at, Vector2{0, 0}, 0.0f, WHITE);
+                    } else {
+                        const bool walking = DeerSprites::walkingNow(animal.stepTick, snapshot.tick);
+                        DrawTexturePro(DeerSprites::atlas(),
+                                       DeerSprites::source(animal.species,
+                                                           DeerSprites::poseOf(animal.desire, walking),
+                                                           DeerSprites::kindOf(animal.growth, animal.sex),
+                                                           DeerSprites::frameOf(animal.id, snapshot.tick),
+                                                           animal.facing),
+                                       at, Vector2{0, 0}, 0.0f, WHITE);
+                    }
                 } else if (animal.sex == "male") {
                     DrawRectangle(static_cast<int>(centerX - radius), static_cast<int>(centerY - radius),
                                   std::max(1, static_cast<int>(radius * 2.0f)),
@@ -951,10 +968,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 }
                 // Тёмная обводка — чтобы светлое животное не терялось на
                 // светлой почве; только когда тайл достаточно крупный,
-                // иначе она съест сам значок. Волку она не нужна: под ним
+                // иначе она съест сам значок. Рисунку она не нужна: под зверем
                 // нарисована своя тень, и обводка обвела бы не зверя, а
                 // клетку, в которой он стоит.
-                if (tileSizeF >= 8.0f && !(animal.predator && drawWolves)) {
+                if (tileSizeF >= 8.0f && !asSprite) {
                     DrawCircleLines(static_cast<int>(centerX), static_cast<int>(centerY), radius + 1.0f,
                                     Color{30, 24, 18, 200});
                 }

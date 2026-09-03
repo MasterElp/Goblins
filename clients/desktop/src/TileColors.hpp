@@ -235,15 +235,19 @@ inline Color predatorSpecies(int species) {
 // — верхний предел числа видов травоядных в мире
 // (core::kMaxHerbivoreSpecies); индекс больше просто повторит цвет
 // (остаток от деления), а не выйдет за границы.
+// Наружу число нужно тому, кто печёт спрайты сразу на все виды
+// (DeerSprites), — та же надобность, что и у хищников.
+constexpr int kHerbivoreSpeciesCount = 8;
+
 inline Color herbivoreSpecies(int species) {
-    static const Color palette[8] = {
+    static const Color palette[kHerbivoreSpeciesCount] = {
         {214, 158, 84, 255},  {186, 116, 66, 255}, {231, 199, 122, 255}, {158, 96, 62, 255},
         {236, 172, 140, 255}, {198, 140, 92, 255}, {172, 128, 104, 255}, {242, 214, 178, 255},
     };
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 8];
+    return palette[species % kHerbivoreSpeciesCount];
 }
 
 // Цвета племён гоблинов — по номеру племени. Палитра третья и намеренно
