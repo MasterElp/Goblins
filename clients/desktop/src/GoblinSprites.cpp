@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstddef>
+#include <map>
+#include <string>
 #include <vector>
 
 #include "SpriteAtlas.hpp"
@@ -70,16 +72,21 @@ constexpr std::array<const char*, kStages * kFramesPerStage> kFrameNames = {
     "adult.work.a",          "adult.work.b",
 };
 
-// Обводка. Тот же цвет, которым ромб обводился до всякого рисунка (см.
-// WorldScreen): гоблин не должен потеряться на пёстрой земле, а цвета племён
-// холодные и неяркие.
-constexpr Color kOutline{20, 34, 32, 255};
-// Глаз — единственное светлое пятно на всей фигуре, и это не украшение.
-// Кожа у племён холодная и неяркая, обводка тёмная; тёмный глаз на такой
-// голове сливался бы с обводкой в зарубку, а зарубка ничего не говорит.
-// Светлый же виден издали — и виден он ровно с той стороны, в которую
-// гоблин повёрнут, то есть сам по себе отвечает, куда тот идёт.
-constexpr Color kEye{232, 202, 110, 255};
+// Тень на земле — вместо обводки, которая тут была раньше.
+//
+// Ободок в пиксель отнимал у фигуры треть ширины: на клетке в шестнадцать
+// пикселей гоблин десять в ширину, и два из них уходили в чёрное. Тень же не
+// отнимает ничего — она лежит ПОД ногами, и работает та же служба: гоблин не
+// теряется на пёстрой земле.
+//
+// Полупрозрачная, а не сплошная, и это существенно: под ней и светлый песок,
+// и тёмная вода, и трава, — сплошная была бы дырой в земле на одних и
+// кляксой на других.
+constexpr Color kShadow{16, 22, 18, 105};
+// Глаз — самое тёмное на всей фигуре, и это не украшение: он один говорит,
+// куда гоблин повёрнут, и на светлой коже головы должен читаться первым.
+constexpr Color kEyeDark{28, 34, 28, 255};
+
 // Повязка — одна на все племена, и это не упущение, а тот же закон, по
 // которому одинаковы навесы (BuildSprites): собственности в этом мире нет ни
 // в одном законе, и племя опознаётся кожей, а не одеждой.
@@ -104,7 +111,7 @@ Color lighten(Color color, float amount) {
     return Color{up(color.r), up(color.g), up(color.b), color.a};
 }
 
-// Раскраска на племя. Меняется в ней одна кожа — всё прочее (обводка, глаз,
+// Раскраска на племя. Меняется в ней одна кожа — всё прочее (тень, глаз,
 // повязка, ноша, еда) у всех племён общее, и по той же причине, по которой у
 // деревьев общая кора: цвету оставлена одна работа — сказать, чьё это племя.
 SpriteAtlas::Palette paletteOf(int tribe) {
@@ -112,7 +119,7 @@ SpriteAtlas::Palette paletteOf(int tribe) {
     // Тонов кожи три, а не два, и это главное, чем кадр вообще читается.
     //
     // На клетке в шестнадцать пикселей фигура — десять пикселей в ширину, и
-    // при одном тоне она выглядит пятном в тёмной обводке: ни головы, ни
+    // при одном тоне она выглядит одним пятном: ни головы, ни
     // рук, ни ног. Тон и делит её на части — светлая голова, кожа тела,
     // тёмные руки и дальняя нога, — и делает это ровно там, где силуэту не
     // хватает места, чтобы сказать то же самое формой.
@@ -121,25 +128,32 @@ SpriteAtlas::Palette paletteOf(int tribe) {
     // куда гоблин повёрнут, и на пёстрой земле она должна выхватываться.
     return {SpriteAtlas::Ink{'H', lighten(skin, 0.30f)},
             SpriteAtlas::Ink{'S', skin},     SpriteAtlas::Ink{'s', darken(skin, 0.45f)},
-            SpriteAtlas::Ink{'o', kOutline}, SpriteAtlas::Ink{'E', kEye},
+            SpriteAtlas::Ink{'d', kShadow}, SpriteAtlas::Ink{'E', kEyeDark},
             SpriteAtlas::Ink{'L', kCloth},   SpriteAtlas::Ink{'M', kLoad},
             SpriteAtlas::Ink{'F', kFood}};
 }
 
 // Печётся при первом обращении: нужен уже созданный GL-контекст. Не хватает
-// хоть одного кадра — не рисуем ничем (SpriteAtlas::bake): гоблин, лежащий
-// вместо того, чтобы работать, хуже ромба, потому что выглядит как ответ на
-// вопрос, которого никто не задавал.
-const SpriteAtlas::Baked& baked() {
-    static const SpriteAtlas::Baked result = [] {
-        std::vector<SpriteAtlas::Palette> palettes;
-        palettes.reserve(TileColors::kGoblinTribeCount);
-        for (int tribe = 0; tribe < TileColors::kGoblinTribeCount; ++tribe) {
-            palettes.push_back(paletteOf(tribe));
-        }
-        return SpriteAtlas::bake("goblin", palettes, kFrameNames);
-    }();
-    return result;
+// хоть одного кадра — лист негоден целиком (SpriteAtlas::bake): гоблин,
+// лежащий вместо того, чтобы работать, хуже ромба, потому что выглядит как
+// ответ на вопрос, которого никто не задавал.
+//
+// Раскраска у обоих листов ОДНА, и в этом весь смысл общей paletteOf: два
+// листа — это два масштаба одного и того же гоблина, а не два гоблина.
+const SpriteAtlas::Baked& bakeSheet(const char* art) {
+    std::vector<SpriteAtlas::Palette> palettes;
+    palettes.reserve(TileColors::kGoblinTribeCount);
+    for (int tribe = 0; tribe < TileColors::kGoblinTribeCount; ++tribe) {
+        palettes.push_back(paletteOf(tribe));
+    }
+    static std::map<std::string, SpriteAtlas::Baked> sheets;
+    return sheets.emplace(art, SpriteAtlas::bake(art, palettes, kFrameNames)).first->second;
+}
+
+const SpriteAtlas::Baked& baked(Detail detail) {
+    static const SpriteAtlas::Baked& coarse = bakeSheet("goblin");
+    static const SpriteAtlas::Baked& fine = bakeSheet("goblin_fine");
+    return detail == Detail::Fine ? fine : coarse;
 }
 
 // Место кадра в списке имён. Номера вне пределов заворачиваются остатком, а
@@ -159,17 +173,27 @@ int frameAt(Pose pose, int stage, int frame, View view) {
 
 } // namespace
 
-bool ready() {
-    return baked().complete;
+Detail detailFor(float tileSize) {
+    // Порог — размер самого крупного кадра: ниже него крупный лист пришлось
+    // бы ужимать, а ужатый он грязнее мелкого, нарисованного как раз на эту
+    // величину.
+    if (tileSize < static_cast<float>(kFineSize) || !baked(Detail::Fine).complete) {
+        return Detail::Coarse;
+    }
+    return Detail::Fine;
 }
 
-const Texture2D& atlas() {
-    return baked().sheet.texture();
+bool ready(Detail detail) {
+    return baked(detail).complete;
 }
 
-Rectangle source(int tribe, Pose pose, int stage, int frame, Facing facing) {
+const Texture2D& atlas(Detail detail) {
+    return baked(detail).sheet.texture();
+}
+
+Rectangle source(Detail detail, int tribe, Pose pose, int stage, int frame, Facing facing) {
     const View view = facing.vertical < 0 ? View::Away : facing.vertical > 0 ? View::Toward : View::Side;
-    Rectangle piece = baked().source(tribe, frameAt(pose, stage, frame, view));
+    Rectangle piece = baked(detail).source(tribe, frameAt(pose, stage, frame, view));
     // Отражается ТОЛЬКО боковой вид — он один и нарисован повёрнутым.
     // Отрицательная ширина — то, как raylib просят отразить кусок по
     // горизонтали; второго набора кадров на левую сторону нет вовсе (см.

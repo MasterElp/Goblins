@@ -912,7 +912,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // животного, а на мелком тайле цвета сливаются), а размер внутри
         // ромба говорит про пол и рост.
         if (showGoblins) {
-            const bool drawSprites = tileSize >= 6 && GoblinSprites::ready();
+            // Подробность рисунка — по величине клетки: вплотную берётся
+            // крупный лист, издали мелкий (GoblinSprites::detailFor).
+            const GoblinSprites::Detail detail = GoblinSprites::detailFor(tileSizeF);
+            const bool drawSprites = tileSize >= 6 && GoblinSprites::ready(detail);
             for (const auto& goblin : snapshot.goblins) {
                 const float screenX = static_cast<float>(goblin.x) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(goblin.y) * tileSizeF - viewY + kHudHeight;
@@ -933,8 +936,8 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     const bool walking = GoblinSprites::walkingNow(goblin.stepTick, snapshot.tick);
                     const bool loaded = goblin.carried > 0.0f || goblin.material > 0.0f;
                     DrawTexturePro(
-                        GoblinSprites::atlas(),
-                        GoblinSprites::source(goblin.tribe,
+                        GoblinSprites::atlas(detail),
+                        GoblinSprites::source(detail, goblin.tribe,
                                               GoblinSprites::poseOf(goblin.desire, walking, loaded),
                                               GoblinSprites::stageOf(goblin.growth),
                                               GoblinSprites::frameOf(goblin.id, snapshot.tick),
