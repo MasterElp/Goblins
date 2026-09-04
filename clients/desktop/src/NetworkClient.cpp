@@ -25,20 +25,28 @@ constexpr float kFromThousandths = 0.001f;
 // сообщение приходит извне, и битые данные не должны приводить к записи
 // за границы массива.
 template <typename T, typename Decode>
-void applyChangedCells(const nlohmann::json& message, const char* key, std::vector<T>& target, Decode decode) {
+bool applyChangedCells(const nlohmann::json& message, const char* key, std::vector<T>& target,
+                       Decode decode) {
     if (!message.contains(key)) {
-        return;
+        return false;
     }
     const auto& pairs = message[key];
     if (!pairs.is_array()) {
-        return;
+        return false;
     }
+    bool wrote = false;
     for (std::size_t p = 0; p + 1 < pairs.size(); p += 2) {
         const auto index = pairs[p].get<std::size_t>();
         if (index < target.size()) {
             target[index] = decode(pairs[p + 1].get<int>());
+            wrote = true;
         }
     }
+    // Записала ли — а не изменилось ли значение. Перезапись тем же числом
+    // бывает редко (сервер шлёт клетку, только когда она изменилась на
+    // единицу показа), а сличать старое с новым дороже, чем изредка
+    // пересобрать карту зря.
+    return wrote;
 }
 
 // Карточка животного — всё, что о нём знает клиент. Одна на полный список
@@ -293,7 +301,8 @@ std::shared_ptr<const WorldState> NetworkClient::snapshot() const {
 }
 
 void NetworkClient::publishState() {
-    ++working_.version;
+    // Версию карты тут не трогаем: снимок публикуется на всякое сообщение
+    // сервера, а карта меняется только от клеток (см. WorldState::mapVersion).
     auto copy = std::make_shared<const WorldState>(working_);
     std::lock_guard<std::mutex> lock(mutex_);
     published_ = std::move(copy);
@@ -807,6 +816,8 @@ void NetworkClient::handleMessage(const std::string& payload) {
             }
         }
         working_.currentWorld = json.value("world", working_.currentWorld);
+        // Мир приехал целиком — все слои переписаны, и карта заведомо другая.
+        ++working_.mapVersion;
         publishState();
     } else if (type == "world_delta") {
         // Только изменившиеся клетки — накладываются на то, что уже
@@ -817,30 +828,45 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.paused = json.value("paused", working_.paused);
 
         const auto toFraction = [](int raw) { return static_cast<float>(raw) * kFromHundredths; };
-        applyChangedCells(json, "moisture", working_.moisture, toFraction);
-        applyChangedCells(json, "trampled", working_.trampled, toFraction);
-        applyChangedCells(json, "height", working_.height, toFraction);
-        applyChangedCells(json, "water", working_.waterDepth, toFraction);
-        applyChangedCells(json, "growth", working_.plantGrowth, toFraction);
-        applyChangedCells(json, "minerals", working_.minerals, [](int raw) { return raw; });
-        applyChangedCells(json, "humus", working_.humus, [](int raw) { return raw; });
-        applyChangedCells(json, "carcass", working_.carcass, toFraction);
-        applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
-        applyChangedCells(json, "seeds", working_.seedSpeciesAt, [](int raw) { return raw; });
-        applyChangedCells(json, "trees", working_.treeSpeciesAt, [](int raw) { return raw; });
-        applyChangedCells(json, "bushes", working_.bushSpeciesAt, [](int raw) { return raw; });
-        applyChangedCells(json, "berries", working_.berries, [](int raw) { return raw; });
-        applyChangedCells(json, "store", working_.store, [](int raw) { return raw; });
-        applyChangedCells(json, "canopy", working_.canopy, toFraction);
-        applyChangedCells(json, "bedding", working_.bedding, toFraction);
-        applyChangedCells(json, "site", working_.site, [](int raw) { return raw; });
-        applyChangedCells(json, "site_material", working_.siteMaterial, [](int raw) { return raw; });
+        // Клеточные слои — через одну руку, и она же копит ответ на вопрос
+        // "изменилась ли карта". Не ради краткости: слой, добавленный сюда
+        // обычным вызовом applyChangedCells, молча перестал бы помечать карту
+        // изменившейся, и она бы отставала на этот слой до следующего
+        // world_init. Через общую руку такой промах невозможен.
+        bool cellsChanged = false;
+        const auto cells = [&](const char* key, auto& target, auto decode) {
+            cellsChanged |= applyChangedCells(json, key, target, decode);
+        };
+        const auto asIs = [](int raw) { return raw; };
+        cells("moisture", working_.moisture, toFraction);
+        cells("trampled", working_.trampled, toFraction);
+        cells("height", working_.height, toFraction);
+        cells("water", working_.waterDepth, toFraction);
+        cells("growth", working_.plantGrowth, toFraction);
+        cells("minerals", working_.minerals, asIs);
+        cells("humus", working_.humus, asIs);
+        cells("carcass", working_.carcass, toFraction);
+        cells("species", working_.plantSpeciesAt, asIs);
+        cells("seeds", working_.seedSpeciesAt, asIs);
+        cells("trees", working_.treeSpeciesAt, asIs);
+        cells("bushes", working_.bushSpeciesAt, asIs);
+        cells("berries", working_.berries, asIs);
+        cells("store", working_.store, asIs);
+        cells("canopy", working_.canopy, toFraction);
+        cells("bedding", working_.bedding, toFraction);
+        cells("site", working_.site, asIs);
+        cells("site_material", working_.siteMaterial, asIs);
         // Поголовье — изменениями, как и слои, только правится не клетка,
         // а животное (см. протокол в server/NetworkServer.hpp).
         applyAnimalChanges(json);
         applyGoblinChanges(json);
         applyPopulationHistory(json, /*replace=*/false);
         applyWatched(json);
+        // Дельта, в которой шевельнулись только звери, карту не трогает: они
+        // рисуются фигурами ПОВЕРХ неё, а не текселем (см. MapTexture).
+        if (cellsChanged) {
+            ++working_.mapVersion;
+        }
         publishState();
     } else if (type == "pause_state") {
         working_.paused = json.value("paused", working_.paused);

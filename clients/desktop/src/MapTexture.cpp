@@ -98,12 +98,12 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
 
 const Texture2D& Cache::texture(const WorldState& state, const Layers& layers) {
     const bool sizeMatches = loaded_ && builtWidth_ == state.areaWidth && builtHeight_ == state.areaHeight;
-    if (sizeMatches && builtVersion_ == state.version && builtLayers_ == layers) {
+    if (sizeMatches && builtVersion_ == state.mapVersion && builtLayers_ == layers) {
         return texture_;
     }
 
     rebuildPixels(state, layers);
-    builtVersion_ = state.version;
+    builtVersion_ = state.mapVersion;
     builtLayers_ = layers;
 
     if (sizeMatches) {
