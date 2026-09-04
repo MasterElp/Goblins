@@ -25,28 +25,26 @@ constexpr float kFromThousandths = 0.001f;
 // сообщение приходит извне, и битые данные не должны приводить к записи
 // за границы массива.
 template <typename T, typename Decode>
-bool applyChangedCells(const nlohmann::json& message, const char* key, std::vector<T>& target,
-                       Decode decode) {
+void applyChangedCells(const nlohmann::json& message, const char* key, std::vector<T>& target,
+                       std::vector<std::int32_t>& changed, Decode decode) {
     if (!message.contains(key)) {
-        return false;
+        return;
     }
     const auto& pairs = message[key];
     if (!pairs.is_array()) {
-        return false;
+        return;
     }
-    bool wrote = false;
     for (std::size_t p = 0; p + 1 < pairs.size(); p += 2) {
         const auto index = pairs[p].get<std::size_t>();
         if (index < target.size()) {
             target[index] = decode(pairs[p + 1].get<int>());
-            wrote = true;
+            // Записали — а не "изменилось значение". Перезапись тем же числом
+            // бывает редко (сервер шлёт клетку, только когда она изменилась на
+            // единицу показа), а сличать старое с новым дороже, чем изредка
+            // пересчитать цвет этой клетки зря.
+            changed.push_back(static_cast<std::int32_t>(index));
         }
     }
-    // Записала ли — а не изменилось ли значение. Перезапись тем же числом
-    // бывает редко (сервер шлёт клетку, только когда она изменилась на
-    // единицу показа), а сличать старое с новым дороже, чем изредка
-    // пересобрать карту зря.
-    return wrote;
 }
 
 // Карточка животного — всё, что о нём знает клиент. Одна на полный список
@@ -817,6 +815,9 @@ void NetworkClient::handleMessage(const std::string& payload) {
         }
         working_.currentWorld = json.value("world", working_.currentWorld);
         // Мир приехал целиком — все слои переписаны, и карта заведомо другая.
+        // Списка изменившихся клеток у него нет: менялось всё сразу, и пустой
+        // список при новой версии для MapTexture и значит "пересчитай всё".
+        working_.changedCells.clear();
         ++working_.mapVersion;
         publishState();
     } else if (type == "world_delta") {
@@ -828,14 +829,15 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.paused = json.value("paused", working_.paused);
 
         const auto toFraction = [](int raw) { return static_cast<float>(raw) * kFromHundredths; };
-        // Клеточные слои — через одну руку, и она же копит ответ на вопрос
-        // "изменилась ли карта". Не ради краткости: слой, добавленный сюда
-        // обычным вызовом applyChangedCells, молча перестал бы помечать карту
-        // изменившейся, и она бы отставала на этот слой до следующего
-        // world_init. Через общую руку такой промах невозможен.
-        bool cellsChanged = false;
+        // Клеточные слои — через одну руку, и она же копит список
+        // изменившихся клеток. Не ради краткости: слой, добавленный сюда
+        // обычным вызовом applyChangedCells, молча не попал бы в список, и
+        // карта отставала бы на этот слой до следующего world_init — а
+        // заметить такое почти нечем. Через общую руку такой промах
+        // невозможен.
+        working_.changedCells.clear();
         const auto cells = [&](const char* key, auto& target, auto decode) {
-            cellsChanged |= applyChangedCells(json, key, target, decode);
+            applyChangedCells(json, key, target, working_.changedCells, decode);
         };
         const auto asIs = [](int raw) { return raw; };
         cells("moisture", working_.moisture, toFraction);
@@ -864,7 +866,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         applyWatched(json);
         // Дельта, в которой шевельнулись только звери, карту не трогает: они
         // рисуются фигурами ПОВЕРХ неё, а не текселем (см. MapTexture).
-        if (cellsChanged) {
+        if (!working_.changedCells.empty()) {
             ++working_.mapVersion;
         }
         publishState();

@@ -68,6 +68,12 @@ public:
     const Texture2D& texture(const WorldState& state, const Layers& layers);
 
 private:
+    // Цвет одной клетки — весь закон смешения слоёв в одном месте. Отдельно от
+    // обхода потому, что обходов теперь два: по всему миру (world_init, смена
+    // набора слоёв) и по изменившимся клеткам (обычная дельта). Разъедься эти
+    // два счёта — и карта после дельты отличалась бы от себя же, пересобранной
+    // целиком, а заметить это было бы нечем.
+    static Color colorAt(const WorldState& state, const Layers& layers, std::size_t i);
     void rebuildPixels(const WorldState& state, const Layers& layers);
 
     Texture2D texture_{};

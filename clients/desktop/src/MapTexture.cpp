@@ -1,13 +1,12 @@
 #include "MapTexture.hpp"
 
+#include <cstdint>
+
 #include "TileColors.hpp"
 
 namespace MapTexture {
 
-void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
-    const std::size_t cellCount = static_cast<std::size_t>(state.areaWidth) * state.areaHeight;
-    pixels_.assign(cellCount, Color{0, 0, 0, 255});
-
+Color Cache::colorAt(const WorldState& state, const Layers& layers, std::size_t i) {
     // Диапазон высот — для нормализации в TileColors::applyHeightShading.
     // Не пересчитывается здесь: state.heightMin/heightMax зафиксированы на
     // момент последнего world_init (NetworkClient.cpp), а не берутся живым
@@ -22,7 +21,7 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
         heightRange = state.heightMax - state.heightMin;
     }
 
-    for (std::size_t i = 0; i < cellCount; ++i) {
+    {
         Color color = TileColors::soil(layers.moisture ? state.moisture[i] : 0.0f,
                                        layers.rockiness ? state.rockiness[i] : 0.0f,
                                        layers.minerals ? TileColors::mineralsFraction(state.minerals[i]) : 0.0f,
@@ -92,7 +91,15 @@ void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
         // (см. WorldScreen, где оно и рисуется фигурой поверх карты). В
         // текстуре под ним остаётся голая земля — та, в которую оно
         // воткнуто.
-        pixels_[i] = color;
+        return color;
+    }
+}
+
+void Cache::rebuildPixels(const WorldState& state, const Layers& layers) {
+    const std::size_t cellCount = static_cast<std::size_t>(state.areaWidth) * state.areaHeight;
+    pixels_.assign(cellCount, Color{0, 0, 0, 255});
+    for (std::size_t i = 0; i < cellCount; ++i) {
+        pixels_[i] = colorAt(state, layers, i);
     }
 }
 
@@ -102,7 +109,34 @@ const Texture2D& Cache::texture(const WorldState& state, const Layers& layers) {
         return texture_;
     }
 
-    rebuildPixels(state, layers);
+    const std::size_t cellCount = static_cast<std::size_t>(state.areaWidth) * state.areaHeight;
+    // Пересчитать только изменившиеся клетки можно ровно тогда, когда кэш
+    // отстал РОВНО НА ОДИН снимок: список в снимке описывает изменения
+    // относительно предыдущего снимка и только их. Отстал на два — какие
+    // клетки изменились в пропущенном, знать неоткуда, и остаётся честно
+    // пересчитать всё.
+    //
+    // Пустой список при новой версии — это world_init: мир приехал целиком,
+    // менялось всё сразу, и списка у него нет вовсе.
+    //
+    // Порог в четверть мира — не про скорость, а про смысл: дельта, тронувшая
+    // столько, — это уже не дельта. Замерено (tools/watch_map_rebuilds.py),
+    // что живая дельта трогает 5.5% клеток мира 400x400 и 8% мира 200x130.
+    const bool patchable = sizeMatches && builtLayers_ == layers &&
+                           state.mapVersion == builtVersion_ + 1 && !state.changedCells.empty() &&
+                           state.changedCells.size() * 4 < cellCount;
+    if (patchable) {
+        for (const std::int32_t cell : state.changedCells) {
+            const std::size_t i = static_cast<std::size_t>(cell);
+            // Номер приходит из сети: за границы массива по нему писать
+            // нельзя, каким бы битым сообщение ни оказалось.
+            if (cell >= 0 && i < pixels_.size()) {
+                pixels_[i] = colorAt(state, layers, i);
+            }
+        }
+    } else {
+        rebuildPixels(state, layers);
+    }
     builtVersion_ = state.mapVersion;
     builtLayers_ = layers;
 

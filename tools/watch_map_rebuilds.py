@@ -17,7 +17,10 @@
     (сервер шлёт снимки по своим часам, а не по тику мира).
 
 Запуск (сервер поднимается сам, config.json пользователя не трогается):
-    python3 tools/watch_map_rebuilds.py [секунд]
+    python3 tools/watch_map_rebuilds.py [секунд] [ширина] [высота]
+
+Размер Области стоит задавать: доля изменившихся за дельту клеток — величина
+относительная, и проверять её надо на том мире, о котором спрашивают.
 """
 import collections
 import json
@@ -52,8 +55,31 @@ def touches_cells(message):
     return False
 
 
+def changed_cells(message):
+    """Сколько записей о клетках в дельте и сколько среди них РАЗНЫХ клеток.
+
+    Разница между этими двумя числами и есть цена, которую пришлось бы платить
+    за складывание списка изменившихся клеток: слой в дельте свой у каждого, а
+    клетка у них общая, и одна и та же клетка попадает в список столько раз, в
+    скольких слоях она изменилась.
+    """
+    entries = 0
+    unique = set()
+    for key in CELL_KEYS:
+        value = message.get(key)
+        if not isinstance(value, list):
+            continue
+        for p in range(0, len(value) - 1, 2):
+            entries += 1
+            unique.add(value[p])
+    return entries, len(unique)
+
+
 def main():
     seconds = int(sys.argv[1]) if len(sys.argv) > 1 else 60
+    area = None
+    if len(sys.argv) > 3:
+        area = {"width": int(sys.argv[2]), "height": int(sys.argv[3])}
     binary = find_server(ROOT)
     if binary is None:
         print("Сервер не собран: ./build.sh")
@@ -64,6 +90,8 @@ def main():
     # подобранный вручную мир, и трогать его мерке нечем.
     config = json.load(open(os.path.join(ROOT, "config.json"), encoding="utf-8"))
     config["port"] = PORT
+    if area is not None:
+        config["area"] = area
     config_path = os.path.join(workdir, "config.json")
     json.dump(config, open(config_path, "w", encoding="utf-8"), indent=4, sort_keys=True)
 
@@ -110,6 +138,9 @@ def main():
 
         kinds = collections.Counter()
         idle_deltas = 0
+        entries_total = 0
+        unique_total = 0
+        biggest = 0
         end = time.time() + seconds
         # Пауза дважды за прогон: так в счёт попадает и pause_state — то самое
         # сообщение, которое не меняет ни клетки, а карту пересобирает.
@@ -123,8 +154,13 @@ def main():
                 continue
             kind = message.get("type", "?")
             kinds[kind] += 1
-            if kind == "world_delta" and not touches_cells(message):
-                idle_deltas += 1
+            if kind == "world_delta":
+                entries, unique = changed_cells(message)
+                entries_total += entries
+                unique_total += unique
+                biggest = max(biggest, unique)
+                if unique == 0:
+                    idle_deltas += 1
 
         total = sum(kinds.values())
         if total == 0:
@@ -140,6 +176,14 @@ def main():
               % (idle_deltas, kinds["world_delta"]))
         print("пересборок карты впустую: %d из %d (%.0f%%)"
               % (wasted, total, 100.0 * wasted / total))
+        живых = kinds["world_delta"] - idle_deltas
+        if живых:
+            cells = width * height
+            print("в дельте с клетками: записей %.0f, разных клеток %.0f (в среднем), "
+                  "больше некуда %d"
+                  % (entries_total / живых, unique_total / живых, biggest))
+            print("это %.2f%% мира; полная пересборка считает все %d клеток"
+                  % (100.0 * (unique_total / живых) / cells, cells))
     finally:
         server.terminate()
         try:
