@@ -25,6 +25,7 @@ add_executable(client
     src/PlantSprites.cpp
     src/WolfSprites.cpp
     src/WaterSprites.cpp
+    src/SpriteWarmUp.cpp
     src/DeerSprites.cpp
     src/ConstantsOverlay.cpp
     src/PopulationGraph.cpp

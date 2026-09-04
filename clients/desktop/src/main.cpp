@@ -10,6 +10,7 @@
 #include "NetworkClient.hpp"
 #include "SettingsPanel.hpp"
 #include "SettingsScreen.hpp"
+#include "SpriteWarmUp.hpp"
 #include "WorldScreen.hpp"
 #include "WorldSelectScreen.hpp"
 #include "config/Config.hpp"
@@ -58,6 +59,10 @@ int main(int argc, char** argv) {
     if (config.fullscreen) {
         ToggleFullscreen();
     }
+    // Рисунки — все разом и до первого кадра. Лениво они пеклись бы прямо в
+    // кадрах, где мир впервые показывают, и клали бы туда четыре кадра мимо
+    // бюджета (см. SpriteWarmUp.hpp — там и замер, и вторая причина).
+    SpriteWarmUp::bakeAll();
 
     SettingsPanel generationPanel;
     AppScreen screen = AppScreen::MainMenu;
