@@ -20,6 +20,7 @@
 #include "InfoPanel.hpp"
 #include "KeysPanel.hpp"
 #include "MapTexture.hpp"
+#include "WaterSprites.hpp"
 #include "PlantSprites.hpp"
 #include "TreeSprites.hpp"
 #include "WolfSprites.hpp"
@@ -654,6 +655,61 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                                  static_cast<float>(snapshot.areaHeight) * tileSizeF},
                        Vector2{0, 0}, 0.0f, WHITE);
 
+        const std::size_t cellCount =
+            static_cast<std::size_t>(snapshot.areaWidth) * static_cast<std::size_t>(snapshot.areaHeight);
+
+        // Рябь на воде — сразу за текстурой карты и раньше всего остального:
+        // она не предмет НА воде, а сама её поверхность, и заслонять ею
+        // подсветку, булыжник или зверя было бы враньём.
+        //
+        // Порог тот же, что у травы (десять пикселей на клетку), и по той же
+        // причине: чёрточка ряби шириной в пиксель, и на клетке мельче
+        // половина их выпадает вовсе — выходит не вода, а сор. Ниже порога
+        // клетка остаётся тем, чем она нарисована в текстуре карты, — цветом
+        // по глубине, и это та же вода, изображённая настолько подробно,
+        // насколько её видно.
+        //
+        // Слой тот же, что и у самой воды в текстуре (showMoisture): выключив
+        // воду, выключаешь и её рябь.
+        const auto waterDetail = WaterSprites::detailFor(tileSizeF);
+        const bool drawRipples = showMoisture && tileSize >= 10 && WaterSprites::ready(waterDetail) &&
+                                 snapshot.waterDepth.size() >= cellCount &&
+                                 snapshot.height.size() >= cellCount;
+        if (drawRipples) {
+            const int firstX = std::max(0, static_cast<int>(std::floor(viewX / tileSizeF)));
+            const int lastX = std::min(snapshot.areaWidth - 1,
+                                       static_cast<int>(std::floor((viewX + viewportW) / tileSizeF)));
+            const int firstY = std::max(0, static_cast<int>(std::floor(viewY / tileSizeF)));
+            const int lastY = std::min(snapshot.areaHeight - 1,
+                                       static_cast<int>(std::floor((viewY + viewportH) / tileSizeF)));
+            for (int y = firstY; y <= lastY; ++y) {
+                for (int x = firstX; x <= lastX; ++x) {
+                    const std::size_t cell = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
+                    if (snapshot.waterDepth[cell] <= 0.0f) {
+                        continue;
+                    }
+                    // Направление считается на каждый видимый тайл каждый
+                    // кадр, а не запасается на снимок. Восемь соседей на
+                    // тайл — это десятки тысяч сложений в кадр, то есть
+                    // ничто; запас же пришлось бы сбрасывать при каждой
+                    // дельте, а вода меняется каждый тик, и запас всё равно
+                    // считался бы заново — только с лишним поводом
+                    // разъехаться со снимком.
+                    const WaterSprites::Flow flow = WaterSprites::flowAt(
+                        snapshot.height, snapshot.waterDepth, snapshot.areaWidth, snapshot.areaHeight, x, y);
+                    DrawTexturePro(WaterSprites::atlas(waterDetail),
+                                   WaterSprites::source(waterDetail,
+                                                        WaterSprites::depthStep(snapshot.waterDepth[cell]),
+                                                        flow, WaterSprites::variantOf(x, y),
+                                                        WaterSprites::frameOf(flow, snapshot.tick)),
+                                   Rectangle{static_cast<float>(x) * tileSizeF - viewX,
+                                             static_cast<float>(y) * tileSizeF - viewY + kHudHeight,
+                                             tileSizeF, tileSizeF},
+                                   Vector2{0, 0}, 0.0f, WHITE);
+                }
+            }
+        }
+
         // Дорога выбранного зверя — его же глазами (см. "watched" в
         // протоколе; считает её мир — core/Path.hpp, — а клиент только
         // рисует пришедшие клетки). Округа, до которой у него есть ход, —
@@ -739,8 +795,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // остаётся тем, чем она нарисована в самой текстуре карты, — оттенком
         // клетки (TileColors::canopy). Тот же предмет, изображённый настолько
         // подробно, насколько его видно.
-        const std::size_t cellCount =
-            static_cast<std::size_t>(snapshot.areaWidth) * static_cast<std::size_t>(snapshot.areaHeight);
         const bool drawBuildings = showGoblins && tileSize >= 6 && BuildSprites::ready() &&
                                    snapshot.canopy.size() >= cellCount && snapshot.bedding.size() >= cellCount &&
                                    snapshot.site.size() >= cellCount;
