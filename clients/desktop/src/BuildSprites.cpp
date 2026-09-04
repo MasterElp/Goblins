@@ -70,7 +70,7 @@ bool ready() {
 }
 
 const Texture2D& atlas() {
-    return baked().sheet.texture();
+    return baked().texture();
 }
 
 Rectangle canopy(int stage) {

@@ -91,7 +91,7 @@ const SpriteAtlas::Detailed& bushBaked() {
 
 // Номера вне пределов заворачиваются остатком, а не падают: возраст с
 // номером больше, чем ступеней, — вопрос к тому, кто его посчитал, а не повод
-// уронить клиент (то же правило, что и в SpriteAtlas::Sheet::source).
+// уронить клиент (то же правило, что и в SpriteAtlas::Placement::source).
 int frameAt(int stage, int frame) {
     const int s = stage < 0 ? 0 : stage % kStages;
     const int f = frame < 0 ? 0 : frame % kFrames;

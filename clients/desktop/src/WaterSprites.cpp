@@ -136,7 +136,7 @@ const SpriteAtlas::Detailed& baked() {
 }
 
 // Номера вне пределов заворачиваются остатком, а не падают (то же правило,
-// что и в SpriteAtlas::Sheet::source).
+// что и в SpriteAtlas::Placement::source).
 int frameAt(Kind kind, int variant, int frame) {
     const int k = static_cast<int>(kind) < 0 ? 0 : static_cast<int>(kind) % kKinds;
     const int v = variant < 0 ? 0 : variant % kVariants;

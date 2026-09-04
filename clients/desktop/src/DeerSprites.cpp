@@ -80,7 +80,7 @@ const SpriteAtlas::Detailed& baked() {
 
 // Номера вне пределов заворачиваются остатком, а не падают: облик с номером
 // больше, чем их есть, — вопрос к тому, кто его посчитал, а не повод уронить
-// клиент (то же правило, что и в SpriteAtlas::Sheet::source).
+// клиент (то же правило, что и в SpriteAtlas::Placement::source).
 int frameAt(Pose pose, int kind, int frame) {
     const int p = static_cast<int>(pose) < 0 ? 0 : static_cast<int>(pose) % kPoses;
     const int k = kind < 0 ? 0 : kind % kKinds;

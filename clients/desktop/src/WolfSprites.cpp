@@ -78,7 +78,7 @@ const SpriteAtlas::Detailed& baked() {
 
 // Номера вне пределов заворачиваются остатком, а не падают: возраст с
 // номером больше, чем ступеней, — вопрос к тому, кто его посчитал, а не повод
-// уронить клиент (то же правило, что и в SpriteAtlas::Sheet::source).
+// уронить клиент (то же правило, что и в SpriteAtlas::Placement::source).
 int frameAt(Pose pose, int stage, int frame) {
     const int p = static_cast<int>(pose) < 0 ? 0 : static_cast<int>(pose) % kPoses;
     const int s = stage < 0 ? 0 : stage % kStages;
