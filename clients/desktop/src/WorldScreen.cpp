@@ -20,6 +20,7 @@
 #include "InfoPanel.hpp"
 #include "KeysPanel.hpp"
 #include "MapTexture.hpp"
+#include "SelectionCard.hpp"
 #include "WaterSprites.hpp"
 #include "PlantSprites.hpp"
 #include "TreeSprites.hpp"
@@ -242,10 +243,18 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     const float scrollSpeedPx = kScrollTilesPerSecond * tileSizeF;
 
     const Vector2 mouse = GetMousePosition();
+    // Карточка выбранного лежит НА карте, и место её нужно знать до всякого
+    // ввода: щелчок по ней не должен ни выбирать клетку под нею, ни таскать
+    // карту. Выбор берётся тот, что был на прошлом кадре, — и это верно: на
+    // экране сейчас нарисована именно та карточка.
+    const Rectangle cardBounds = SelectionCard::bounds(
+        selection, Rectangle{0.0f, static_cast<float>(kHudHeight), static_cast<float>(viewportW),
+                             static_cast<float>(viewportH)});
+    const bool mouseOverCard = cardBounds.width > 0.0f && CheckCollisionPointRec(mouse, cardBounds);
     // Колесо над правой панелью прокручивает её саму (GuiScrollPanel) и
     // читает точку на графике — но не меняет масштаб карты: одно движение
     // колеса не должно делать сразу два несвязанных действия.
-    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW);
+    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW) && !mouseOverCard;
 
     // Пока открыт диалог подтверждения выхода или диалог сохранения, мир
     // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —
@@ -312,8 +321,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             zoom = std::clamp(zoom * factor, kMinZoom, kMaxZoom);
             tileSizeF = static_cast<float>(config.tile_size) * zoom;
 
+            // По вертикали вычитается не сама mouse.y, а отступ карты от неё:
+            // окно карты начинается под шапкой, и мировая точка считается от
+            // её верха (см. worldY выше). Без этой поправки каждый щелчок
+            // колеса уводил карту на высоту шапки, а так как следующий
+            // щелчок множит уже уехавшее, за десяток щелчков цель уходила с
+            // экрана — то самое "убегание", которого требовалось избежать.
             viewX = worldX * factor - mouse.x;
-            viewY = worldY * factor - mouse.y;
+            viewY = worldY * factor - (mouse.y - kHudHeight);
 
             // Пишем на диск на каждый "тик" колеса, а не только когда
             // прокрутка остановилась: щёлкает колесо редко относительно
@@ -1224,6 +1239,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 DrawRectangleLinesEx(Rectangle{screenX, screenY, tileSizeF, tileSizeF}, 2.0f, selectionColor);
             }
         }
+
+        // Карточка выбранного — поверх всей карты и последней из того, что на
+        // ней лежит: она про выбранное, а не про клетку под собой, и
+        // заслонять её нечему.
+        SelectionCard::draw(snapshot, selection, cardBounds);
 
         EndScissorMode();
 

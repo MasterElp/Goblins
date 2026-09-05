@@ -113,6 +113,8 @@ private:
     float y_;
 };
 
+} // namespace
+
 const WorldState::Animal* findAnimal(const WorldState& state, std::uint64_t id) {
     for (const auto& animal : state.animals) {
         if (animal.id == id) {
@@ -131,9 +133,6 @@ const WorldState::Goblin* findGoblin(const WorldState& state, std::uint64_t id) 
     return nullptr;
 }
 
-// Карточка сервера относится именно к этой цели? Между кликом и ответом
-// проходит одна рассылка, и всё это время в state.watched лежит карточка
-// предыдущего выбранного — показать её как текущую значило бы соврать.
 bool watchedMatches(const WorldState& state, const Target& target) {
     if (target.kind == Target::Kind::Animal) {
         return state.watched.kind == "animal" && state.watched.id == target.animalId;
@@ -146,6 +145,74 @@ bool watchedMatches(const WorldState& state, const Target& target) {
     }
     return false;
 }
+
+Heading headingOf(const WorldState& state, const Target& target) {
+    Heading out;
+    out.x = target.x;
+    out.y = target.y;
+
+    switch (target.kind) {
+        case Target::Kind::Animal: {
+            const WorldState::Animal* animal = findAnimal(state, target.animalId);
+            if (animal != nullptr) {
+                out.title = TextFormat("%s sp%d", animal->predator ? "Predator" : "Herbivore", animal->species);
+                out.swatch = animal->predator ? TileColors::predatorSpecies(animal->species)
+                                              : TileColors::herbivoreSpecies(animal->species);
+                out.x = animal->x;
+                out.y = animal->y;
+            } else {
+                out.title = "Creature is gone";
+                out.gone = true;
+            }
+            break;
+        }
+        case Target::Kind::Goblin: {
+            const WorldState::Goblin* goblin = findGoblin(state, target.animalId);
+            if (goblin != nullptr) {
+                out.title = TextFormat("Goblin tribe %d", goblin->tribe);
+                out.swatch = TileColors::goblinTribe(goblin->tribe);
+                out.x = goblin->x;
+                out.y = goblin->y;
+            } else {
+                out.title = "Goblin is gone";
+                out.gone = true;
+            }
+            break;
+        }
+        case Target::Kind::Plant:
+            if (state.areaWidth > 0 && target.x >= 0 && target.y >= 0 && target.x < state.areaWidth &&
+                target.y < state.areaHeight) {
+                const std::size_t cell = static_cast<std::size_t>(target.y) * state.areaWidth + target.x;
+                // Где стоит дерево, травы нет: растение на клетке одно,
+                // поэтому и заголовок берётся из того слоя, который занят.
+                if (cell < state.treeSpeciesAt.size() && state.treeSpeciesAt[cell] >= 0) {
+                    out.title = TextFormat("Tree tr%d", state.treeSpeciesAt[cell]);
+                    out.swatch = TileColors::treeSpecies(state.treeSpeciesAt[cell]);
+                } else if (cell < state.bushSpeciesAt.size() && state.bushSpeciesAt[cell] >= 0) {
+                    out.title = TextFormat("Bush bu%d", state.bushSpeciesAt[cell]);
+                    out.swatch = TileColors::bushSpecies(state.bushSpeciesAt[cell]);
+                } else if (cell < state.plantSpeciesAt.size() && state.plantSpeciesAt[cell] >= 0) {
+                    out.title = TextFormat("Grass sp%d", state.plantSpeciesAt[cell]);
+                    out.swatch = TileColors::plantSpecies(state.plantSpeciesAt[cell]);
+                } else {
+                    out.title = "Plant is gone";
+                    out.gone = true;
+                }
+            } else {
+                out.title = "Plant is gone";
+                out.gone = true;
+            }
+            break;
+        case Target::Kind::Soil:
+            out.title = "Soil";
+            break;
+        case Target::Kind::None:
+            break;
+    }
+    return out;
+}
+
+namespace {
 
 // Клетка под курсором (или под выбранным существом) — из общего снимка,
 // без запроса к серверу: всё это в нём уже есть.
@@ -290,69 +357,18 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
         return;
     }
 
-    // Заголовок: чем является выбранное и где оно сейчас. Цветной квадрат —
-    // тот же цвет, которым существо нарисовано на карте, чтобы карточку и
-    // точку на карте можно было связать взглядом.
+    // Заголовок: чем является выбранное и где оно сейчас. Считается одним
+    // законом на панель и на карточку над картой (headingOf).
     const WorldState::Animal* animal =
         target.kind == Target::Kind::Animal ? findAnimal(state, target.animalId) : nullptr;
     const WorldState::Goblin* goblin =
         target.kind == Target::Kind::Goblin ? findGoblin(state, target.animalId) : nullptr;
 
-    std::string title;
-    Color swatch{0, 0, 0, 0};
-    int tileX = target.x;
-    int tileY = target.y;
-
-    switch (target.kind) {
-        case Target::Kind::Animal:
-            if (animal != nullptr) {
-                title = TextFormat("%s sp%d", animal->predator ? "Predator" : "Herbivore", animal->species);
-                swatch = animal->predator ? TileColors::predatorSpecies(animal->species)
-                                          : TileColors::herbivoreSpecies(animal->species);
-                tileX = animal->x;
-                tileY = animal->y;
-            } else {
-                title = "Creature is gone";
-            }
-            break;
-        case Target::Kind::Goblin:
-            if (goblin != nullptr) {
-                title = TextFormat("Goblin tribe %d", goblin->tribe);
-                swatch = TileColors::goblinTribe(goblin->tribe);
-                tileX = goblin->x;
-                tileY = goblin->y;
-            } else {
-                title = "Goblin is gone";
-            }
-            break;
-        case Target::Kind::Plant:
-            if (state.areaWidth > 0 && target.x >= 0 && target.y >= 0 && target.x < state.areaWidth &&
-                target.y < state.areaHeight) {
-                const std::size_t cell = static_cast<std::size_t>(target.y) * state.areaWidth + target.x;
-                // Где стоит дерево, травы нет: растение на клетке одно,
-                // поэтому и заголовок берётся из того слоя, который занят.
-                if (cell < state.treeSpeciesAt.size() && state.treeSpeciesAt[cell] >= 0) {
-                    title = TextFormat("Tree tr%d", state.treeSpeciesAt[cell]);
-                    swatch = TileColors::treeSpecies(state.treeSpeciesAt[cell]);
-                } else if (cell < state.bushSpeciesAt.size() && state.bushSpeciesAt[cell] >= 0) {
-                    title = TextFormat("Bush bu%d", state.bushSpeciesAt[cell]);
-                    swatch = TileColors::bushSpecies(state.bushSpeciesAt[cell]);
-                } else if (state.plantSpeciesAt[cell] >= 0) {
-                    title = TextFormat("Grass sp%d", state.plantSpeciesAt[cell]);
-                    swatch = TileColors::plantSpecies(state.plantSpeciesAt[cell]);
-                } else {
-                    title = "Plant is gone";
-                }
-            } else {
-                title = "Plant is gone";
-            }
-            break;
-        case Target::Kind::Soil:
-            title = "Soil";
-            break;
-        case Target::Kind::None:
-            break;
-    }
+    const Heading heading = headingOf(state, target);
+    const std::string& title = heading.title;
+    const Color swatch = heading.swatch;
+    const int tileX = heading.x;
+    const int tileY = heading.y;
 
     float titleX = bounds.x;
     if (swatch.a > 0) {

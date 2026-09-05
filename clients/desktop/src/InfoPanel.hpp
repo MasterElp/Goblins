@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include <raylib.h>
 
@@ -51,6 +52,37 @@ inline bool sameTarget(const Target& a, const Target& b) {
     }
     return a.x == b.x && a.y == b.y;
 }
+
+// Чем является выбранное и каким цветом оно помечено на карте.
+//
+// Наружу это вынесено потому, что читателей у заголовка теперь двое: сама
+// панель и карточка выбранного над картой (SelectionCard). Считай его каждый
+// по-своему — и одно и то же существо звалось бы в них по-разному, а заметить
+// такое можно только поставив их рядом.
+struct Heading {
+    std::string title;
+    // Тот же цвет, каким существо нарисовано на карте: карточку и точку на
+    // карте надо связывать взглядом, а не догадкой. Прозрачный — метки нет
+    // (почва, исчезнувшее существо).
+    Color swatch{0, 0, 0, 0};
+    // Где выбранное СЕЙЧАС: существо ходит, и клетка, с которой его выбрали,
+    // уже не его клетка.
+    int x = 0;
+    int y = 0;
+    // Выбранного больше нет в мире (съеден, умер, вытоптан).
+    bool gone = false;
+};
+Heading headingOf(const WorldState& state, const Target& target);
+
+// Существо по постоянному номеру; nullptr — такого в списке уже нет.
+const WorldState::Animal* findAnimal(const WorldState& state, std::uint64_t id);
+const WorldState::Goblin* findGoblin(const WorldState& state, std::uint64_t id);
+
+// Карточка сервера (WorldState::watched) относится именно к этой цели?
+// Между кликом и ответом проходит одна рассылка, и всё это время там лежит
+// карточка предыдущего выбранного — показать её как текущую значило бы
+// соврать.
+bool watchedMatches(const WorldState& state, const Target& target);
 
 void draw(const WorldState& state, const Target& target, Rectangle bounds);
 
