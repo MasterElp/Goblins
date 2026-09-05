@@ -47,15 +47,19 @@ Color Cache::colorAt(const WorldState& state, const Layers& layers, std::size_t 
         if (layers.plants && state.seedSpeciesAt[i] >= 0) {
             color = TileColors::seed(color, state.seedSpeciesAt[i]);
         }
-        if (layers.plants && state.plantSpeciesAt[i] >= 0) {
+        // Трава — только пока её не рисуют фигурами. Иначе клетка красилась
+        // бы дважды: раз текселем и раз рисунком поверх него (см.
+        // Layers::grassSprites).
+        if (layers.plants && !layers.grassSprites && state.plantSpeciesAt[i] >= 0) {
             color = TileColors::plant(color, state.plantSpeciesAt[i], state.plantGrowth[i]);
         }
-        // Куст — плотнее травы и прямо в текстуре, в отличие от дерева:
-        // дерево из клетки торчит вверх и потому рисуется фигурой поверх
-        // карты, а куст в клетке помещается целиком. Ягоды поверх куста:
-        // полный ягодник и обобранный — разные места, и различать их надо
-        // с одного взгляда.
-        if (layers.plants && !state.bushSpeciesAt.empty() && state.bushSpeciesAt[i] >= 0) {
+        // Куст — тем же правилом, что и трава, и по той же причине. В
+        // отличие от дерева он помещается в клетку целиком, поэтому и в
+        // текселе его можно выразить, — а дерево из клетки торчит вверх, и
+        // под ним в текстуре всегда голая земля. Ягоды гаснут вместе с
+        // кустом: их рисует тот же лист (PlantSprites::berries).
+        if (layers.plants && !layers.bushSprites && !state.bushSpeciesAt.empty() &&
+            state.bushSpeciesAt[i] >= 0) {
             color = TileColors::bush(color, state.bushSpeciesAt[i], state.plantGrowth[i]);
             if (!state.berries.empty() && state.berries[i] > 0) {
                 color = TileColors::berries(color, state.berries[i]);

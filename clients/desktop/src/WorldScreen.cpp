@@ -652,6 +652,30 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     layers.goblins = showGoblins;
     layers.trampled = showTrampled;
 
+    // Кто рисует траву и куст — решается здесь, потому что решение это нужно
+    // ДВОИМ: текстуре карты (чтобы не красить клетку под тем, что и так
+    // нарисовано) и обходу клеток ниже (чтобы рисовать). Порознь они бы
+    // разъехались, и клетка осталась бы либо крашеной под рисунком, либо
+    // голой без него.
+    //
+    // Порог выше древесного (десять против шести): у былинки ширина в
+    // пиксель, и на клетке мельче десяти половина их выпадает вовсе —
+    // выходит не трава, а сор. Ниже порога клетка остаётся тем, чем она
+    // нарисована в текстуре карты, — подмешкой цвета, и это тот же луг,
+    // изображённый настолько подробно, насколько его видно.
+    const std::size_t cellCount =
+        static_cast<std::size_t>(snapshot.areaWidth) * static_cast<std::size_t>(snapshot.areaHeight);
+    const auto grassDetail = PlantSprites::grassDetailFor(tileSizeF);
+    const auto bushDetail = PlantSprites::bushDetailFor(tileSizeF);
+    {
+        const bool bigEnough = showPlants && tileSize >= 10 &&
+                               snapshot.plantSpeciesAt.size() >= cellCount &&
+                               snapshot.plantGrowth.size() >= cellCount;
+        layers.grassSprites = bigEnough && PlantSprites::grassReady(grassDetail);
+        layers.bushSprites = bigEnough && PlantSprites::bushReady(bushDetail) &&
+                             snapshot.bushSpeciesAt.size() >= cellCount;
+    }
+
     if (!snapshot.connected || snapshot.areaWidth == 0) {
         const std::string waiting = "Connecting to " + config.host + ":" + std::to_string(config.port) + "...";
         DrawText(waiting.c_str(), 10, kHudHeight + 10, 20, textColor);
@@ -669,9 +693,6 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                        Rectangle{-viewX, kHudHeight - viewY, static_cast<float>(snapshot.areaWidth) * tileSizeF,
                                  static_cast<float>(snapshot.areaHeight) * tileSizeF},
                        Vector2{0, 0}, 0.0f, WHITE);
-
-        const std::size_t cellCount =
-            static_cast<std::size_t>(snapshot.areaWidth) * static_cast<std::size_t>(snapshot.areaHeight);
 
         // Рябь на воде — сразу за текстурой карты и раньше всего остального:
         // она не предмет НА воде, а сама её поверхность, и заслонять ею
@@ -818,19 +839,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // строк им безразличен. Обход общий просто потому, что он один и уже
         // идёт по видимым клеткам, а второй такой же стоил бы ровно вдвое.
         //
-        // Порог выше древесного (десять против шести): у былинки ширина в
-        // пиксель, и на клетке мельче десяти половина их выпадает вовсе —
-        // выходит не трава, а сор. Ниже порога клетка остаётся тем, чем она
-        // нарисована в текстуре карты, — подмешкой цвета, и это тот же луг,
-        // изображённый настолько подробно, насколько его видно.
-        const bool drawPlantSprites = showPlants && tileSize >= 10 &&
-                                      snapshot.plantSpeciesAt.size() >= cellCount &&
-                                      snapshot.plantGrowth.size() >= cellCount;
-        const auto grassDetail = PlantSprites::grassDetailFor(tileSizeF);
-        const auto bushDetail = PlantSprites::bushDetailFor(tileSizeF);
-        const bool drawGrass = drawPlantSprites && PlantSprites::grassReady(grassDetail);
-        const bool drawBushes = drawPlantSprites && PlantSprites::bushReady(bushDetail) &&
-                                snapshot.bushSpeciesAt.size() >= cellCount;
+        // Порог и готовность листа посчитаны выше, вместе с набором слоёв:
+        // текстура карты не красит клетку ровно тогда, когда её берётся
+        // рисовать этот обход.
+        const bool drawGrass = layers.grassSprites;
+        const bool drawBushes = layers.bushSprites;
         if (drawTrees || drawBuildings || drawGrass || drawBushes) {
             const int firstX = std::max(0, static_cast<int>(std::floor(viewX / tileSizeF)));
             const int lastX = std::min(snapshot.areaWidth - 1,

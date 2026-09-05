@@ -44,12 +44,25 @@ struct Layers {
     // своём слое (trampled выше) и гаснет вместе с ним, потому что тропа
     // остаётся в земле и после того, как её набивший умер.
     bool goblins = true;
+
+    // Не выключатели слоя, а сведение о том, КТО сейчас рисует траву и куст.
+    // Пока клетка мельче порога (см. WorldScreen), их изображает подмешка
+    // цвета прямо здесь, в текстуре. Как только за них берутся фигуры,
+    // подмешка становится вторым изображением того же самого: под каждой
+    // былинкой лежит зелёный тексель, и луг выходит зеленее собственного
+    // рисунка, а поросшая земля перестаёт быть видна землёй.
+    //
+    // Порог свой у каждого, потому что своя и готовность листа: трава может
+    // рисоваться фигурами тогда, когда куст ещё нет.
+    bool grassSprites = false;
+    bool bushSprites = false;
 };
 
 inline bool operator==(const Layers& a, const Layers& b) {
     return a.rockiness == b.rockiness && a.trampled == b.trampled && a.moisture == b.moisture &&
            a.minerals == b.minerals && a.height == b.height && a.plants == b.plants &&
-           a.animals == b.animals && a.goblins == b.goblins;
+           a.animals == b.animals && a.goblins == b.goblins && a.grassSprites == b.grassSprites &&
+           a.bushSprites == b.bushSprites;
 }
 inline bool operator!=(const Layers& a, const Layers& b) {
     return !(a == b);
