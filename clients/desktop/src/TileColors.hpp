@@ -65,8 +65,12 @@ inline float mineralsFraction(int minerals) {
 // (core::kMaxGrassSpecies); если сервер когда-нибудь пришлёт индекс больше,
 // цвет просто повторится (остаток от деления), а не приведёт к выходу за
 // границы.
+// Наружу число нужно тому, кто печёт спрайты сразу на все виды
+// (PlantSprites), — та же надобность, что и у деревьев с гоблинами.
+constexpr int kGrassSpeciesCount = 12;
+
 inline Color plantSpecies(int species) {
-    static const Color palette[12] = {
+    static const Color palette[kGrassSpeciesCount] = {
         {150, 202, 124, 255}, {192, 216, 118, 255}, {130, 190, 158, 255}, {214, 224, 136, 255},
         {166, 208, 166, 255}, {138, 196, 186, 255}, {202, 210, 114, 255}, {160, 186, 120, 255},
         {182, 226, 160, 255}, {134, 176, 138, 255}, {224, 232, 170, 255}, {146, 206, 190, 255},
@@ -74,7 +78,7 @@ inline Color plantSpecies(int species) {
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 12];
+    return palette[species % kGrassSpeciesCount];
 }
 
 // Трава поверх почвы — не квадрат, а лёгкая подмешка цвета вида: сквозь
@@ -90,14 +94,16 @@ inline Color plant(Color soilColor, int species, float growth) {
 // плотнее травы и ниже дерева, и на карте он должен читаться как гуща на
 // лугу, а не как ещё один оттенок луга. Четыре — верхний предел числа видов
 // (core::kMaxBushSpecies).
+constexpr int kBushSpeciesCount = 4;
+
 inline Color bushSpecies(int species) {
-    static const Color palette[4] = {
+    static const Color palette[kBushSpeciesCount] = {
         {74, 118, 72, 255}, {96, 124, 64, 255}, {66, 110, 92, 255}, {104, 112, 60, 255},
     };
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 4];
+    return palette[species % kBushSpeciesCount];
 }
 
 // Куст поверх почвы — подмешка сильнее травяной: куст землю закрывает, а
@@ -208,15 +214,19 @@ inline Color tree(int species, float growth) {
 // холодно-красная: хищника надо отличать от добычи мгновенно и не путать
 // ни с травой, ни с ней. Шесть — верхний предел числа видов хищников
 // (core::kMaxPredatorSpecies).
+// Наружу число нужно тому, кто печёт спрайты сразу на все виды
+// (WolfSprites), — та же надобность, что и у деревьев, травы и гоблинов.
+constexpr int kPredatorSpeciesCount = 6;
+
 inline Color predatorSpecies(int species) {
-    static const Color palette[6] = {
+    static const Color palette[kPredatorSpeciesCount] = {
         {198, 74, 60, 255}, {150, 56, 74, 255},  {226, 106, 78, 255},
         {124, 60, 92, 255}, {176, 92, 108, 255}, {214, 132, 120, 255},
     };
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 6];
+    return palette[species % kPredatorSpeciesCount];
 }
 
 // Цвета видов травоядных — по индексу вида, как и у травы, но палитра
@@ -225,15 +235,19 @@ inline Color predatorSpecies(int species) {
 // — верхний предел числа видов травоядных в мире
 // (core::kMaxHerbivoreSpecies); индекс больше просто повторит цвет
 // (остаток от деления), а не выйдет за границы.
+// Наружу число нужно тому, кто печёт спрайты сразу на все виды
+// (DeerSprites), — та же надобность, что и у хищников.
+constexpr int kHerbivoreSpeciesCount = 8;
+
 inline Color herbivoreSpecies(int species) {
-    static const Color palette[8] = {
+    static const Color palette[kHerbivoreSpeciesCount] = {
         {214, 158, 84, 255},  {186, 116, 66, 255}, {231, 199, 122, 255}, {158, 96, 62, 255},
         {236, 172, 140, 255}, {198, 140, 92, 255}, {172, 128, 104, 255}, {242, 214, 178, 255},
     };
     if (species < 0) {
         return palette[0];
     }
-    return palette[species % 8];
+    return palette[species % kHerbivoreSpeciesCount];
 }
 
 // Цвета племён гоблинов — по номеру племени. Палитра третья и намеренно
@@ -241,15 +255,19 @@ inline Color herbivoreSpecies(int species) {
 // краснота хищников, и гоблин не должен читаться ни тем, ни другим. Шесть —
 // верхний предел числа племён (core::kMaxGoblinTribes); номер больше просто
 // повторит цвет, а не выйдет за границы.
+// Наружу число нужно тому, кто печёт спрайты сразу на все племена
+// (GoblinSprites), — ровно та же надобность, что и у деревьев.
+constexpr int kGoblinTribeCount = 6;
+
 inline Color goblinTribe(int tribe) {
-    static const Color palette[6] = {
+    static const Color palette[kGoblinTribeCount] = {
         {94, 176, 158, 255}, {66, 132, 150, 255},  {132, 200, 172, 255},
         {78, 108, 142, 255}, {148, 186, 200, 255}, {104, 148, 132, 255},
     };
     if (tribe < 0) {
         return palette[0];
     }
-    return palette[tribe % 6];
+    return palette[tribe % kGoblinTribeCount];
 }
 
 // Падаль — красновато-бурое пятно поверх почвы, заметно теплее перегноя:

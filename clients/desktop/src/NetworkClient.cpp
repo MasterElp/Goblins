@@ -25,7 +25,8 @@ constexpr float kFromThousandths = 0.001f;
 // сообщение приходит извне, и битые данные не должны приводить к записи
 // за границы массива.
 template <typename T, typename Decode>
-void applyChangedCells(const nlohmann::json& message, const char* key, std::vector<T>& target, Decode decode) {
+void applyChangedCells(const nlohmann::json& message, const char* key, std::vector<T>& target,
+                       std::vector<std::int32_t>& changed, Decode decode) {
     if (!message.contains(key)) {
         return;
     }
@@ -37,6 +38,11 @@ void applyChangedCells(const nlohmann::json& message, const char* key, std::vect
         const auto index = pairs[p].get<std::size_t>();
         if (index < target.size()) {
             target[index] = decode(pairs[p + 1].get<int>());
+            // Записали — а не "изменилось значение". Перезапись тем же числом
+            // бывает редко (сервер шлёт клетку, только когда она изменилась на
+            // единицу показа), а сличать старое с новым дороже, чем изредка
+            // пересчитать цвет этой клетки зря.
+            changed.push_back(static_cast<std::int32_t>(index));
         }
     }
 }
@@ -78,6 +84,53 @@ WorldState::Goblin parseGoblin(const nlohmann::json& goblin) {
     parsed.sex = goblin.value("sex", std::string{});
     parsed.desire = goblin.value("desire", std::string{});
     return parsed;
+}
+
+// Шаг существа: куда оно повернулось и когда шагнуло.
+//
+// Один закон на зверя и на гоблина, и обязан быть одним: оба ходят по одной
+// карте и оба рисуются повёрнутыми туда, куда шагнули. Скопировать его вторым
+// разом значило бы завести два закона там, где он один.
+//
+// Читается ДО applyCreatureChanges: сторона — это разница между "было" и
+// "стало", а после него "было" уже не осталось нигде. Индексы там и здесь
+// одни и те же — места в ПРЕЖНЕМ списке, до удаления ушедших и вставки
+// родившихся, — поэтому проход и стоит перед вызовом.
+//
+// Ни стороны, ни тика шага в протоколе нет вовсе: сам шаг виден по тому, что
+// клетка приехала в дельте (см. WorldState::Animal).
+//
+// vertical зовётся на каждом шаге и получает 0, когда у шага была боковая
+// составляющая. Отвесный кадр есть только у гоблина, и зверю о нём знать
+// незачем — оттого это и вынесено наружу, а не решается здесь.
+template <typename Card, typename Vertical>
+void rememberSteps(std::vector<Card>& list, const nlohmann::json& changes, std::uint64_t tick,
+                    Vertical&& vertical) {
+    if (!changes.contains("pos") || !changes["pos"].is_array()) {
+        return;
+    }
+    const auto& triples = changes["pos"];
+    for (std::size_t p = 0; p + 2 < triples.size(); p += 3) {
+        const auto index = triples[p].get<std::size_t>();
+        if (index >= list.size()) {
+            continue;
+        }
+        Card& card = list[index];
+        const int x = triples[p + 1].get<int>();
+        const int y = triples[p + 2].get<int>();
+        // Боковая составляющая важнее отвесной, и потому спрашивается первой:
+        // у косого шага есть обе, и со стороны такой шаг выглядит боковым, а
+        // не отвесным.
+        if (x != card.x) {
+            card.facing = x > card.x ? 1 : -1;
+            vertical(card, 0);
+        } else if (y != card.y) {
+            // Отвесный: боковой составляющей нет вовсе, и сторона остаётся
+            // прежней — ей просто нечем смениться.
+            vertical(card, y > card.y ? 1 : -1);
+        }
+        card.stepTick = tick;
+    }
 }
 
 // Применение изменений к списку существ — ОДИН закон на всех, у кого такой
@@ -246,7 +299,8 @@ std::shared_ptr<const WorldState> NetworkClient::snapshot() const {
 }
 
 void NetworkClient::publishState() {
-    ++working_.version;
+    // Версию карты тут не трогаем: снимок публикуется на всякое сообщение
+    // сервера, а карта меняется только от клеток (см. WorldState::mapVersion).
     auto copy = std::make_shared<const WorldState>(working_);
     std::lock_guard<std::mutex> lock(mutex_);
     published_ = std::move(copy);
@@ -350,7 +404,10 @@ void NetworkClient::applyAnimalChanges(const nlohmann::json& message) {
     if (!message.contains("animals") || !message["animals"].is_object()) {
         return;
     }
-    applyCreatureChanges(working_.animals, message["animals"], parseAnimal, [](auto&&) {});
+    const auto& changes = message["animals"];
+    // Отвесный шаг зверю не нужен: кадров со спины у него нет (WolfSprites).
+    rememberSteps(working_.animals, changes, working_.tick, [](WorldState::Animal&, int) {});
+    applyCreatureChanges(working_.animals, changes, parseAnimal, [](auto&&) {});
 }
 
 void NetworkClient::applyGoblins(const nlohmann::json& message) {
@@ -370,7 +427,10 @@ void NetworkClient::applyGoblinChanges(const nlohmann::json& message) {
     if (!message.contains("goblins") || !message["goblins"].is_object()) {
         return;
     }
-    applyCreatureChanges(working_.goblins, message["goblins"], parseGoblin, [](auto&& applyPairs) {
+    const auto& changes = message["goblins"];
+    rememberSteps(working_.goblins, changes, working_.tick,
+                   [](WorldState::Goblin& goblin, int vertical) { goblin.verticalStep = vertical; });
+    applyCreatureChanges(working_.goblins, changes, parseGoblin, [](auto&& applyPairs) {
         applyPairs("fatigue", [](WorldState::Goblin& g, const nlohmann::json& v) {
             g.fatigue = v.get<int>() * kFromHundredths;
         });
@@ -754,6 +814,11 @@ void NetworkClient::handleMessage(const std::string& payload) {
             }
         }
         working_.currentWorld = json.value("world", working_.currentWorld);
+        // Мир приехал целиком — все слои переписаны, и карта заведомо другая.
+        // Списка изменившихся клеток у него нет: менялось всё сразу, и пустой
+        // список при новой версии для MapTexture и значит "пересчитай всё".
+        working_.changedCells.clear();
+        ++working_.mapVersion;
         publishState();
     } else if (type == "world_delta") {
         // Только изменившиеся клетки — накладываются на то, что уже
@@ -764,30 +829,46 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.paused = json.value("paused", working_.paused);
 
         const auto toFraction = [](int raw) { return static_cast<float>(raw) * kFromHundredths; };
-        applyChangedCells(json, "moisture", working_.moisture, toFraction);
-        applyChangedCells(json, "trampled", working_.trampled, toFraction);
-        applyChangedCells(json, "height", working_.height, toFraction);
-        applyChangedCells(json, "water", working_.waterDepth, toFraction);
-        applyChangedCells(json, "growth", working_.plantGrowth, toFraction);
-        applyChangedCells(json, "minerals", working_.minerals, [](int raw) { return raw; });
-        applyChangedCells(json, "humus", working_.humus, [](int raw) { return raw; });
-        applyChangedCells(json, "carcass", working_.carcass, toFraction);
-        applyChangedCells(json, "species", working_.plantSpeciesAt, [](int raw) { return raw; });
-        applyChangedCells(json, "seeds", working_.seedSpeciesAt, [](int raw) { return raw; });
-        applyChangedCells(json, "trees", working_.treeSpeciesAt, [](int raw) { return raw; });
-        applyChangedCells(json, "bushes", working_.bushSpeciesAt, [](int raw) { return raw; });
-        applyChangedCells(json, "berries", working_.berries, [](int raw) { return raw; });
-        applyChangedCells(json, "store", working_.store, [](int raw) { return raw; });
-        applyChangedCells(json, "canopy", working_.canopy, toFraction);
-        applyChangedCells(json, "bedding", working_.bedding, toFraction);
-        applyChangedCells(json, "site", working_.site, [](int raw) { return raw; });
-        applyChangedCells(json, "site_material", working_.siteMaterial, [](int raw) { return raw; });
+        // Клеточные слои — через одну руку, и она же копит список
+        // изменившихся клеток. Не ради краткости: слой, добавленный сюда
+        // обычным вызовом applyChangedCells, молча не попал бы в список, и
+        // карта отставала бы на этот слой до следующего world_init — а
+        // заметить такое почти нечем. Через общую руку такой промах
+        // невозможен.
+        working_.changedCells.clear();
+        const auto cells = [&](const char* key, auto& target, auto decode) {
+            applyChangedCells(json, key, target, working_.changedCells, decode);
+        };
+        const auto asIs = [](int raw) { return raw; };
+        cells("moisture", working_.moisture, toFraction);
+        cells("trampled", working_.trampled, toFraction);
+        cells("height", working_.height, toFraction);
+        cells("water", working_.waterDepth, toFraction);
+        cells("growth", working_.plantGrowth, toFraction);
+        cells("minerals", working_.minerals, asIs);
+        cells("humus", working_.humus, asIs);
+        cells("carcass", working_.carcass, toFraction);
+        cells("species", working_.plantSpeciesAt, asIs);
+        cells("seeds", working_.seedSpeciesAt, asIs);
+        cells("trees", working_.treeSpeciesAt, asIs);
+        cells("bushes", working_.bushSpeciesAt, asIs);
+        cells("berries", working_.berries, asIs);
+        cells("store", working_.store, asIs);
+        cells("canopy", working_.canopy, toFraction);
+        cells("bedding", working_.bedding, toFraction);
+        cells("site", working_.site, asIs);
+        cells("site_material", working_.siteMaterial, asIs);
         // Поголовье — изменениями, как и слои, только правится не клетка,
         // а животное (см. протокол в server/NetworkServer.hpp).
         applyAnimalChanges(json);
         applyGoblinChanges(json);
         applyPopulationHistory(json, /*replace=*/false);
         applyWatched(json);
+        // Дельта, в которой шевельнулись только звери, карту не трогает: они
+        // рисуются фигурами ПОВЕРХ неё, а не текселем (см. MapTexture).
+        if (!working_.changedCells.empty()) {
+            ++working_.mapVersion;
+        }
         publishState();
     } else if (type == "pause_state") {
         working_.paused = json.value("paused", working_.paused);

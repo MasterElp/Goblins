@@ -21,6 +21,13 @@ add_executable(client
     src/SpriteAtlas.cpp
     src/TreeSprites.cpp
     src/BuildSprites.cpp
+    src/GoblinSprites.cpp
+    src/PlantSprites.cpp
+    src/WolfSprites.cpp
+    src/WaterSprites.cpp
+    src/SpriteWarmUp.cpp
+    src/SelectionCard.cpp
+    src/DeerSprites.cpp
     src/ConstantsOverlay.cpp
     src/PopulationGraph.cpp
     src/GenomeGraph.cpp

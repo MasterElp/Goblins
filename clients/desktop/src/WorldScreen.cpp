@@ -14,11 +14,17 @@
 
 #include "BuildSprites.hpp"
 #include "ConstantsOverlay.hpp"
+#include "DeerSprites.hpp"
 #include "GenomeGraph.hpp"
+#include "GoblinSprites.hpp"
 #include "InfoPanel.hpp"
 #include "KeysPanel.hpp"
 #include "MapTexture.hpp"
+#include "SelectionCard.hpp"
+#include "WaterSprites.hpp"
+#include "PlantSprites.hpp"
 #include "TreeSprites.hpp"
+#include "WolfSprites.hpp"
 #include "PopulationGraph.hpp"
 #include "TileColors.hpp"
 
@@ -237,10 +243,18 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
     const float scrollSpeedPx = kScrollTilesPerSecond * tileSizeF;
 
     const Vector2 mouse = GetMousePosition();
+    // Карточка выбранного лежит НА карте, и место её нужно знать до всякого
+    // ввода: щелчок по ней не должен ни выбирать клетку под нею, ни таскать
+    // карту. Выбор берётся тот, что был на прошлом кадре, — и это верно: на
+    // экране сейчас нарисована именно та карточка.
+    const Rectangle cardBounds = SelectionCard::bounds(
+        selection, Rectangle{0.0f, static_cast<float>(kHudHeight), static_cast<float>(viewportW),
+                             static_cast<float>(viewportH)});
+    const bool mouseOverCard = cardBounds.width > 0.0f && CheckCollisionPointRec(mouse, cardBounds);
     // Колесо над правой панелью прокручивает её саму (GuiScrollPanel) и
     // читает точку на графике — но не меняет масштаб карты: одно движение
     // колеса не должно делать сразу два несвязанных действия.
-    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW);
+    const bool mouseOverMap = mouse.x < static_cast<float>(viewportW) && !mouseOverCard;
 
     // Пока открыт диалог подтверждения выхода или диалог сохранения, мир
     // под ним не должен реагировать на ввод (прокрутка/зум/слои/пауза) —
@@ -307,8 +321,14 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             zoom = std::clamp(zoom * factor, kMinZoom, kMaxZoom);
             tileSizeF = static_cast<float>(config.tile_size) * zoom;
 
+            // По вертикали вычитается не сама mouse.y, а отступ карты от неё:
+            // окно карты начинается под шапкой, и мировая точка считается от
+            // её верха (см. worldY выше). Без этой поправки каждый щелчок
+            // колеса уводил карту на высоту шапки, а так как следующий
+            // щелчок множит уже уехавшее, за десяток щелчков цель уходила с
+            // экрана — то самое "убегание", которого требовалось избежать.
             viewX = worldX * factor - mouse.x;
-            viewY = worldY * factor - mouse.y;
+            viewY = worldY * factor - (mouse.y - kHudHeight);
 
             // Пишем на диск на каждый "тик" колеса, а не только когда
             // прокрутка остановилась: щёлкает колесо редко относительно
@@ -650,6 +670,61 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                                  static_cast<float>(snapshot.areaHeight) * tileSizeF},
                        Vector2{0, 0}, 0.0f, WHITE);
 
+        const std::size_t cellCount =
+            static_cast<std::size_t>(snapshot.areaWidth) * static_cast<std::size_t>(snapshot.areaHeight);
+
+        // Рябь на воде — сразу за текстурой карты и раньше всего остального:
+        // она не предмет НА воде, а сама её поверхность, и заслонять ею
+        // подсветку, булыжник или зверя было бы враньём.
+        //
+        // Порог тот же, что у травы (десять пикселей на клетку), и по той же
+        // причине: чёрточка ряби шириной в пиксель, и на клетке мельче
+        // половина их выпадает вовсе — выходит не вода, а сор. Ниже порога
+        // клетка остаётся тем, чем она нарисована в текстуре карты, — цветом
+        // по глубине, и это та же вода, изображённая настолько подробно,
+        // насколько её видно.
+        //
+        // Слой тот же, что и у самой воды в текстуре (showMoisture): выключив
+        // воду, выключаешь и её рябь.
+        const auto waterDetail = WaterSprites::detailFor(tileSizeF);
+        const bool drawRipples = showMoisture && tileSize >= 10 && WaterSprites::ready(waterDetail) &&
+                                 snapshot.waterDepth.size() >= cellCount &&
+                                 snapshot.height.size() >= cellCount;
+        if (drawRipples) {
+            const int firstX = std::max(0, static_cast<int>(std::floor(viewX / tileSizeF)));
+            const int lastX = std::min(snapshot.areaWidth - 1,
+                                       static_cast<int>(std::floor((viewX + viewportW) / tileSizeF)));
+            const int firstY = std::max(0, static_cast<int>(std::floor(viewY / tileSizeF)));
+            const int lastY = std::min(snapshot.areaHeight - 1,
+                                       static_cast<int>(std::floor((viewY + viewportH) / tileSizeF)));
+            for (int y = firstY; y <= lastY; ++y) {
+                for (int x = firstX; x <= lastX; ++x) {
+                    const std::size_t cell = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
+                    if (snapshot.waterDepth[cell] <= 0.0f) {
+                        continue;
+                    }
+                    // Направление считается на каждый видимый тайл каждый
+                    // кадр, а не запасается на снимок. Восемь соседей на
+                    // тайл — это десятки тысяч сложений в кадр, то есть
+                    // ничто; запас же пришлось бы сбрасывать при каждой
+                    // дельте, а вода меняется каждый тик, и запас всё равно
+                    // считался бы заново — только с лишним поводом
+                    // разъехаться со снимком.
+                    const WaterSprites::Flow flow = WaterSprites::flowAt(
+                        snapshot.height, snapshot.waterDepth, snapshot.areaWidth, snapshot.areaHeight, x, y);
+                    DrawTexturePro(WaterSprites::atlas(waterDetail),
+                                   WaterSprites::source(waterDetail,
+                                                        WaterSprites::depthStep(snapshot.waterDepth[cell]),
+                                                        flow, WaterSprites::variantOf(x, y),
+                                                        WaterSprites::frameOf(flow, snapshot.tick)),
+                                   Rectangle{static_cast<float>(x) * tileSizeF - viewX,
+                                             static_cast<float>(y) * tileSizeF - viewY + kHudHeight,
+                                             tileSizeF, tileSizeF},
+                                   Vector2{0, 0}, 0.0f, WHITE);
+                }
+            }
+        }
+
         // Дорога выбранного зверя — его же глазами (см. "watched" в
         // протоколе; считает её мир — core/Path.hpp, — а клиент только
         // рисует пришедшие клетки). Округа, до которой у него есть ход, —
@@ -735,12 +810,28 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // остаётся тем, чем она нарисована в самой текстуре карты, — оттенком
         // клетки (TileColors::canopy). Тот же предмет, изображённый настолько
         // подробно, насколько его видно.
-        const std::size_t cellCount =
-            static_cast<std::size_t>(snapshot.areaWidth) * static_cast<std::size_t>(snapshot.areaHeight);
         const bool drawBuildings = showGoblins && tileSize >= 6 && BuildSprites::ready() &&
                                    snapshot.canopy.size() >= cellCount && snapshot.bedding.size() >= cellCount &&
                                    snapshot.site.size() >= cellCount;
-        if (drawTrees || drawBuildings) {
+        // Трава и куст — тем же обходом, что дерево и постройка, но по другой
+        // причине: заслонять им нечего, из клетки они не торчат, и порядок
+        // строк им безразличен. Обход общий просто потому, что он один и уже
+        // идёт по видимым клеткам, а второй такой же стоил бы ровно вдвое.
+        //
+        // Порог выше древесного (десять против шести): у былинки ширина в
+        // пиксель, и на клетке мельче десяти половина их выпадает вовсе —
+        // выходит не трава, а сор. Ниже порога клетка остаётся тем, чем она
+        // нарисована в текстуре карты, — подмешкой цвета, и это тот же луг,
+        // изображённый настолько подробно, насколько его видно.
+        const bool drawPlantSprites = showPlants && tileSize >= 10 &&
+                                      snapshot.plantSpeciesAt.size() >= cellCount &&
+                                      snapshot.plantGrowth.size() >= cellCount;
+        const auto grassDetail = PlantSprites::grassDetailFor(tileSizeF);
+        const auto bushDetail = PlantSprites::bushDetailFor(tileSizeF);
+        const bool drawGrass = drawPlantSprites && PlantSprites::grassReady(grassDetail);
+        const bool drawBushes = drawPlantSprites && PlantSprites::bushReady(bushDetail) &&
+                                snapshot.bushSpeciesAt.size() >= cellCount;
+        if (drawTrees || drawBuildings || drawGrass || drawBushes) {
             const int firstX = std::max(0, static_cast<int>(std::floor(viewX / tileSizeF)));
             const int lastX = std::min(snapshot.areaWidth - 1,
                                         static_cast<int>(std::floor((viewX + viewportW) / tileSizeF)));
@@ -753,7 +844,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             // до спрайтов — тонким стволом в треть клетки. Это не запасной
             // путь на случай беды, а тот же предмет, изображённый настолько
             // подробно, насколько его видно.
-            const bool drawSprites = tileSize >= 6 && TreeSprites::ready();
+            // Подробность у каждого рисунка своя: у дерева кадр вдвое выше, у
+            // травы с кустом — ровно клетка, и крупный лист у одного может
+            // быть, а у другого нет.
+            const auto treeDetail = TreeSprites::detailFor(tileSizeF);
+            const bool drawSprites = tileSize >= 6 && TreeSprites::ready(treeDetail);
             const int trunkWidth = std::max(1, tileSize / 3);
             const int trunkHeight = std::max(1, tileSize * 2);
             // Время берётся раз на всю рощу: качание считается от него и от
@@ -770,6 +865,34 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     const std::size_t cell = static_cast<std::size_t>(y) * snapshot.areaWidth + x;
                     const float screenX = static_cast<float>(x) * tileSizeF - viewX;
                     const float screenY = static_cast<float>(y) * tileSizeF - viewY + kHudHeight;
+
+                    // Трава и куст — под всем остальным: они лежат на земле,
+                    // а не на том, что на ней стоит. Растение на клетке одно
+                    // (где куст, там нет травы), поэтому и ветка одна.
+                    if (drawBushes && snapshot.bushSpeciesAt[cell] >= 0) {
+                        const int stage = PlantSprites::stageOf(snapshot.plantGrowth[cell]);
+                        const Rectangle at{screenX, screenY, tileSizeF, tileSizeF};
+                        const int frame = PlantSprites::frameOf(x, y, now);
+                        DrawTexturePro(PlantSprites::bushAtlas(bushDetail),
+                                       PlantSprites::bush(bushDetail, snapshot.bushSpeciesAt[cell],
+                                                          stage, frame),
+                                       at, Vector2{0, 0}, 0.0f, WHITE);
+                        // Ягоды поверх куста и не качаются вместе с ним: они
+                        // висят на ветках, а качается верх кома.
+                        if (cell < snapshot.berries.size() && snapshot.berries[cell] > 0) {
+                            DrawTexturePro(PlantSprites::bushAtlas(bushDetail),
+                                           PlantSprites::berries(bushDetail, snapshot.berries[cell]),
+                                           at, Vector2{0, 0}, 0.0f, WHITE);
+                        }
+                    } else if (drawGrass && snapshot.plantSpeciesAt[cell] >= 0) {
+                        const int stage = PlantSprites::stageOf(snapshot.plantGrowth[cell]);
+                        DrawTexturePro(PlantSprites::grassAtlas(grassDetail),
+                                       PlantSprites::grass(grassDetail, snapshot.plantSpeciesAt[cell],
+                                                           stage, PlantSprites::variantOf(x, y),
+                                                           PlantSprites::frameOf(x, y, now)),
+                                       Rectangle{screenX, screenY, tileSizeF, tileSizeF}, Vector2{0, 0},
+                                       0.0f, WHITE);
+                    }
 
                     // Постройки — снизу вверх в том же порядке, в каком они
                     // лежат на самом деле: подстилка на земле, замысел и
@@ -809,9 +932,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     const int species = snapshot.treeSpeciesAt[cell];
                     const float growth = snapshot.plantGrowth[cell];
                     if (drawSprites) {
-                        DrawTexturePro(TreeSprites::atlas(),
-                                       TreeSprites::source(species, TreeSprites::stageOf(growth),
-                                                            TreeSprites::frameOf(x, y, now)),
+                        DrawTexturePro(TreeSprites::atlas(treeDetail),
+                                       TreeSprites::source(treeDetail, species,
+                                                           TreeSprites::stageOf(growth),
+                                                           TreeSprites::variantOf(x, y),
+                                                           TreeSprites::frameOf(x, y, now)),
                                        standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
                     } else {
                         DrawRectangle(static_cast<int>(screenX) + (tileSize - trunkWidth) / 2,
@@ -845,6 +970,16 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // (красная палитра против охристой) и тем, что рисуется крупнее:
         // на карте его должно быть видно первым.
         if (showAnimals) {
+            // Хищник рисуется волком, травоядное осталось значком, и это не
+            // недоделка. О звере, который ест траву, карта отвечает на один
+            // вопрос — сколько его и какой он величины, — и значок отвечает на
+            // него лучше рисунка, потому что честно вырождается в точку на
+            // отдалённой карте. О хищнике спрашивают другое: где он и не
+            // крадётся ли он сейчас, — и на это кружок не отвечал ничем.
+            const auto wolfDetail = WolfSprites::detailFor(tileSizeF);
+            const auto deerDetail = DeerSprites::detailFor(tileSizeF);
+            const bool drawWolves = tileSize >= 6 && WolfSprites::ready(wolfDetail);
+            const bool drawDeer = tileSize >= 6 && DeerSprites::ready(deerDetail);
             for (const auto& animal : snapshot.animals) {
                 const float screenX = static_cast<float>(animal.x) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(animal.y) * tileSizeF - viewY + kHudHeight;
@@ -870,7 +1005,41 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     std::max(1.0f, tileSizeF * (scale + 0.16f * animal.growth) * bodyScale);
                 const float centerX = screenX + tileSizeF * 0.5f;
                 const float centerY = screenY + tileSizeF * 0.5f;
-                if (animal.sex == "male") {
+                const bool asSprite = animal.predator ? drawWolves : drawDeer;
+                if (asSprite) {
+                    // Величина тела остаётся и у рисунка: ради неё
+                    // adult_size и заводился — десять крупных читаются как
+                    // фауна, сорок одинаковых мелких как насекомые. Взрослый
+                    // зверь обычного размера занимает ровно клетку, крупный
+                    // вид выходит за неё.
+                    const float side = tileSizeF * bodyScale * (0.80f + 0.20f * animal.growth);
+                    // Низом на нижний край клетки, а не по центру: зверь
+                    // стоит на земле, как и гоблин, и тень у него нарисована
+                    // под лапами.
+                    const Rectangle at{centerX - side * 0.5f, screenY + tileSizeF - side, side, side};
+                    // Память шага у хищника и у травоядного разной длины, и
+                    // спрашивается она у своего модуля: волк быстр, олень нет,
+                    // и один порог на обоих врал бы про одного из них.
+                    if (animal.predator) {
+                        const bool walking = WolfSprites::walkingNow(animal.stepTick, snapshot.tick);
+                        DrawTexturePro(WolfSprites::atlas(wolfDetail),
+                                       WolfSprites::source(wolfDetail, animal.species,
+                                                           WolfSprites::poseOf(animal.desire, walking),
+                                                           WolfSprites::stageOf(animal.growth),
+                                                           WolfSprites::frameOf(animal.id, snapshot.tick),
+                                                           animal.facing),
+                                       at, Vector2{0, 0}, 0.0f, WHITE);
+                    } else {
+                        const bool walking = DeerSprites::walkingNow(animal.stepTick, snapshot.tick);
+                        DrawTexturePro(DeerSprites::atlas(deerDetail),
+                                       DeerSprites::source(deerDetail, animal.species,
+                                                           DeerSprites::poseOf(animal.desire, walking),
+                                                           DeerSprites::kindOf(animal.growth, animal.sex),
+                                                           DeerSprites::frameOf(animal.id, snapshot.tick),
+                                                           animal.facing),
+                                       at, Vector2{0, 0}, 0.0f, WHITE);
+                    }
+                } else if (animal.sex == "male") {
                     DrawRectangle(static_cast<int>(centerX - radius), static_cast<int>(centerY - radius),
                                   std::max(1, static_cast<int>(radius * 2.0f)),
                                   std::max(1, static_cast<int>(radius * 2.0f)), color);
@@ -879,8 +1048,10 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 }
                 // Тёмная обводка — чтобы светлое животное не терялось на
                 // светлой почве; только когда тайл достаточно крупный,
-                // иначе она съест сам значок.
-                if (tileSizeF >= 8.0f) {
+                // иначе она съест сам значок. Рисунку она не нужна: под зверем
+                // нарисована своя тень, и обводка обвела бы не зверя, а
+                // клетку, в которой он стоит.
+                if (tileSizeF >= 8.0f && !asSprite) {
                     DrawCircleLines(static_cast<int>(centerX), static_cast<int>(centerY), radius + 1.0f,
                                     Color{30, 24, 18, 200});
                 }
@@ -895,12 +1066,26 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
             }
         }
 
-        // Гоблины — поверх той же карты и тем же способом, но ромбом:
-        // форма отличает их от зверя с первого взгляда, не полагаясь на
-        // цвет (кружок и квадрат уже заняты полом животного, а на мелком
-        // тайле цвета сливаются). Пол внутри ромба — размером: самец
-        // крупнее. Цвет — по племени, палитра холодная (TileColors).
+        // Гоблины — поверх той же карты и тем же способом, что дерево и
+        // постройка: рисунком (GoblinSprites). Он отвечает не на вопрос
+        // "где гоблин" — на него отвечал и ромб, — а на те, ради которых на
+        // гоблина смотрят: чем занят, куда идёт, вырос ли. Двадцать
+        // одинаковых ромбов у ручья и двадцать пьющих — это два разных
+        // ответа, и второй виден без единого щелчка по карте.
+        //
+        // Рисунок — те же шестнадцать пикселей на клетку, что у дерева, и
+        // мельче шести от него остаётся каша: тогда гоблин снова рисуется
+        // ромбом, той самой фигурой, какой он рисовался до всяких кадров.
+        // Это не запасной путь на случай беды, а тот же гоблин, изображённый
+        // настолько подробно, насколько его видно. Ромб отличает его от
+        // зверя, не полагаясь на цвет (кружок и квадрат уже заняты полом
+        // животного, а на мелком тайле цвета сливаются), а размер внутри
+        // ромба говорит про пол и рост.
         if (showGoblins) {
+            // Подробность рисунка — по величине клетки: вплотную берётся
+            // крупный лист, издали мелкий (GoblinSprites::detailFor).
+            const GoblinSprites::Detail detail = GoblinSprites::detailFor(tileSizeF);
+            const bool drawSprites = tileSize >= 6 && GoblinSprites::ready(detail);
             for (const auto& goblin : snapshot.goblins) {
                 const float screenX = static_cast<float>(goblin.x) * tileSizeF - viewX;
                 const float screenY = static_cast<float>(goblin.y) * tileSizeF - viewY + kHudHeight;
@@ -908,24 +1093,46 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     screenY > viewportH + kHudHeight) {
                     continue;
                 }
-                const Color color = TileColors::goblinTribe(goblin.tribe);
-                const float scale = goblin.sex == "male" ? 0.32f : 0.26f;
-                const float radius = std::max(1.5f, tileSizeF * (scale + 0.16f * goblin.growth));
                 const float centerX = screenX + tileSizeF * 0.5f;
                 const float centerY = screenY + tileSizeF * 0.5f;
-                const Vector2 top{centerX, centerY - radius};
-                const Vector2 right{centerX + radius, centerY};
-                const Vector2 bottom{centerX, centerY + radius};
-                const Vector2 left{centerX - radius, centerY};
-                // Два треугольника, а не DrawPoly: у raylib многоугольник
-                // рисуется от угла поворота, и ромб из него выходит косым.
-                DrawTriangle(top, left, right, color);
-                DrawTriangle(left, bottom, right, color);
-                if (tileSizeF >= 8.0f) {
-                    DrawTriangleLines(top, left, right, Color{20, 34, 32, 200});
-                    DrawTriangleLines(left, bottom, right, Color{20, 34, 32, 200});
+                if (drawSprites) {
+                    // Занятие складывается из трёх вещей, и ни одной из них
+                    // по отдельности не хватает: желание говорит, зачем он
+                    // тут, шаг — делает он это или ещё идёт, руки — налегке
+                    // или с охапкой (см. GoblinSprites::poseOf).
+                    //
+                    // Еда и материал в руках здесь одно и то же: со стороны
+                    // видна охапка, а не то, из чего она набрана.
+                    const bool walking = GoblinSprites::walkingNow(goblin.stepTick, snapshot.tick);
+                    const bool loaded = goblin.carried > 0.0f || goblin.material > 0.0f;
+                    DrawTexturePro(
+                        GoblinSprites::atlas(detail),
+                        GoblinSprites::source(detail, goblin.tribe,
+                                              GoblinSprites::poseOf(goblin.desire, walking, loaded),
+                                              GoblinSprites::stageOf(goblin.growth),
+                                              GoblinSprites::frameOf(goblin.id, snapshot.tick),
+                                              GoblinSprites::Facing{goblin.facing, goblin.verticalStep}),
+                        Rectangle{screenX, screenY, tileSizeF, tileSizeF}, Vector2{0, 0}, 0.0f, WHITE);
+                } else {
+                    const Color color = TileColors::goblinTribe(goblin.tribe);
+                    const float scale = goblin.sex == "male" ? 0.32f : 0.26f;
+                    const float radius = std::max(1.5f, tileSizeF * (scale + 0.16f * goblin.growth));
+                    const Vector2 top{centerX, centerY - radius};
+                    const Vector2 right{centerX + radius, centerY};
+                    const Vector2 bottom{centerX, centerY + radius};
+                    const Vector2 left{centerX - radius, centerY};
+                    // Два треугольника, а не DrawPoly: у raylib многоугольник
+                    // рисуется от угла поворота, и ромб из него выходит косым.
+                    DrawTriangle(top, left, right, color);
+                    DrawTriangle(left, bottom, right, color);
+                    if (tileSizeF >= 8.0f) {
+                        DrawTriangleLines(top, left, right, Color{20, 34, 32, 200});
+                        DrawTriangleLines(left, bottom, right, Color{20, 34, 32, 200});
+                    }
                 }
-                // Раненого видно так же, как и зверя.
+                // Раненого видно так же, как и зверя, и одинаково при любой
+                // подробности рисунка: полоска — не часть облика гоблина, а
+                // отметка поверх него.
                 if (goblin.health < 0.99f && tileSizeF >= 6.0f) {
                     const float barWidth = tileSizeF * 0.7f;
                     DrawRectangle(static_cast<int>(centerX - barWidth * 0.5f), static_cast<int>(screenY + 1.0f),
@@ -1032,6 +1239,11 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                 DrawRectangleLinesEx(Rectangle{screenX, screenY, tileSizeF, tileSizeF}, 2.0f, selectionColor);
             }
         }
+
+        // Карточка выбранного — поверх всей карты и последней из того, что на
+        // ней лежит: она про выбранное, а не про клетку под собой, и
+        // заслонять её нечему.
+        SelectionCard::draw(snapshot, selection, cardBounds);
 
         EndScissorMode();
 

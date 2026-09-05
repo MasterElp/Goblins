@@ -16,8 +16,10 @@ namespace {
 // порядок строк в файле: кадры ищутся по имени (Assets::frameIndex),
 // поэтому переставить их в ресурсе местами можно, а переименовать —
 // нельзя, и вот этот список тому единственная причина.
-constexpr std::array<const char*, kStages * kFrames> kFrameNames = {
-    "sprout.a", "sprout.b", "young.a", "young.b", "mature.a", "mature.b",
+constexpr std::array<const char*, kStages * kVariants * kFrames> kFrameNames = {
+    "sprout.0.a", "sprout.0.b", "sprout.1.a", "sprout.1.b", "sprout.2.a", "sprout.2.b",
+    "young.0.a",  "young.0.b",  "young.1.a",  "young.1.b",  "young.2.a",  "young.2.b",
+    "mature.0.a", "mature.0.b", "mature.1.a", "mature.1.b", "mature.2.a", "mature.2.b",
 };
 
 // Кора у всех видов одна: ствол — это ствол, а вид опознаётся кроной.
@@ -25,6 +27,18 @@ constexpr std::array<const char*, kStages * kFrames> kFrameNames = {
 // которую она делает.
 constexpr Color kBark{58, 44, 32, 255};
 constexpr Color kBarkLit{78, 60, 42, 255};
+
+// Тень на земле у комля — та же, что под зверем и гоблином, и по той же
+// причине: полупрозрачная, чтобы одинаково лечь и на светлый песок, и на
+// траву. Дерево от неё перестаёт висеть в воздухе.
+constexpr Color kShadow{16, 22, 18, 105};
+
+Color lighten(Color color, float amount) {
+    const auto up = [&](unsigned char v) {
+        return static_cast<unsigned char>(v + (255 - v) * amount);
+    };
+    return Color{up(color.r), up(color.g), up(color.b), color.a};
+}
 
 Color darken(Color color, float amount) {
     return Color{static_cast<unsigned char>(color.r * (1.0f - amount)),
@@ -38,40 +52,54 @@ Color darken(Color color, float amount) {
 // двумя.
 SpriteAtlas::Palette paletteOf(int species) {
     const Color crown = TileColors::treeSpecies(species);
-    return {SpriteAtlas::Ink{'C', crown}, SpriteAtlas::Ink{'c', darken(crown, 0.30f)},
-            SpriteAtlas::Ink{'T', kBarkLit}, SpriteAtlas::Ink{'t', kBark}};
+    // Тонов кроны три, а было два, и это главное, что делает дерево деревом,
+    // а не зелёным пятном: свет падает сверху слева, и от того у каждого кома
+    // листвы виден верх и виден испод. Тем же тоном разделены комья и внутри
+    // кроны — без этого она плоская.
+    return {SpriteAtlas::Ink{'H', lighten(crown, 0.28f)}, SpriteAtlas::Ink{'C', crown},
+            SpriteAtlas::Ink{'c', darken(crown, 0.38f)},  SpriteAtlas::Ink{'T', kBarkLit},
+            SpriteAtlas::Ink{'t', kBark},                 SpriteAtlas::Ink{'d', kShadow}};
 }
 
 // Печётся при первом обращении: нужен уже созданный GL-контекст. Не
 // хватает хоть одного кадра — не рисуем ничем (SpriteAtlas::bake): дерево
 // без своего возраста хуже, чем дерево прямоугольником, потому что
 // выглядит как дерево не того возраста.
-const SpriteAtlas::Baked& baked() {
-    static const SpriteAtlas::Baked result = [] {
+const SpriteAtlas::Detailed& baked() {
+    static const SpriteAtlas::Detailed result = [] {
         std::vector<SpriteAtlas::Palette> palettes;
         palettes.reserve(TileColors::kTreeSpeciesCount);
         for (int species = 0; species < TileColors::kTreeSpeciesCount; ++species) {
             palettes.push_back(paletteOf(species));
         }
-        return SpriteAtlas::bake("tree", palettes, kFrameNames);
+        return SpriteAtlas::bakeDetailed("tree", palettes, kFrameNames);
     }();
     return result;
 }
 
 } // namespace
 
-bool ready() {
-    return baked().complete;
+Detail detailFor(float tileSize) {
+    return baked().detailFor(tileSize);
 }
 
-const Texture2D& atlas() {
-    return baked().sheet.texture();
+bool ready(Detail detail) {
+    return baked().ready(detail);
 }
 
-Rectangle source(int species, int stage, int frame) {
-    const int clampedStage = stage < 0 ? 0 : stage % kStages;
-    const int clampedFrame = frame < 0 ? 0 : frame % kFrames;
-    return baked().source(species, clampedStage * kFrames + clampedFrame);
+const Texture2D& atlas(Detail detail) {
+    return baked().texture(detail);
+}
+
+Rectangle source(Detail detail, int species, int stage, int variant, int frame) {
+    const int s = stage < 0 ? 0 : stage % kStages;
+    const int v = variant < 0 ? 0 : variant % kVariants;
+    const int f = frame < 0 ? 0 : frame % kFrames;
+    return baked().sheet(detail).source(species, (s * kVariants + v) * kFrames + f);
+}
+
+int variantOf(int x, int y) {
+    return ((x * 5 + y * 3) % kVariants + kVariants) % kVariants;
 }
 
 int stageOf(float growth) {
