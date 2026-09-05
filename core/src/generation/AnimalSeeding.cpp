@@ -10,6 +10,7 @@
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
 #include "core/components/DesireComponent.hpp"
+#include "core/components/FatigueComponent.hpp"
 #include "core/components/InjuryComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
@@ -196,6 +197,8 @@ void releaseAnimals(World& world, const std::vector<AnimalGenomeComponent>& spec
             world.registry().emplace<MovementComponent>(entity);
             // И увечий у него ещё нет: первое поголовье выходит в мир целым.
             world.registry().emplace<InjuryComponent>(entity);
+            // Силы полны: расставленное животное ещё никуда не ходило.
+            world.registry().emplace<FatigueComponent>(entity);
             world.registry().emplace<Diet>(entity);
             world.place(entity, x, y);
 
