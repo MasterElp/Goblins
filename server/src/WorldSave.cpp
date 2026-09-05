@@ -38,6 +38,7 @@
 #include "core/components/PlantGenomeComponent.hpp"
 #include "core/components/PlantSpeciesComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/FatigueComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinDesireComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
@@ -219,7 +220,7 @@ struct ParsedEntity {
     bool predator = false;
     // Гоблин: то же тело, но своя таблица черт и своё желание.
     bool goblin = false;
-    GoblinComponent goblinState{};
+    FatigueComponent fatigue{};
     KnowledgeComponent goblinMind{};
     AnimalComponent animal{};
     AnimalGenomeComponent animalGenome{};
@@ -420,14 +421,23 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // Тело при этом пишется тем же ключом "animal", что и у зверя, и это
         // не небрежность: тело у них одно и то же (core/Body.hpp), а два
         // ключа для одного компонента разошлись бы при первой же правке.
-        const auto* goblinState = registry.try_get<GoblinComponent>(entity);
-        const bool goblin = goblinState != nullptr;
+        const bool goblin = registry.all_of<GoblinComponent>(entity);
         if (goblin) {
-            // Не просто метка: усталость — накопленное состояние, и в теле
-            // её не прочитать заново (см. GoblinComponent). Потерять её
-            // значило бы вернуть из файла поселенца, который только что
-            // выспался, где бы он ни был застигнут сохранением.
-            record["goblin"] = {{"fatigue", goblinState->fatigue}};
+            record["goblin"] = true;
+        }
+        // Усталость — рядом с телом, а не внутри метки гоблина, по той же
+        // причине, что и ноша ниже: устаёт всякий, кто ходит
+        // (docs/10_Goblins.md, п.1a), и лежит она своим компонентом
+        // (FatigueComponent). Записать её надо непременно: в теле её не
+        // прочитать заново, и потерянная она вернула бы из файла поселенца,
+        // который только что выспался, где бы его ни застигло сохранение.
+        //
+        // Полные силы не пишутся: ноль — это умолчание компонента, и возить
+        // его незачем.
+        if (const auto* tired = registry.try_get<FatigueComponent>(entity)) {
+            if (tired->fatigue > 0) {
+                record["fatigue"] = tired->fatigue;
+            }
         }
         // Ноша — рядом с телом, а не внутри метки гоблина: нести может всякий
         // живой (docs/10_Goblins.md, п.1a). Пустые руки не пишутся: их
@@ -787,16 +797,20 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
         // новый пишется без оглядки на прошлое.
         const bool legacyBody = record.contains("herbivore") && record["herbivore"].is_object();
         parsed.predator = record.value("predator", false);
-        // Метка гоблина была признаком true, а стала объектом с усталостью:
-        // различаем по типу, чтобы миры, записанные до неё, открывались как
-        // открывались — просто с невыспавшимися жителями.
+        // Метка гоблина побывала и признаком, и объектом с усталостью, а
+        // теперь снова признак: усталость уехала из тега в свой компонент и
+        // пишется рядом с телом. Различаем по типу, чтобы миры всех трёх
+        // возрастов открывались как открывались.
         if (record.contains("goblin")) {
             const auto& mark = record["goblin"];
             parsed.goblin = mark.is_object() ? true : mark.get<bool>();
             if (mark.is_object()) {
-                parsed.goblinState.fatigue = mark.value("fatigue", 0);
+                parsed.fatigue.fatigue = mark.value("fatigue", 0);
             }
         }
+        // Своим ключом усталость перебивает старую метку: у файла, в котором
+        // есть и то, и другое, верно новое место.
+        parsed.fatigue.fatigue = record.value("fatigue", parsed.fatigue.fatigue);
         if (record.contains("knows") && record["knows"].is_array()) {
             std::size_t slot = 0;
             for (const auto& place : record["knows"]) {
@@ -1558,7 +1572,11 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             // Память ног в файле не лежит по той же причине, что и у зверя:
             // шесть последних шагов — это походка, а не мир.
             world.registry().emplace<MovementComponent>(entity);
-            world.registry().emplace<GoblinComponent>(entity, parsed.goblinState);
+            world.registry().emplace<GoblinComponent>(entity);
+            // Усталость — своим компонентом, и она обязательна: GoblinSystem
+            // выбирает существ по нему в том числе, и гоблин без сил просто
+            // перестал бы жить — молча, и в мире, открытом из старого файла.
+            world.registry().emplace<FatigueComponent>(entity, parsed.fatigue);
             world.registry().emplace<KnowledgeComponent>(entity, parsed.goblinMind);
             // Руки нужны ВСЕГДА, даже пустые: GoblinSystem выбирает существ
             // по компонентам, и гоблин без рук просто перестал бы жить —
@@ -1580,6 +1598,10 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             // причине: срок увечья — не мир, а состояние тела на несколько
             // сотен тиков. Загруженный зверь просто здоров.
             world.registry().emplace<InjuryComponent>(entity);
+            // А вот усталость в файле лежит и лежать обязана: в теле её не
+            // прочитать заново (FatigueComponent), и потерянная она вернула
+            // бы из файла выспавшееся стадо.
+            world.registry().emplace<FatigueComponent>(entity, parsed.fatigue);
             // Диета: без тега животное не знало бы, что для него еда.
             // Хищник помечен явно, всё остальное живое — травоядное (в том
             // числе животные из файлов, сохранённых до появления хищников).

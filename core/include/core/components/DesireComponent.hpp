@@ -18,6 +18,17 @@ enum class Desire : std::uint8_t {
     // потому что делает ровно то же: определяет, чем животное занято
     // вместо еды, воды и пары.
     Flee = 4,
+    // Лечь и отдохнуть. Единственное из желаний, которое удовлетворяется не
+    // веществом, а бездействием: животное просто никуда не идёт, и от этого
+    // силы возвращаются (core/Fatigue.hpp).
+    //
+    // Места оно при этом не выбирает и ложится там, где стоит, — в отличие
+    // от гоблина, который ищет годную клетку (core/Rest.hpp). Разница не в
+    // удобстве, а в памяти: искать хорошее место имеет смысл тому, кто
+    // сможет к нему ВЕРНУТЬСЯ, а зверь не помнит мест вовсе
+    // (02_CorePrinciples.md, п.6). Для него всякая клетка, на которой он
+    // стоит, и есть та, на которой он ляжет.
+    Rest = 5,
 };
 
 // Имя желания — не логика, а имя значения (см. sexName в
@@ -29,6 +40,7 @@ inline const char* desireName(Desire desire) {
         case Desire::Water: return "water";
         case Desire::Mate: return "mate";
         case Desire::Flee: return "flee";
+        case Desire::Rest: return "rest";
         case Desire::Idle: break;
     }
     return "idle";
@@ -43,6 +55,7 @@ inline Desire desireFromName(const std::string& name) {
     if (name == "water") return Desire::Water;
     if (name == "mate") return Desire::Mate;
     if (name == "flee") return Desire::Flee;
+    if (name == "rest") return Desire::Rest;
     return Desire::Idle;
 }
 
