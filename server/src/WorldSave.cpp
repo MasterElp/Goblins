@@ -271,12 +271,12 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           {"goblin_random_seed", worldProperties->goblinRandomSeed},
                                           // Долголетие каждой породы: свойство мира, а не генома, и
                                           // потому живёт здесь, а не в чертах.
-                                          {"grass_lifespan", worldProperties->grassLifespan},
-                                          {"tree_lifespan", worldProperties->treeLifespan},
-                                          {"bush_lifespan", worldProperties->bushLifespan},
-                                          {"herbivore_lifespan", worldProperties->herbivoreLifespan},
-                                          {"predator_lifespan", worldProperties->predatorLifespan},
-                                          {"goblin_lifespan", worldProperties->goblinLifespan}};
+                                          {"grass_pace", worldProperties->grassPace},
+                                          {"tree_pace", worldProperties->treePace},
+                                          {"bush_pace", worldProperties->bushPace},
+                                          {"herbivore_pace", worldProperties->herbivorePace},
+                                          {"predator_pace", worldProperties->predatorPace},
+                                          {"goblin_pace", worldProperties->goblinPace}};
         }
         if (const auto* plantSpecies = registry.try_get<PlantSpeciesComponent>(entity)) {
             auto archetypes = nlohmann::json::array();
@@ -612,16 +612,22 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             // долголетие равно kFull, а не нынешнему умолчанию. Подставить
             // сюда десятку значило бы втихую растянуть чужому миру жизнь
             // вдесятеро при первой же загрузке.
-            parsed.worldProperties.grassLifespan =
-                record["world_properties"].value("grass_lifespan", kFull);
-            parsed.worldProperties.treeLifespan = record["world_properties"].value("tree_lifespan", kFull);
-            parsed.worldProperties.bushLifespan = record["world_properties"].value("bush_lifespan", kFull);
-            parsed.worldProperties.herbivoreLifespan =
-                record["world_properties"].value("herbivore_lifespan", kFull);
-            parsed.worldProperties.predatorLifespan =
-                record["world_properties"].value("predator_lifespan", kFull);
-            parsed.worldProperties.goblinLifespan =
-                record["world_properties"].value("goblin_lifespan", kFull);
+            // Темп жизни прежде звался долголетием и растягивал одни лишь
+            // сроки. Читаем новый ключ, а не нашли — прежний: мир, записанный
+            // до переименования, обязан открыться с тем темпом, с каким жил,
+            // а не с kFull. Умолчание kFull, а не нынешнее десятикратное:
+            // мир, записанный ДО появления множителя вовсе, жил по геному, и
+            // подставить ему десятку значило бы втихую растянуть чужую жизнь.
+            const auto& properties = record["world_properties"];
+            const auto paceOf = [&properties](const char* nowadays, const char* formerly) {
+                return properties.value(nowadays, properties.value(formerly, kFull));
+            };
+            parsed.worldProperties.grassPace = paceOf("grass_pace", "grass_lifespan");
+            parsed.worldProperties.treePace = paceOf("tree_pace", "tree_lifespan");
+            parsed.worldProperties.bushPace = paceOf("bush_pace", "bush_lifespan");
+            parsed.worldProperties.herbivorePace = paceOf("herbivore_pace", "herbivore_lifespan");
+            parsed.worldProperties.predatorPace = paceOf("predator_pace", "predator_lifespan");
+            parsed.worldProperties.goblinPace = paceOf("goblin_pace", "goblin_lifespan");
         }
         if (record.contains("tree_species") && record["tree_species"].is_array()) {
             parsed.hasTreeSpecies = true;

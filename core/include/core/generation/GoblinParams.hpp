@@ -35,7 +35,7 @@ struct GoblinParams {
     // Свойство мира (06_GameLoop.md, п.1a), а не черта: множитель нельзя
     // класть в ген, иначе поедет бюджет преимуществ — см.
     // WorldPropertiesComponent.
-    int lifespan = 10000;
+    int pace = 10000;
 };
 
 } // namespace goblins

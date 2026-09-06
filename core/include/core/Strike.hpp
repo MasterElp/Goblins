@@ -72,7 +72,15 @@ constexpr int kStrikePerSize = 350;
 // мире не было: погоня перестала быть чистой гонкой скоростей. Попавший
 // зубами замедляет добычу и догоняет её со второго раза, получивший рогами
 // отстаёт сам и охоту бросает.
-constexpr int kLameMaxTicks = 150;
+// Число идёт В НОГУ с темпом жизни (core/Scale.hpp) и умножено под нынешний
+// десятикратный. Связь молчаливая, и проверки на неё нет: у этого срока нет
+// породы, значит нет и множителя, которым его делить. Меняешь темп — меняй
+// и здесь.
+//
+// Хромота — срок в жизни существа, и мерить его прежними тиками значило бы
+// сделать увечье вдесятеро легче: заживало бы оно за сотую долю той жизни,
+// на которую рассчитано.
+constexpr int kLameMaxTicks = 1500;
 constexpr int kLameShare = 700;
 
 // Ниже этой доли скорости хромота не опускается, насколько бы крупнее ни был
@@ -122,8 +130,15 @@ inline bool strikeReaches(int fromX, int fromY, int toX, int toY) {
 // системе не нужно ничего помнить между тиками, а разные пары в один тик
 // получают разный исход. Имена обоих, а не одного, — иначе зверь, дерущийся
 // с двумя, попадал бы по обоим или мазал по обоим разом.
-inline StrikeOutcome resolveStrike(int strikerSize, int targetSize, int hitChance, std::uint64_t worldSeed,
-                                   std::uint64_t tick, std::uint64_t strikerId, std::uint64_t targetId) {
+//
+// Темп жизни бьющего делит урон, и без этого замедление мира делало бы бой
+// вдесятеро смертельнее. Причина простая: удары происходят при встрече, а
+// встречи — при ходьбе, которую темп НЕ замедляет. Значит урон за тик
+// остаётся прежним, тогда как заживление (kRecoveryRate) уже замедлено.
+// Одна сторона медленная, другая нет — и раны перестают заживать вовсе.
+inline StrikeOutcome resolveStrike(int strikerSize, int targetSize, int hitChance, int pace,
+                                   std::uint64_t worldSeed, std::uint64_t tick, std::uint64_t strikerId,
+                                   std::uint64_t targetId) {
     std::uint64_t random = mixSeed(worldSeed, mixSeed(tick, mixSeed(strikerId, targetId)));
     if (static_cast<int>(randomBelow(random, kFull)) >= hitChance) {
         return StrikeOutcome{};
@@ -134,7 +149,7 @@ inline StrikeOutcome resolveStrike(int strikerSize, int targetSize, int hitChanc
     // (chooseHuntTarget, core/Hunting.hpp).
     const int relative = kFull * std::max(0, strikerSize) / std::max(1, targetSize);
     StrikeOutcome outcome;
-    outcome.damage = kStrikePerSize * relative / kFull;
+    outcome.damage = paced(kStrikePerSize * relative / kFull, pace);
     outcome.lameTicks = kLameMaxTicks * relative / kFull;
     // У тяжести хромоты низ есть, в отличие от урона: обездвиженный
     // насмерть зверь — это уже не хромота, а смерть, и выражать её надо

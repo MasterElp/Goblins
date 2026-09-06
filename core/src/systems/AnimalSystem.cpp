@@ -492,15 +492,20 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // core/Body.hpp — тело у гоблина то же самое.
         // Долголетие вида — свойство мира, а не генома: у травоядного и
         // хищника свои множители, и таблицы черт у них тоже свои.
-        const int lifespan =
-            animal.predator ? worldProperties.predatorLifespan : worldProperties.herbivoreLifespan;
-        advanceBody(state, genome, lifespan, tick, animal.id);
+        const int pace =
+            animal.predator ? worldProperties.predatorPace : worldProperties.herbivorePace;
+        advanceBody(state, genome, pace, tick, animal.id);
 
         // Силы убывают от того, что животное живо. Шаг добавит своё ниже, в
         // фазе шагов, а отдых вычтет своё в фазе решений: и то, и другое —
         // следствия того, чем оно занято, и считать их здесь, до выбора
         // занятия, было бы гаданием (core/Fatigue.hpp).
-        tireBy(animal.tired->fatigue, kFatigueTick);
+        // Усталость тоже срок: единица за тик на десятикратном темпе дала
+        // бы ноль. Медленно живущий и устаёт медленно — иначе он лежал бы
+        // вдесятеро большую долю своей жизни, чем задумано.
+        if (paceBeat(tick, animal.id, pace)) {
+            tireBy(animal.tired->fatigue, kFatigueTick);
+        }
 
         // Смерть от старости, от условий или от чужих зубов. Проверяется
         // здесь, а не внутри advanceBody, и это не мелочь: у тела могут быть
@@ -511,7 +516,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // Entity исчезает не сейчас, а при разрешении очереди команд
         // (05_Entity.md, п.5), и тело ложится падалью — одинаково, от чего
         // бы животное ни умерло.
-        if (bodyDied(state, genome, lifespan)) {
+        if (bodyDied(state, genome, pace)) {
             enqueueDeath(commands, animal.entity, animal.x, animal.y);
             alive[a] = false;
             continue;
@@ -740,7 +745,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             }
         }
 
-        const bool adult = state.age >= maturityAgeOf(genome, lifespan) && state.growth >= kBreedingGrowth;
+        const bool adult = state.age >= maturityAgeOf(genome, pace) && state.growth >= kBreedingGrowth;
         // Готова ли мать заплатить за роды. Два условия, и оба — про цену, а
         // не про настроение: не отдыхает после прошлых родов и накопила
         // крупиц на целого детёныша (см. п.10, где они отдаются).
@@ -761,7 +766,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         if (adult && content && canBearYoung) {
             // Желание пары — единственное, которого в теле не прочитать: оно
             // копится со временем у того, кому больше нечего хотеть.
-            desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
+            // Позыв к паре — СРОК, а не деление: черта живёт в 1..10, и
+            // десятая доля любого её значения — ноль, то есть "никогда"
+            // (core/Scale.hpp). Раз в N тиков прибавляется целиком, и
+            // средняя скорость выходит та же.
+            if (paceBeat(tick, animal.id, pace)) {
+                desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
+            }
         }
         desire.current = chooseDesire(animal, adult && content && canBearYoung);
     }
@@ -825,6 +836,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         auto& desire = *animal.desire;
         const std::size_t here = index(animal.x, animal.y);
         const int size = bodySize(state, genome);
+        // Темп жизни этой диеты — тот же, по которому в п.3 шло тело. Здесь
+        // он нужен всему, что делается ЗА ТИК: укусу, водопою, цене шага.
+        const int pace = animal.predator ? worldProperties.predatorPace : worldProperties.herbivorePace;
 
         // Случайность собирается из seed мира, номера тика и постоянного
         // идентификатора животного (core/Random.hpp). Не из координат, как
@@ -944,7 +958,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // (или найти уже мёртвое), и только потом есть.
                     if (carcassMeat[here] > kMinBiteMeat) {
                         meals.push_back(
-                            ShareIntent{here, static_cast<int>(a), animal.id, genome.biteSize * size / kFull});
+                            ShareIntent{here, static_cast<int>(a), animal.id, paced(genome.biteSize * size / kFull, pace)});
                         busy = true;
                         break;
                     }
@@ -1026,7 +1040,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // и стоять над ним животному незачем.
                 if (plantAt[here] != entt::null && edibleGrowth(plantGrowth[here]) > kMinBiteGrowth) {
                     bites.push_back(
-                        ShareIntent{here, static_cast<int>(a), animal.id, genome.biteSize * size / kFull});
+                        ShareIntent{here, static_cast<int>(a), animal.id, paced(genome.biteSize * size / kFull, pace)});
                     busy = true;
                 } else {
                     hasTarget = findNearest(
@@ -1063,7 +1077,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 }
                 if (source < cellCount) {
                     drinks.push_back(
-                        ShareIntent{source, static_cast<int>(a), animal.id, kDrinkRate * size / kFull});
+                        ShareIntent{source, static_cast<int>(a), animal.id, paced(kDrinkRate * size / kFull, pace)});
                     busy = true;
                 } else {
                     hasTarget =
@@ -1189,7 +1203,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 // Годность клетки (core/Rest.hpp) для него не считается
                 // вовсе: посчитанное и никем не используемое число хуже
                 // непосчитанного, его читают как закон.
-                restBy(animal.tired->fatigue, kRestRelief);
+                // Отдых снимается тем же сроком, каким усталость копится:
+                // подели одно и не подели другое — и лёжка станет вдесятеро
+                // действеннее, чем ходьба утомительна.
+                if (paceBeat(tick, animal.id, pace)) {
+                    restBy(animal.tired->fatigue, kRestRelief);
+                }
                 busy = true;
                 break;
             }
@@ -1342,11 +1361,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
 
-        state.energy = std::max(0, state.energy - kStepEnergy * size / kFull);
+        state.energy = std::max(0, state.energy - paced(kStepEnergy * size / kFull, pace));
         // Шаг стоит не только энергии, но и сил: ходьба утомляет сильнее,
         // чем стояние, и именно это отличает обошедшего полкарты от того,
         // кто простоял у куста (core/Fatigue.hpp).
-        tireBy(animal.tired->fatigue, kFatigueStep);
+        if (paceBeat(tick, animal.id, pace)) {
+            tireBy(animal.tired->fatigue, kFatigueStep);
+        }
         steps.push_back(StepIntent{static_cast<int>(a), step.x, step.y});
     }
 
@@ -1522,7 +1543,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const Animal& whom = animals[target];
         const StrikeOutcome outcome =
             resolveStrike(bodySize(*who.state, *who.genome), bodySize(*whom.state, *whom.genome),
-                          who.genome->hitChance, animalSeed, tick, who.id, whom.id);
+                          who.genome->hitChance,
+                          who.predator ? worldProperties.predatorPace : worldProperties.herbivorePace,
+                          animalSeed, tick, who.id, whom.id);
         if (outcome.damage <= 0) {
             continue; // промах
         }
@@ -1646,9 +1669,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         // Отдых матери — доля её собственной жизни (birthRestOf,
         // core/Body.hpp). Пока он не истёк, желание пары не копится вовсе.
-        const int motherLifespan =
-            mother.predator ? worldProperties.predatorLifespan : worldProperties.herbivoreLifespan;
-        mother.state->recovery = birthRestOf(*mother.genome, motherLifespan);
+        const int motherPace =
+            mother.predator ? worldProperties.predatorPace : worldProperties.herbivorePace;
+        mother.state->recovery = birthRestOf(*mother.genome, motherPace);
 
         mother.desire->mating = 0;
         father.desire->mating = 0;

@@ -65,9 +65,9 @@ struct PlantParams {
     // WorldPropertiesComponent.
     // Три числа, а не одно: трава, дерево и куст — три разные таблицы черт с
     // тремя разными темпами жизни.
-    int grassLifespan = 10000;
-    int treeLifespan = 10000;
-    int bushLifespan = 10000;
+    int grassPace = 10000;
+    int treePace = 10000;
+    int bushPace = 10000;
 };
 
 } // namespace goblins

@@ -76,13 +76,13 @@ PlantKind plantKindOf(const Registry& registry, entt::entity entity) {
 // имя: спрашивают это в нескольких местах (система, посев травы, посев
 // деревьев, посев кустов), и три копии выбора "какой из трёх" разъехались
 // бы молча — дерево начало бы стареть по травяному сроку.
-inline int plantLifespanOf(const WorldPropertiesComponent& properties, PlantKind kind) {
+inline int plantPaceOf(const WorldPropertiesComponent& properties, PlantKind kind) {
     switch (kind) {
-        case PlantKind::Bush: return properties.bushLifespan;
-        case PlantKind::Tree: return properties.treeLifespan;
+        case PlantKind::Bush: return properties.bushPace;
+        case PlantKind::Tree: return properties.treePace;
         case PlantKind::Grass: break;
     }
-    return properties.grassLifespan;
+    return properties.grassPace;
 }
 
 // Сроки жизни растения с поправкой на долголетие его рода. Все три —
@@ -93,16 +93,16 @@ inline int plantLifespanOf(const WorldPropertiesComponent& properties, PlantKind
 // черты посчитается против неумноженных границ таблицы (advantageOf,
 // core/generation/Genetics.hpp), обрежется до единицы, и весь бюджет
 // преимуществ поедет молча.
-inline int plantMaxAgeOf(const PlantGenomeComponent& genome, int lifespan) {
-    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.maxAge) * lifespan / kFull));
+inline int plantMaxAgeOf(const PlantGenomeComponent& genome, int pace) {
+    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.maxAge) * pace / kFull));
 }
 
-inline int plantMaturityAgeOf(const PlantGenomeComponent& genome, int lifespan) {
-    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.maturityAge) * lifespan / kFull));
+inline int plantMaturityAgeOf(const PlantGenomeComponent& genome, int pace) {
+    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.maturityAge) * pace / kFull));
 }
 
-inline int plantSeedDormancyOf(const PlantGenomeComponent& genome, int lifespan) {
-    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.seedDormancy) * lifespan / kFull));
+inline int plantSeedDormancyOf(const PlantGenomeComponent& genome, int pace) {
+    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.seedDormancy) * pace / kFull));
 }
 
 } // namespace goblins

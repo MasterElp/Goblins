@@ -201,9 +201,9 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // темп жизни разный по самой сути: трава живёт сотни тиков, дерево —
     // десятки тысяч. Одна ручка на всех означала бы, что растянуть жизнь
     // дереву нельзя, не растянув её траве, которой кормится стадо.
-    ops.intRow("Grass lifespan (x1000)", edited.plants.grass_lifespan, 100, 50000);
-    ops.intRow("Tree lifespan (x1000)", edited.plants.tree_lifespan, 100, 50000);
-    ops.intRow("Bush lifespan (x1000)", edited.plants.bush_lifespan, 100, 50000);
+    ops.intRow("Grass pace (x1000)", edited.plants.grass_pace, 100, 50000);
+    ops.intRow("Tree pace (x1000)", edited.plants.tree_pace, 100, 50000);
+    ops.intRow("Bush pace (x1000)", edited.plants.bush_pace, 100, 50000);
 
     ops.section("Animal life");
     // Та же мутация, что и у растений, но своя: наследование детёныша
@@ -214,14 +214,14 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // Долголетие по диетам. Поголовье от него не едет: и взросление, и отдых
     // после родов — доли той же самой жизни, значит растягиваются во столько
     // же раз, и потомков за жизнь остаётся столько же.
-    ops.intRow("Herbivore lifespan (x1000)", edited.animals.herbivore_lifespan, 100, 50000);
-    ops.intRow("Predator lifespan (x1000)", edited.animals.predator_lifespan, 100, 50000);
+    ops.intRow("Herbivore pace (x1000)", edited.animals.herbivore_pace, 100, 50000);
+    ops.intRow("Predator pace (x1000)", edited.animals.predator_pace, 100, 50000);
 
     ops.section("Goblin life");
     // Своя, не общая с животными, хотя тело у гоблина звериное: скорость
     // наследственных изменений у разумных не обязана совпадать со звериной.
     ops.intRow("Mutation rate (per mille)", edited.goblins.mutation_rate, 0, 300);
-    ops.intRow("Lifespan (x1000)", edited.goblins.lifespan, 100, 50000);
+    ops.intRow("Pace (x1000)", edited.goblins.pace, 100, 50000);
 }
 
 // Только считает высоту, ничего не рисует — используется до

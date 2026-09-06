@@ -310,6 +310,11 @@ void PlantSystem(World& world, CommandQueue& commands) {
         }
         auto& soil = registry.get<SoilComponent>(terrain[i]);
         const PlantKind kind = plantKindOf(registry, entity);
+        // Темп жизни рода — свойство мира (WorldPropertiesComponent): у
+        // травы, куста и дерева свои множители, потому что и таблицы черт у
+        // них свои, и темп жизни разный по самой сути. Считается один раз на
+        // растение: спрашивают его и рост, и старение, и посев.
+        const int pace = plantPaceOf(worldProperties, kind);
         const bool isTree = kind == PlantKind::Tree;
 
         // Тонет растение или нет, решает не факт наличия воды, а её
@@ -350,7 +355,10 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // вытоптать рощу подошвами нельзя.
         const int trampled = kind == PlantKind::Grass ? soil.trampled : 0;
         const int vitality = drowning ? 0 : trampledGrowth(supply, trampled);
-        plant.growthProgress += genome.growthRate * vitality;
+        // Рост делится темпом, а не становится сроком: накопитель
+        // growthProgress уже есть, и остаток в нём и так копится — делению
+        // тут ничего не мешает (core/Scale.hpp).
+        plant.growthProgress += paced(genome.growthRate * vitality, pace);
         const int reach = std::min(kFull, plant.growth + plant.growthProgress / kFull);
         plant.growthProgress %= kFull;
 
@@ -432,11 +440,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // Смерть от старости или от условий. Entity исчезает не сейчас, а
         // при разрешении очереди команд (05_Entity.md, п.5) — до конца
         // тика клетка считается занятой, и никто не посеет туда семя.
-        // Долголетие рода — свойство мира (WorldPropertiesComponent): у
-        // травы, куста и дерева свои множители, потому что и таблицы черт у
-        // них свои, и темп жизни разный по самой сути.
-        const int lifespan = plantLifespanOf(worldProperties, plantKindOf(registry, entity));
-        if (plant.age >= plantMaxAgeOf(genome, lifespan) || plant.stress >= kFull) {
+        if (plant.age >= plantMaxAgeOf(genome, pace) || plant.stress >= kFull) {
             commands.enqueue([entity, x = position.x, y = position.y](World& w) {
                 if (!w.registry().valid(entity)) {
                     return;
@@ -462,7 +466,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // тут ни при чём — они растению вообще ничего не запрещают; воды в
         // теле у него нет; неблагополучия, которое можно было бы спросить,
         // тоже больше нет.
-        if (plant.age < plantMaturityAgeOf(genome, lifespan) ||
+        if (plant.age < plantMaturityAgeOf(genome, pace) ||
             plant.growth < (isTree ? kTreeSeedMinGrowth : kSeedMinGrowth)) {
             continue;
         }
@@ -475,6 +479,18 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // должно быть причиной события в мире. Координаты, а не
         // идентификатор Entity, потому что при загрузке мира
         // идентификаторы выдаются заново, а координаты — те же.
+        // Посев — СРОК, а не деление: шанс живёт в 1..50 тысячных, и
+        // десятая доля его нижнего края — ноль, то есть "не сеет никогда"
+        // (core/Scale.hpp). Раз в N тиков жребий бросается с ПРЕЖНЕЙ
+        // вероятностью, и средняя частота выходит та же.
+        //
+        // Смещение по номеру клетки, а не по имени растения: имена при
+        // загрузке мира выдаются заново, а клетка та же — иначе весь луг
+        // сеялся бы в один тик и делал бы это по-разному до и после
+        // сохранения.
+        if (!paceBeat(tick, static_cast<std::uint64_t>(i), pace)) {
+            continue;
+        }
         std::uint64_t random = mixSeed(plantSeed, mixSeed(tick, static_cast<std::uint64_t>(i)));
         // Шанс — тысячные за тик, ослабленные развитостью: недоросшее
         // растение сеет реже. Бросок целый (randomBelow), поэтому и
@@ -798,7 +814,7 @@ void PlantSystem(World& world, CommandQueue& commands) {
         // клетки (waitTicks) — не растягивается: это форма закона, одна на
         // весь мир.
         const int dormancy = plantSeedDormancyOf(
-            genome, plantLifespanOf(worldProperties, plantKindOf(registry, entity)));
+            genome, plantPaceOf(worldProperties, plantKindOf(registry, entity)));
 
         seed.age += 1;
 

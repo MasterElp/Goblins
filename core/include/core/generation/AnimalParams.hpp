@@ -46,8 +46,8 @@ struct AnimalParams {
     // WorldPropertiesComponent.
     // По одному на диету: таблицы черт у травоядного и хищника разные, и
     // темп жизни у них тоже свой.
-    int herbivoreLifespan = 10000;
-    int predatorLifespan = 10000;
+    int herbivorePace = 10000;
+    int predatorPace = 10000;
 };
 
 } // namespace goblins

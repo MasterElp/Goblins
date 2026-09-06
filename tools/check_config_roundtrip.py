@@ -52,11 +52,11 @@ PROBE = {
                 "tree_species": 4, "tree_coverage": 27,
                 "bush_species": 3, "bush_coverage": 41,
                "humus_decay_period": 27,
-                "grass_lifespan": 3100, "tree_lifespan": 4200, "bush_lifespan": 5300},
+                "grass_pace": 3100, "tree_pace": 4200, "bush_pace": 5300},
     "animals": {"herbivore_species": 5, "predator_species": 4,
                 "herbivore_count": 211, "predator_count": 31, "mutation_rate": 175,
-                "herbivore_lifespan": 6400, "predator_lifespan": 7500},
-    "goblins": {"tribes": 5, "count": 147, "mutation_rate": 188, "lifespan": 8600},
+                "herbivore_pace": 6400, "predator_pace": 7500},
+    "goblins": {"tribes": 5, "count": 147, "mutation_rate": 188, "pace": 8600},
 }
 
 

@@ -66,7 +66,7 @@ bool hasPlant(const World& world, int x, int y) {
 
 // Посадить куст вида archetype в клетку (x, y), если он там уместится и
 // приживётся. false — не уместился; вызывающая сторона просто идёт дальше.
-bool plantBush(World& world, int x, int y, const PlantGenomeComponent& archetype, float mutationRate, int lifespan,
+bool plantBush(World& world, int x, int y, const PlantGenomeComponent& archetype, float mutationRate, int pace,
                std::uint64_t& state) {
     if (world.area().isBlocked(x, y) || hasPlant(world, x, y)) {
         return false;
@@ -97,7 +97,7 @@ bool plantBush(World& world, int x, int y, const PlantGenomeComponent& archetype
     // дорасти. Иначе купа зацвела бы и умерла одной волной.
     PlantComponent plant;
     plant.age = static_cast<int>(
-        randomBelow(state, static_cast<std::uint64_t>(std::max(1, plantMaturityAgeOf(genome, lifespan)))));
+        randomBelow(state, static_cast<std::uint64_t>(std::max(1, plantMaturityAgeOf(genome, pace)))));
     plant.growth = std::min(kFull, plant.age * genome.growthRate);
     // Крупицы — не из воздуха: сколько выросло, столько и взято из своей
     // клетки, но не больше, чем в ней есть (как у травы).
@@ -166,7 +166,7 @@ void seedBushes(World& world, const PlantParams& params, unsigned seed) {
         };
         seedNest(
             world.area(), kBushPatchSize, kBushPatchRadius, suitableCenter,
-            [&](int x, int y) { return plantBush(world, x, y, archetype, mutationRate, params.bushLifespan, state); },
+            [&](int x, int y) { return plantBush(world, x, y, archetype, mutationRate, params.bushPace, state); },
             state);
     }
 }

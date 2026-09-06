@@ -199,13 +199,13 @@ struct PlantConfig {
     // Три числа, а не одно: трава, дерево и куст — три разные таблицы черт с
     // тремя разными темпами жизни. У растения множитель тянет за собой все
     // три срока — предельный возраст, созревание и покой семени.
-    int grass_lifespan = 10000;
-    int tree_lifespan = 10000;
-    int bush_lifespan = 10000;
+    int grass_pace = 10000;
+    int tree_pace = 10000;
+    int bush_pace = 10000;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PlantConfig, grass_species, grass_coverage, mutation_rate,
                                     humus_decay_period, tree_species, tree_coverage, bush_species,
-                                    bush_coverage, grass_lifespan, tree_lifespan, bush_lifespan)
+                                    bush_coverage, grass_pace, tree_pace, bush_pace)
 
 // Зеркало core::AnimalParams (core/generation/AnimalParams.hpp) — по той же
 // причине, что TerrainConfig и PlantConfig выше. Имена и значения по
@@ -242,12 +242,12 @@ struct AnimalConfig {
     // потомков за жизнь остаётся тем же, растягивается только время.
     //
     // По одному на диету: таблицы черт у травоядного и хищника разные.
-    int herbivore_lifespan = 10000;
-    int predator_lifespan = 10000;
+    int herbivore_pace = 10000;
+    int predator_pace = 10000;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(AnimalConfig, herbivore_species, predator_species,
-                                    herbivore_count, predator_count, mutation_rate, herbivore_lifespan,
-                                    predator_lifespan)
+                                    herbivore_count, predator_count, mutation_rate, herbivore_pace,
+                                    predator_pace)
 
 // Зеркало core::GoblinParams (core/generation/GoblinParams.hpp). Секция
 // своя, а не третья строка в AnimalConfig: гоблин появляется отдельным,
@@ -277,9 +277,9 @@ struct GoblinConfig {
     // Поголовье от него не едет: и взросление, и отдых после родов — доли
     // той же самой жизни, значит растягиваются во столько же раз. Число
     // потомков за жизнь остаётся тем же, растягивается только время.
-    int lifespan = 10000;
+    int pace = 10000;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GoblinConfig, tribes, count, mutation_rate, lifespan)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GoblinConfig, tribes, count, mutation_rate, pace)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";

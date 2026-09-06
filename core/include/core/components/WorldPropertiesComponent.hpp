@@ -149,12 +149,12 @@ struct WorldPropertiesComponent {
     // возраст, возраст созревания и покой семени: это все времена жизни
     // вида, и растягивать их порознь значило бы поехать долей взрослой
     // жизни.
-    int grassLifespan = 10000;
-    int treeLifespan = 10000;
-    int bushLifespan = 10000;
-    int herbivoreLifespan = 10000;
-    int predatorLifespan = 10000;
-    int goblinLifespan = 10000;
+    int grassPace = 10000;
+    int treePace = 10000;
+    int bushPace = 10000;
+    int herbivorePace = 10000;
+    int predatorPace = 10000;
+    int goblinPace = 10000;
 };
 
 } // namespace goblins

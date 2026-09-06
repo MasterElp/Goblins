@@ -320,12 +320,12 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         const auto& genome = *goblin.genome;
         auto& desire = *goblin.desire;
 
-        advanceBody(state, genome, worldProperties.goblinLifespan, tick, goblin.id);
+        advanceBody(state, genome, worldProperties.goblinPace, tick, goblin.id);
 
         // Своих бед сверх общего закона у гоблина пока нет: болезни от
         // тесноты он не знает (поселение тесно по сути), зубов на него никто
         // не точит. Поэтому между телом и смертью здесь ничего и не стоит.
-        if (bodyDied(state, genome, worldProperties.goblinLifespan)) {
+        if (bodyDied(state, genome, worldProperties.goblinPace)) {
             enqueueDeath(commands, goblin.entity, goblin.x, goblin.y);
             alive[g] = false;
             continue;
@@ -340,7 +340,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // ниже, в фазе шагов, а отдых вычтет своё в фазе решений: и то, и
         // другое — следствия того, чем он занят, и считать их здесь, до
         // выбора занятия, было бы гаданием.
-        tireBy(goblin.tired->fatigue, kFatigueTick);
+        // Усталость — срок по той же причине, что и позыв к паре.
+        if (paceBeat(tick, goblin.id, worldProperties.goblinPace)) {
+            tireBy(goblin.tired->fatigue, kFatigueTick);
+        }
 
         // Память тает сама. Не изнашивание и не уборка: именно забывание и
         // заставляет возвращаться — помни гоблин вечно, ему хватило бы
@@ -350,7 +353,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         goblin.hunger = hungerOf(state, genome);
         goblin.thirst = thirstOf(state, genome);
 
-        const bool adult = state.age >= maturityAgeOf(genome, worldProperties.goblinLifespan) &&
+        const bool adult = state.age >= maturityAgeOf(genome, worldProperties.goblinPace) &&
                            state.growth >= kBreedingGrowth;
         const bool content = state.health >= kFull && goblin.hunger < kCalmNeed && goblin.thirst < kCalmNeed;
         // Готов ли платить за роды: не отдыхает после прошлых и накопил
@@ -358,7 +361,13 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // тело у них одно, и цена потомства у него одна.
         const bool canBearYoung = state.recovery == 0 && state.protein >= proteinNeedOf(genome);
         if (adult && content && canBearYoung) {
-            desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
+            // Позыв к паре — СРОК, а не деление: черта живёт в 1..10, и
+            // десятая доля любого её значения — ноль, то есть "никогда"
+            // (core/Scale.hpp). Раз в N тиков прибавляется целиком, и
+            // средняя скорость выходит та же.
+            if (paceBeat(tick, goblin.id, worldProperties.goblinPace)) {
+                desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
+            }
         }
         // Дом — вспомненное место отдыха. Спрашивается здесь, до выбора
         // занятия: без дома запасать некуда, и желание не должно побеждать.
@@ -531,7 +540,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // просто голод сильнее желания запасать (см. kHaulUrge).
                 if (goblin.hands->carried.of(ResourceKind::Food) > 0) {
                     const Portion bite =
-                        takeFromHands(*goblin.hands, ResourceKind::Food, genome.biteSize * size / kFull);
+                        takeFromHands(*goblin.hands, ResourceKind::Food, paced(genome.biteSize * size / kFull, worldProperties.goblinPace));
                     feedBody(state, genome, bite.amount, kEnergyPerBiomass);
                     takeProtein(state, genome, bite.minerals);
                     busy = true;
@@ -541,7 +550,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // денется, но за ней всё же надо было дойти.
                 if (storeFood[here] > kMinBiteGrowth) {
                     scoops.push_back(
-                        ShareIntent{here, static_cast<int>(g), goblin.id, genome.biteSize * size / kFull});
+                        ShareIntent{here, static_cast<int>(g), goblin.id, paced(genome.biteSize * size / kFull, worldProperties.goblinPace)});
                     remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
                     busy = true;
                     break;
@@ -553,7 +562,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // мёртвое.
                 if (carcassMeat[here] > kMinBiteMeat) {
                     meals.push_back(
-                        ShareIntent{here, static_cast<int>(g), goblin.id, genome.biteSize * size / kFull});
+                        ShareIntent{here, static_cast<int>(g), goblin.id, paced(genome.biteSize * size / kFull, worldProperties.goblinPace)});
                     // Помнится то, что ПРИГОДИЛОСЬ, а не то, что попалось на
                     // глаза (core/Knowledge.hpp).
                     remember(*goblin.mind, PlaceKind::Food, goblin.x, goblin.y);
@@ -580,7 +589,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // памяти ягодник — единственное, к чему стоит возвращаться.
                 if (plantAt[here] != entt::null && edibleGrowth(plantGrowth[here]) > kMinBiteGrowth) {
                     bites.push_back(
-                        ShareIntent{here, static_cast<int>(g), goblin.id, genome.biteSize * size / kFull});
+                        ShareIntent{here, static_cast<int>(g), goblin.id, paced(genome.biteSize * size / kFull, worldProperties.goblinPace)});
                     busy = true;
                     break;
                 }
@@ -680,7 +689,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 }
                 if (source < cellCount) {
                     drinks.push_back(
-                        ShareIntent{source, static_cast<int>(g), goblin.id, kDrinkRate * size / kFull});
+                        ShareIntent{source, static_cast<int>(g), goblin.id, paced(kDrinkRate * size / kFull, worldProperties.goblinPace)});
                     // Помнится берег, на котором стоял, а не сама вода: в
                     // воду гоблин шагнуть не может, и место водопоя — это
                     // клетка под ногами.
@@ -749,7 +758,12 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     // забирает у мира: гоблин просто не идёт никуда, и от
                     // этого ему становится легче. Оттого место для отдыха
                     // ничем и не кончается, в отличие от куста и туши.
-                    restBy(goblin.tired->fatigue, kRestRelief);
+                    // Тем же сроком, что и накопление усталости (см.
+                    // AnimalSystem): подели одно и не подели другое — и лёжка
+                    // станет вдесятеро действеннее, чем ходьба утомительна.
+                    if (paceBeat(tick, goblin.id, worldProperties.goblinPace)) {
+                        restBy(goblin.tired->fatigue, kRestRelief);
+                    }
                     remember(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y);
                     busy = true;
                     break;
@@ -1066,11 +1080,13 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // нечего; с ней дальний ягодник окупается хуже ближнего — а решает
         // это не гоблин, а мир.
         state.energy =
-            std::max(0, state.energy - carryStepEnergy(kStepEnergy * size / kFull, *goblin.hands, size));
+            std::max(0, state.energy - carryStepEnergy(paced(kStepEnergy * size / kFull, worldProperties.goblinPace), *goblin.hands, size));
         // Шаг стоит не только энергии, но и сил: ходьба утомляет сильнее,
         // чем стояние, и именно это отличает обошедшего полкарты от того,
         // кто простоял у куста.
-        tireBy(goblin.tired->fatigue, kFatigueStep);
+        if (paceBeat(tick, goblin.id, worldProperties.goblinPace)) {
+            tireBy(goblin.tired->fatigue, kFatigueStep);
+        }
         steps.push_back(StepIntent{static_cast<int>(g), step.x, step.y});
     }
 
@@ -1509,7 +1525,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         mother.state->protein -= givenProtein;
         child.protein = givenProtein;
         child.growth = std::min(child.growth, child.protein * kFull / proteinNeedOf(childGenome));
-        mother.state->recovery = birthRestOf(*mother.genome, worldProperties.goblinLifespan);
+        mother.state->recovery = birthRestOf(*mother.genome, worldProperties.goblinPace);
 
         mother.desire->mating = 0;
         father.desire->mating = 0;

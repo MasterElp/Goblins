@@ -102,7 +102,7 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
     // (05_Entity.md, п.3).
     auto& worldProperties = world.registry().get<WorldPropertiesComponent>(world.worldEntity());
     worldProperties.goblinMutationRate = params.mutationRate;
-    worldProperties.goblinLifespan = params.lifespan;
+    worldProperties.goblinPace = params.pace;
     worldProperties.goblinRandomSeed = seed;
     // Целая настройка мира — дробная доля для раскладов бюджета
     // (core/Scale.hpp): расклад дробен, потому что он генерация, а не
@@ -175,12 +175,12 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
             // которого гоблин успел бы дорасти к этому возрасту. Иначе они
             // взрослели, сходились и умирали синхронными волнами.
             body.age = static_cast<int>(randomBelow(
-                state, static_cast<std::uint64_t>(std::max(1, maxAgeOf(genome, params.lifespan) / 2))));
+                state, static_cast<std::uint64_t>(std::max(1, maxAgeOf(genome, params.pace) / 2))));
             body.sex = randomBelow(state, 2) == 0 ? Sex::Female : Sex::Male;
             body.energy = energyCapacityOf(genome) * kInitialReserveShare / kFull;
             body.water = waterCapacityOf(genome) * kInitialReserveShare / kFull;
 
-            const int grownTo = std::min(kFull, body.age * kFull / maturityAgeOf(genome, params.lifespan));
+            const int grownTo = std::min(kFull, body.age * kFull / maturityAgeOf(genome, params.pace));
             const int wanted = (grownTo * proteinNeedOf(genome) + kFull - 1) / kFull;
             // Белок первого поголовья — не из воздуха: ровно столько, сколько
             // есть в клетке, и ровно столько же вернётся в мир падалью. Если

@@ -304,17 +304,17 @@ inline int proteinNeedOf(const AnimalGenomeComponent& genome) {
 //
 // Число приносит вызывающий — тем же способом, каким feedBody получает цену
 // куска: тело по-прежнему не знает ни про диеты, ни про виды.
-inline int maxAgeOf(const AnimalGenomeComponent& genome, int lifespan) {
-    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.maxAge) * lifespan / kFull));
+inline int maxAgeOf(const AnimalGenomeComponent& genome, int pace) {
+    return std::max(1, static_cast<int>(static_cast<std::int64_t>(genome.maxAge) * pace / kFull));
 }
 
-inline int maturityAgeOf(const AnimalGenomeComponent& genome, int lifespan) {
-    return std::max(1, maxAgeOf(genome, lifespan) * kMaturityShare / kFull);
+inline int maturityAgeOf(const AnimalGenomeComponent& genome, int pace) {
+    return std::max(1, maxAgeOf(genome, pace) * kMaturityShare / kFull);
 }
 
 // Сколько тиков мать отдыхает после родов.
-inline int birthRestOf(const AnimalGenomeComponent& genome, int lifespan) {
-    return std::max(1, maxAgeOf(genome, lifespan) * kBirthRestShare / kFull);
+inline int birthRestOf(const AnimalGenomeComponent& genome, int pace) {
+    return std::max(1, maxAgeOf(genome, pace) * kBirthRestShare / kFull);
 }
 
 // Что время делает с телом за один тик: расход на существование,
@@ -327,7 +327,7 @@ inline int birthRestOf(const AnimalGenomeComponent& genome, int lifespan) {
 //
 // tick и id нужны пищеварению: отсчёт сдвинут на постоянный идентификатор,
 // иначе всё поголовье испражнялось бы одним и тем же тиком.
-inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& genome, int lifespan,
+inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& genome, int pace,
                         std::uint64_t tick, std::uint64_t id) {
     const int size = bodySize(state, genome);
 
@@ -340,8 +340,11 @@ inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& gen
 
     // Цена существования. Тратится всегда — стоящее на месте животное
     // тоже живёт.
-    state.energy -= genome.energyUpkeep * size / kFull;
-    state.water -= genome.waterUpkeep * size / kFull;
+    // Расход делится темпом: медленнее живёт — медленнее тратит. Обе
+    // величины остаются целыми (30..350 на десятикратном темпе это 3..35),
+    // поэтому делятся, а не превращаются в срок (core/Scale.hpp).
+    state.energy -= paced(genome.energyUpkeep * size / kFull, pace);
+    state.water -= paced(genome.waterUpkeep * size / kFull, pace);
     const int ageBefore = state.age;
     state.age += 1;
 
@@ -349,7 +352,10 @@ inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& gen
     // Отсюда и постоянная нужда есть, а не только "когда кончилась
     // энергия". Крупица трогается с места раз в kDungPeriod тиков — это
     // срок, а не скорость, поэтому никакого накопителя доли телу не нужно.
-    if (state.protein > 0 && (tick + id) % kDungPeriod == 0) {
+    // Срок пищеварения растягивается темпом: медленное тело и переваривает
+    // медленно. Умножается, а не делится, — это срок, а не скорость.
+    if (state.protein > 0 && (tick + id) % (kDungPeriod * static_cast<std::uint64_t>(std::max(kFull, pace)) /
+                                             static_cast<std::uint64_t>(kFull)) == 0) {
         --state.protein;
         ++state.dung;
     }
@@ -364,7 +370,7 @@ inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& gen
     if (state.growth < kFull && state.energy > 0) {
         const int proteinCeiling = state.protein * kFull / proteinNeedOf(genome);
         const int ceiling = std::min(kFull, std::max(state.growth, proteinCeiling));
-        const int maturity = maturityAgeOf(genome, lifespan);
+        const int maturity = maturityAgeOf(genome, pace);
         const int gain = state.age * kFull / maturity - ageBefore * kFull / maturity;
         state.growth = std::clamp(state.growth + gain, 0, ceiling);
     }
@@ -375,24 +381,31 @@ inline void advanceBody(AnimalComponent& state, const AnimalGenomeComponent& gen
     // убивающие при своём краю, — это один закон, записанный дважды. Отчего
     // именно животное умерло, по-прежнему видно в тот момент, когда оно
     // умирает: пустой желудок, пустая фляга или рана.
+    // Голодная смерть тоже растягивается темпом: медленно живущий и умирает
+    // медленно, иначе пустой бак убивал бы его в десять раз быстрее, чем
+    // наполнялся. Обе величины остаются целыми и потому делятся.
     if (state.energy <= 0) {
         state.energy = 0;
-        state.health -= kStarvationHarm;
+        state.health -= paced(kStarvationHarm, pace);
     }
     if (state.water <= 0) {
         state.water = 0;
-        state.health -= kDehydrationHarm;
+        state.health -= paced(kDehydrationHarm, pace);
     }
     if (state.energy > 0 && state.water > 0) {
-        state.health = std::min(kFull, state.health + kRecoveryRate);
+        // Заживление — срок, а не деление: двойка на десятикратном темпе
+        // дала бы ноль, то есть "никогда не заживает" (core/Scale.hpp).
+        if (paceBeat(tick, id, pace)) {
+            state.health = std::min(kFull, state.health + kRecoveryRate);
+        }
     }
 }
 
 // Кончилось ли тело: от старости или оттого, что здоровье вышло. Причины
 // разные, исход один — тело ложится падалью (см. enqueueDeath в
 // core/Carcass.hpp).
-inline bool bodyDied(const AnimalComponent& state, const AnimalGenomeComponent& genome, int lifespan) {
-    return state.age >= maxAgeOf(genome, lifespan) || state.health <= 0;
+inline bool bodyDied(const AnimalComponent& state, const AnimalGenomeComponent& genome, int pace) {
+    return state.age >= maxAgeOf(genome, pace) || state.health <= 0;
 }
 
 // Что делает с телом съеденный кусок. Закон один на все диеты, а вот цена
