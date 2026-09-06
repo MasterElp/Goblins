@@ -16,7 +16,10 @@
 #include "core/Knowledge.hpp"
 #include "core/Mating.hpp"
 #include "core/Needs.hpp"
+#include "core/Bonds.hpp"
+#include "core/Character.hpp"
 #include "core/Rest.hpp"
+#include "core/Talk.hpp"
 #include "core/Random.hpp"
 #include "core/Walk.hpp"
 #include "core/components/AnimalComponent.hpp"
@@ -32,7 +35,9 @@
 #include "core/components/MovementComponent.hpp"
 #include "core/PlantKind.hpp"
 #include "core/components/BerryComponent.hpp"
+#include "core/components/BondsComponent.hpp"
 #include "core/components/CarriedComponent.hpp"
+#include "core/components/CharacterComponent.hpp"
 #include "core/Resources.hpp"
 #include "core/components/BuildingComponent.hpp"
 #include "core/components/BushComponent.hpp"
@@ -1036,7 +1041,7 @@ GoblinPlace goblinPlaceAt(const World& world, int x, int y) {
 // Строкой, а не числом-кодом: клиент печатает её ровно так же, как печатает
 // имя желания, и не знает, какие занятия бывают (07_TechStack.md, п.6).
 const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const CarriedComponent* hands,
-                           int size, int restQuality, bool atHome) {
+                           int size, int restQuality, bool atHome, bool companionClose) {
     const Resources inHands = hands != nullptr ? hands->carried : Resources{};
     const int food = inHands.of(ResourceKind::Food);
     const int material = materialIn(inHands);
@@ -1111,6 +1116,12 @@ const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const 
                 return "cutting straw";
             }
             return "looking for material";
+        case GoblinDesire::Talk:
+            // Разговор со стороны выглядит стоянием вдвоём, и различить в нём
+            // нечего, кроме одного: дошёл уже или ещё идёт. Тот же порог, что
+            // и в решении (kTalkRange, core/Talk.hpp), — иначе панель называла
+            // бы беседой стояние в десяти шагах от собеседника.
+            return companionClose ? "chatting with a neighbour" : "walking over for a word";
         case GoblinDesire::Idle:
             break;
     }
@@ -1269,19 +1280,58 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             groups.push_back(makeGroup("Desires", {{"hunger", hungerOf(body, genome)},
                                                     {"thirst", thirstOf(body, genome)},
                                                     {"fatigue", fatigueOf(registry, entity)},
-                                                    {"mating", desire.mating}}));
+                                                    {"mating", desire.mating},
+                                                    {"talking", desire.talking}}));
 
             // Место под ногами и то, чем гоблин на нём занят. Обе вещи об
             // одном: карточка обязана отвечать на вопрос "почему он тут
             // стоит", а не только "сколько в нём чего".
+            // Нрав — четыре числа, которыми этот гоблин отличается от
+            // соседа (core/Character.hpp). Здесь, а не в карточке на карте: за
+            // жизнь он не меняется, а рисовать его у каждого нечем — нужен он
+            // ровно тогда, когда спрашивают про ОДНОГО.
+            const auto& nature = registry.get<const CharacterComponent>(entity);
+            groups.push_back(makeGroup("Character", {{"sociable", nature.sociable},
+                                                      {"loyal", nature.loyal},
+                                                      {"diligent", nature.diligent},
+                                                      {"charming", nature.charming}}));
+            // Склонности — перебором по темам, а не шестью строками по именам:
+            // появится новая тема — попадёт сюда сама (core/Character.hpp).
+            {
+                auto pairs = nlohmann::json::array();
+                for (int slot = 0; slot < kTopicCount; ++slot) {
+                    auto pair = nlohmann::json::array();
+                    pair.push_back(topicName(static_cast<Topic>(slot)));
+                    pair.push_back(interestIn(nature, static_cast<Topic>(slot)));
+                    pairs.push_back(std::move(pair));
+                }
+                groups.push_back(nlohmann::json{{"title", "Interests"}, {"values", std::move(pairs)}});
+            }
+
             const GoblinPlace place = goblinPlaceAt(world_, position.x, position.y);
             const auto& mind = registry.get<const KnowledgeComponent>(entity);
             const auto* home = recall(mind, PlaceKind::Rest, position.x, position.y);
             const std::optional<RestPlace> restHere = restPlaceAt(world_, position.x, position.y);
             const int restQuality = restHere ? restQualityOf(*restHere) : 0;
+            // Стоит ли рядом тот, с кем можно перемолвиться. Считается тем же
+            // порогом, каким это решает сам гоблин (withinTalk, core/Talk.hpp).
+            bool companionClose = false;
+            for (const auto other : registry.view<const PositionComponent, const GoblinDesireComponent>()) {
+                if (other == entity) {
+                    continue;
+                }
+                // Не "near": это пустой макрос из windows.h, и объявление с
+                // таким именем теряет имя целиком (error C2059).
+                const auto& beside = registry.get<const PositionComponent>(other);
+                if (withinTalk(position.x, position.y, beside.x, beside.y)) {
+                    companionClose = true;
+                    break;
+                }
+            }
             watched["doing"] =
                 goblinActivity(desire.current, place, hands, bodySize(body, genome), restQuality,
-                                home != nullptr && home->x == position.x && home->y == position.y);
+                                home != nullptr && home->x == position.x && home->y == position.y,
+                                companionClose);
 
             // Годность места под ногами — числом рядом с порогом, по которому
             // мир и решает, ложиться ли здесь. Порог рядом со значением, а не
@@ -1402,6 +1452,36 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
                                       {"strength", toWire(place.strength)}});
             }
             watched["knows"] = std::move(knownJson);
+
+            // Знакомые — рядом с помнимыми местами и по той же причине здесь,
+            // а не в дельте: восемь имён на каждого гоблина каждый тик стоили
+            // бы провода больше, чем весь остальной мир, а нужны они по
+            // одному — у того, за кем следят.
+            //
+            // Уезжает и то, где знакомый стоит сейчас, если он в мире ещё
+            // есть: без этого связь — число в столбце, а с этим её видно на
+            // карте, и сразу понятно, почему наблюдаемый идёт туда, где нет
+            // ни еды, ни воды.
+            const auto& bonds = registry.get<const BondsComponent>(entity);
+            auto facesJson = nlohmann::json::array();
+            for (const auto& face : bonds.faces) {
+                if (face.id == 0 || face.warmth <= 0) {
+                    continue;
+                }
+                nlohmann::json known{{"id", face.id}, {"warmth", toWire(face.warmth)}};
+                for (const auto other :
+                     registry.view<const IdentityComponent, const PositionComponent, const GoblinDesireComponent>()) {
+                    if (registry.get<const IdentityComponent>(other).id != face.id) {
+                        continue;
+                    }
+                    const auto& where = registry.get<const PositionComponent>(other);
+                    known["x"] = where.x;
+                    known["y"] = where.y;
+                    break;
+                }
+                facesJson.push_back(std::move(known));
+            }
+            watched["faces"] = std::move(facesJson);
 
             // Дороги пока нет: её рисует appendRoad по звериным желаниям
             // (охота, зов пары), а у гоблина они свои. Появится вместе с

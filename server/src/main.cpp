@@ -116,6 +116,8 @@ goblins::GoblinParams toGoblinParams(const goblins::GoblinConfig& config) {
     params.count = config.count;
     params.mutationRate = config.mutation_rate;
     params.pace = config.pace;
+    params.characterSpread = config.character_spread;
+    params.talkUrge = config.talk_urge;
     return params;
 }
 

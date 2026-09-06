@@ -57,6 +57,17 @@ enum class GoblinDesire : std::uint8_t {
     // выбирал, где лечь и куда вернуться, а теперь делает выбранное лучше,
     // чем оно было.
     Build = 6,
+    // Поговорить с тем, кто рядом (core/Talk.hpp). Самое слабое из желаний:
+    // в списке кандидатов оно стоит ПЕРВЫМ, а сравнение там нестрогое —
+    // значит, при равной силе оно проигрывает всем остальным. Так и надо:
+    // разговор — то, чем занимаются, когда не гонит ничто другое.
+    //
+    // И единственное желание, которое нельзя удовлетворить в одиночку: без
+    // собеседника рядом оно не просто не сбывается, а обнуляется на месте
+    // (GoblinSystem) — тем же приёмом, каким гасится желание запасать без
+    // дома. Иначе одинокий гоблин копил бы тоску до предела и переставал
+    // работать навсегда.
+    Talk = 7,
 };
 
 // Имя желания — не логика, а имя значения (см. desireName в
@@ -70,6 +81,7 @@ inline const char* goblinDesireName(GoblinDesire desire) {
         case GoblinDesire::Rest: return "rest";
         case GoblinDesire::Haul: return "haul";
         case GoblinDesire::Build: return "build";
+        case GoblinDesire::Talk: return "talk";
         case GoblinDesire::Idle: break;
     }
     return "idle";
@@ -85,6 +97,7 @@ inline GoblinDesire goblinDesireFromName(const std::string& name) {
     if (name == "rest") return GoblinDesire::Rest;
     if (name == "haul") return GoblinDesire::Haul;
     if (name == "build") return GoblinDesire::Build;
+    if (name == "talk") return GoblinDesire::Talk;
     return GoblinDesire::Idle;
 }
 
@@ -98,6 +111,14 @@ inline GoblinDesire goblinDesireFromName(const std::string& name) {
 struct GoblinDesireComponent {
     // Желание пары, 0..kFull (core/Scale.hpp).
     int mating = 0;
+
+    // Желание поговорить, 0..kFull. Хранится по той же причине, что и
+    // желание пары: в теле его не прочитать. Копится у всякого живого
+    // гоблина со скоростью его общительности (talkStep, core/Character.hpp) и
+    // обнуляется состоявшимся разговором — обоим участникам, а не только
+    // тому, кто заговорил: окликнутому тоже больше не с чего скучать.
+    int talking = 0;
+
     GoblinDesire current = GoblinDesire::Idle;
 };
 

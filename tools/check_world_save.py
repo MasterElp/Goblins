@@ -19,7 +19,9 @@
 разойдутся на клетку, и проверка объявит это потерей.
 
 Что сверяется: тик, списки существ поимённо (карточка в карточку), племена и
-виды с их геномами, и все тайловые слои целиком.
+виды с их геномами, все тайловые слои целиком — и то, чего в общем списке нет
+вовсе и что поэтому теряется тише всего: память места, нрав и знакомства
+одного гоблина, снятые панелью наблюдения.
 
 Запуск (сервер поднимается сам):
     python3 tools/check_world_save.py
@@ -129,6 +131,62 @@ def compare_memory(goblin_id, before, after):
         elif now["strength"] <= 0 or now["strength"] > was["strength"]:
             problems.append(f"память гоблина {goblin_id}: твёрдость {was['strength']} стала "
                             f"{now['strength']} (могла только убыть и не до нуля)")
+    return problems
+
+
+def group_of(watched, title):
+    """Одна группа панели наблюдения словарём: {имя: число}."""
+    for group in (watched or {}).get("groups") or []:
+        if group.get("title") == title:
+            return {name: value for name, value in group.get("values") or []}
+    return {}
+
+
+def compare_character(goblin_id, before, after):
+    """Нрав обязан совпасть ТОЧНО, в отличие от памяти и связей.
+
+    Он единственное, что не меняется за жизнь вовсе: тело стареет, память
+    тает, знакомства остывают, а нрав тот же от рождения до смерти. Значит и
+    поблажки на прошедшие тики ему не полагается — разойдись он хоть на
+    единицу, это не время, а потеря.
+
+    Проверяются обе половины: и четыре числа нрава, и склонности. Склонности
+    пишутся в файл по именам тем, а не порядком в массиве, и ошибиться там
+    можно ровно так, что все шесть уедут на одну позицию, — а такое
+    посимвольное сравнение и ловит.
+    """
+    problems = []
+    for title in ("Character", "Interests"):
+        was = group_of(before, title)
+        now = group_of(after, title)
+        if not was:
+            problems.append(f"гоблин {goblin_id}: группа {title} не пришла до сохранения — "
+                            f"проверять нечего")
+        elif was != now:
+            problems.append(f"нрав гоблина {goblin_id} ({title}): было {was}, стало {now}")
+    return problems
+
+
+def compare_faces(goblin_id, before, after):
+    """Знакомства — как память: имена точно, тепло с поблажкой на время.
+
+    Тепло остывает каждые kCoolPeriod тиков (core/Bonds.hpp), а между записью
+    в файл и чтением обратно тики проходят. Поэтому от него спрашивается то
+    же, что и от твёрдости памяти: на месте и не выросло.
+    """
+    before = before or []
+    after = after or []
+    if not before:
+        return []
+    if len(before) != len(after):
+        return [f"связи гоблина {goblin_id}: было {len(before)} знакомых, стало {len(after)}"]
+    problems = []
+    for was, now in zip(before, after):
+        if was["id"] != now["id"]:
+            problems.append(f"связи гоблина {goblin_id}: знакомый {was['id']} стал {now['id']}")
+        elif now["warmth"] <= 0 or now["warmth"] > was["warmth"]:
+            problems.append(f"связи гоблина {goblin_id}: тепло {was['warmth']} стало "
+                            f"{now['warmth']} (могло только убыть и не до нуля)")
     return problems
 
 
@@ -248,20 +306,35 @@ def main():
         # Память — отдельной проверкой, по одному гоблину: в общем списке её
         # нет. Берём того, кто успел что-то запомнить; если такого нет вовсе,
         # проверять нечего и молчать об этом нельзя.
-        remembered_before = None
+        # Тем же наблюдением берём и нрав со связями: их в общем списке тоже
+        # нет и по той же причине (см. buildWatchedJson). Нрав при этом есть у
+        # КАЖДОГО гоблина, поэтому первый попавшийся годится; память и связи
+        # есть не у всех, и для них ищем того, у кого они уже завелись.
+        watched_before = None
         watched_id = None
         for goblin in before.get("goblins") or []:
             watched = watch_goblin(listen, control, goblin["id"])
-            if watched and watched.get("knows"):
-                remembered_before = watched["knows"]
+            if watched is None:
+                continue
+            if watched_id is None:
+                watched_before = watched
+                watched_id = goblin["id"]
+            if watched.get("knows"):
+                watched_before = watched
                 watched_id = goblin["id"]
                 break
         if watched_id is None:
-            problems.append("ни один гоблин ничего не помнит — память проверить не на чем")
+            problems.append("сервер не ответил ни про одного гоблина — проверять нечего")
         else:
-            remembered_after = watch_goblin(listen, control, watched_id)
-            got = None if remembered_after is None else remembered_after.get("knows")
-            problems.extend(compare_memory(watched_id, remembered_before, got))
+            watched_after = watch_goblin(listen, control, watched_id)
+            got = None if watched_after is None else watched_after.get("knows")
+            if not watched_before.get("knows"):
+                problems.append("ни один гоблин ничего не помнит — память проверить не на чем")
+            else:
+                problems.extend(compare_memory(watched_id, watched_before["knows"], got))
+            problems.extend(compare_character(watched_id, watched_before, watched_after))
+            problems.extend(compare_faces(watched_id, watched_before.get("faces"),
+                                          None if watched_after is None else watched_after.get("faces")))
         counts = (len(before.get("animals") or []), len(before.get("goblins") or []))
         if problems:
             print(f"ПОТЕРЯ при сохранении (тик {before.get('tick')}):")

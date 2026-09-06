@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "core/components/AnimalGenomeComponent.hpp"
+#include "core/components/CharacterComponent.hpp"
 
 namespace goblins {
 
@@ -29,6 +30,21 @@ namespace goblins {
 // поколений племена слились бы в одно.
 struct GoblinTribesComponent {
     std::vector<AnimalGenomeComponent> tribes;
+
+    // Нрав племени (core/generation/GoblinCharacters.hpp) — вторым списком той
+    // же длины, а не полем внутри генома.
+    //
+    // Внутри генома ему не место: геном раскладывает бюджет преимуществ, и
+    // всякое поле в нём означает "куплено за другое поле". Нрав ничего не
+    // стоит и ни за что не платит — он про то, какое племя, а не про то,
+    // насколько оно хорошо.
+    //
+    // Отсюда обязательство, которого не проверяет компилятор: длина этого
+    // списка обязана совпадать с длиной tribes, потому что берутся оба одним
+    // и тем же номером племени (AnimalGenomeComponent::species). Разойдутся —
+    // и гоблин получит чужой нрав или никакого; поэтому и заполняются они в
+    // одном месте, рядом (GoblinSeeding.cpp), и читаются с проверкой длины.
+    std::vector<CharacterComponent> characters;
 };
 
 } // namespace goblins

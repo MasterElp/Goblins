@@ -7,6 +7,8 @@
 
 #include "core/Body.hpp"
 #include "core/Berries.hpp"
+#include "core/Bonds.hpp"
+#include "core/Character.hpp"
 #include "core/Build.hpp"
 #include "core/Carry.hpp"
 #include "core/Carcass.hpp"
@@ -22,6 +24,7 @@
 #include "core/Rest.hpp"
 #include "core/Scale.hpp"
 #include "core/Share.hpp"
+#include "core/Talk.hpp"
 #include "core/Resources.hpp"
 #include "core/Store.hpp"
 #include "core/Work.hpp"
@@ -31,9 +34,11 @@
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/BerryComponent.hpp"
+#include "core/components/BondsComponent.hpp"
 #include "core/components/BuildingComponent.hpp"
 #include "core/components/CarriedComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
+#include "core/components/CharacterComponent.hpp"
 #include "core/components/FatigueComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinDesireComponent.hpp"
@@ -50,6 +55,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
+#include "core/generation/GoblinCharacters.hpp"
 #include "core/generation/GoblinGenetics.hpp"
 
 namespace goblins {
@@ -144,6 +150,16 @@ struct MateIntent {
     Sex sex = Sex::Female;
 };
 
+// Кто к кому подошёл поговорить. Второго здесь, в отличие от пары, называют
+// сразу: пару ждут на клетке, и на одной клетке их может собраться трое, а
+// разговор начинают с КЕМ-ТО — заговоривший уже выбрал, к кому шёл
+// (chooseCompanion, core/Talk.hpp), и решать за него потом было бы подменой.
+struct TalkIntent {
+    int speaker = 0;
+    std::uint64_t speakerId = 0;
+    std::uint64_t listenerId = 0;
+};
+
 // Живой гоблин в снимке этого тика. Указатели на компоненты держать
 // безопасно: за время обхода систем структура хранилища не меняется —
 // создание и удаление Entity идёт только через очередь команд
@@ -166,6 +182,11 @@ struct Goblin {
     // Руки. Общее для всего живого (core/Carry.hpp), просто носит пока
     // только гоблин.
     CarriedComponent* hands = nullptr;
+    // Нрав и склонности. За жизнь не меняются, поэтому указатель константный:
+    // случайная правка нрава посреди тика была бы неотличима от закона.
+    const CharacterComponent* nature = nullptr;
+    // Знакомые. Меняются каждый разговор — значит, не константа.
+    BondsComponent* bonds = nullptr;
 
     // Голод и жажда живут здесь, в снимке тика, а не в компоненте: оба
     // пересчитываются из тела заново каждый тик (core/Needs.hpp), и
@@ -173,6 +194,21 @@ struct Goblin {
     int hunger = 0;
     int thirst = 0;
 };
+
+// Позыв к работе, каким он стал после нрава: УРОВЕНЬ даёт трудолюбие, а
+// НАПРАВЛЕНИЕ — склонность к теме этого дела (core/Character.hpp).
+//
+// Один помощник на оба дела, а не два числа в двух местах: запас и стройка
+// различаются только основанием и темой, и разойтись этим двум поправкам
+// было бы не на чем, кроме опечатки.
+//
+// Поправка кладётся на ПОСТОЯННЫЙ позыв, а не на нехватку. Нехватка — это
+// то, чего в мире недостаёт на самом деле (дырявый навес, куча под дождём);
+// умножь её на нрав, и трудолюбивый видел бы дыру там, где её нет, а ленивый
+// не видел бы настоящей.
+int workUrgeOf(const CharacterComponent& nature, int base, Topic topic) {
+    return interestUrge(workUrge(base, nature.diligent), interestIn(nature, topic));
+}
 
 // Какое желание сейчас гонит гоблина. Сам выбор — общий закон мира
 // (core/Desires.hpp); здесь только то, чего гоблин может хотеть и чем
@@ -182,20 +218,37 @@ struct Goblin {
 // некого — хищник его не видит (см. GoblinSystem.hpp). Появится опасность —
 // появится и желание, и встанет оно последним, чтобы побеждать при
 // равенстве.
-GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool hasHome, int building) {
+GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool hasHome, int building,
+                                bool companionNear) {
     const GoblinDesireComponent& desire = *goblin.desire;
+    const CharacterComponent& nature = *goblin.nature;
     const int mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0;
     // Запасать некуда — незачем и начинать. Гейт стоит здесь, а не в самой
     // ветке: желание, которое нельзя исполнить, не должно даже побеждать
     // (иначе гоблин "занят" тем, чего не делает).
-    const int hauling = hasHome ? kHaulUrge : 0;
+    //
+    // Само же число больше не общее на всех: ленивый проваливается ниже
+    // порога желаний и за ношу не берётся вовсе, трудолюбивый бросает её
+    // только ради еды и воды (core/Character.hpp). Тема запаса — еда: за ней
+    // и ходят с пустыми руками.
+    const int hauling = hasHome ? workUrgeOf(nature, kHaulUrge, Topic::Food) : 0;
+    // Поговорить не с кем — не о чем и тосковать. Тот же гейт и по той же
+    // причине, что у запаса, и здесь он даже нужнее: одинокий гоблин иначе
+    // накопил бы полное желание, застрял бы в нём навсегда (инерция!) и
+    // перестал бы и есть, и работать.
+    const int talking = companionNear ? std::clamp(desire.talking, 0, kFull) : 0;
 
     // Порядок — приоритет при равенстве, побеждает последний. Отдых стоит
-    // первым и потому проигрывает всем: усталость никого не убивает, а
-    // голод и жажда убивают. Лечь гоблин должен тогда, когда его больше
-    // ничто не гонит, — и это не поблажка, а точное описание того, чем
-    // отдых отличается от еды.
+    // почти первым и потому проигрывает всему, кроме разговора: усталость
+    // никого не убивает, а голод и жажда убивают. Лечь гоблин должен тогда,
+    // когда его больше ничто не гонит, — и это не поблажка, а точное
+    // описание того, чем отдых отличается от еды. Ниже него — только
+    // разговор: без него можно прожить и вовсе.
     const Urgency candidates[] = {
+        // Разговор — ПЕРВЫМ, то есть проигрывает при равенстве всем, включая
+        // отдых. Так и задумано: болтают тогда, когда не гонит вообще ничто,
+        // — это единственное занятие в списке, без которого можно прожить.
+        {static_cast<int>(GoblinDesire::Talk), talking},
         {static_cast<int>(GoblinDesire::Rest), goblin.tired->fatigue},
         // Запасание — сразу после отдыха и раньше всего остального в списке,
         // то есть проигрывает и голоду, и жажде, и паре: набирать впрок имеет
@@ -218,6 +271,7 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool has
         case GoblinDesire::Rest: currentUrgency = goblin.tired->fatigue; break;
         case GoblinDesire::Haul: currentUrgency = hauling; break;
         case GoblinDesire::Build: currentUrgency = building; break;
+        case GoblinDesire::Talk: currentUrgency = talking; break;
         case GoblinDesire::Idle: break;
     }
 
@@ -251,10 +305,15 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     // Разреженно, а не плотным массивом на всю Область: гоблинов десятки, а
     // клеток десятки тысяч.
     std::vector<Goblin> goblins;
+    // Перечень компонентов здесь — жёсткое И: гоблин, у которого нет хотя бы
+    // одного, не сломается с шумом, а молча выпадет из мира и замрёт навсегда.
+    // Поэтому нрав и знакомых обязаны положить ВСЕ трое, кто заводит гоблина:
+    // расселение (GoblinSeeding), рождение (п.9 ниже) и чтение файла мира
+    // (server/WorldSave.cpp).
     auto goblinView =
         registry.view<AnimalComponent, AnimalGenomeComponent, GoblinDesireComponent, IdentityComponent,
                        MovementComponent, PositionComponent, GoblinComponent, FatigueComponent,
-                       KnowledgeComponent, CarriedComponent>();
+                       KnowledgeComponent, CarriedComponent, CharacterComponent, BondsComponent>();
     for (const auto entity : goblinView) {
         const auto& position = goblinView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
@@ -267,7 +326,9 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                   &goblinView.get<MovementComponent>(entity),
                                   &goblinView.get<FatigueComponent>(entity),
                                   &goblinView.get<KnowledgeComponent>(entity),
-                                  &goblinView.get<CarriedComponent>(entity)});
+                                  &goblinView.get<CarriedComponent>(entity),
+                                  &goblinView.get<CharacterComponent>(entity),
+                                  &goblinView.get<BondsComponent>(entity)});
     }
     // Гоблинов нет — делать системе нечего. В отличие от AnimalSystem, за
     // которой числится ещё и гниение падали, у этой своих обязанностей перед
@@ -306,6 +367,24 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     std::vector<ShareIntent> drinks;
     std::vector<StepIntent> steps;
     std::vector<MateIntent> matings;
+    std::vector<TalkIntent> talks;
+
+    // Кто рядом стоит — тем, что о нём видно со стороны (core/Talk.hpp).
+    // Список собирается ДО желаний, а не после, как пары: желание поговорить
+    // само зависит от того, есть ли рядом живая душа, и спросить об этом надо
+    // раньше, чем оно посчитано.
+    //
+    // "Жив" здесь пока значит "стоял живым в начале тика" — умереть от
+    // истощения гоблин может только в п.3, ниже. Для вопроса "есть ли кому
+    // сказать слово" этого довольно: тело на соседней клетке видно и тому, кто
+    // не знает, что оно последний тик доживает. А вот выбирать собеседника
+    // (п.4) полагается уже среди живых, и потому список правится между п.3 и
+    // п.4.
+    std::vector<Companion> companions;
+    companions.reserve(goblins.size());
+    for (const auto& goblin : goblins) {
+        companions.push_back(Companion{goblin.id, goblin.x, goblin.y, goblin.genome->species, true});
+    }
 
     // --- 3. Тело и желания ---
     // Отдельным проходом от решений (п.4) намеренно: гоблин, выбирая пару,
@@ -349,6 +428,25 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // заставляет возвращаться — помни гоблин вечно, ему хватило бы
         // одного обхода мира на всю жизнь (core/Knowledge.hpp).
         forget(*goblin.mind);
+
+        // И знакомства остывают — тем же законом и по той же причине
+        // (core/Bonds.hpp). Срок и смещение по идентификатору внутри: иначе
+        // все знакомства мира обрывались бы одним и тем же тиком.
+        coolBonds(*goblin.bonds, tick, goblin.id);
+
+        // Тоска по разговору копится у всякого живого — срок, а не дробь, по
+        // той же причине, что и позыв к паре. Скорость своя у каждого: она и
+        // есть общительность (talkStep, core/Character.hpp), и молчун (нрав 0)
+        // не заговорит первым никогда.
+        //
+        // Копится она и у того, кому не с кем говорить: тоска не спрашивает,
+        // есть ли рядом кто-нибудь. А вот ЖЕЛАНИЕМ она станет только при
+        // собеседнике (chooseGoblinDesire) — накопленное же не пропадает, и
+        // вышедший к своим после долгого одиночества заговаривает сразу.
+        if (paceBeat(tick, goblin.id, worldProperties.goblinPace)) {
+            desire.talking = std::min(
+                kFull, desire.talking + talkStep(worldProperties.goblinTalkUrge, goblin.nature->sociable));
+        }
 
         goblin.hunger = hungerOf(state, genome);
         goblin.thirst = thirstOf(state, genome);
@@ -402,11 +500,28 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             // Начатое надо доводить: незаконченный замысел держит сам по
             // себе, без всякой нехватки. Помнит гоблин свою площадку или
             // видит чужую — разницы нет, вкладываться можно во всякую.
-            if (building < kBuildUrge && recall(*goblin.mind, PlaceKind::Work, goblin.x, goblin.y) != nullptr) {
-                building = kBuildUrge;
+            //
+            // Вот этот, постоянный, позыв нрав и правит — в отличие от
+            // нехватки выше: доводить ли начатое, зависит от того, кто ты, а
+            // прохудившийся навес прохудился у всех одинаково.
+            const int keenOnWork = workUrgeOf(*goblin.nature, kBuildUrge, Topic::Work);
+            if (building < keenOnWork && recall(*goblin.mind, PlaceKind::Work, goblin.x, goblin.y) != nullptr) {
+                building = keenOnWork;
             }
         }
-        desire.current = chooseGoblinDesire(goblin, adult && content && canBearYoung, hasHome, building);
+        // Есть ли поблизости тот, к кому стоит подойти. Без этого тоска
+        // остаётся тоской и желанием не становится (core/Talk.hpp).
+        //
+        // Спрашивается ровно тем же законом, каким ниже (п.4) выбирается
+        // собеседник, а не более дешёвым "видно ли кого-нибудь": видеть можно
+        // и того, к кому идти не стоит, и тогда гоблин выбрал бы разговор, а
+        // в п.4 не нашёл бы с кем, — и застрял бы в нём, потому что тоска не
+        // тратится, а инерция держит.
+        const Talker talker{goblin.id,           goblin.x,       goblin.y,
+                            std::max(1, genome.perception), genome.species, goblin.nature->loyal};
+        const bool companionNear = chooseCompanion(talker, companions, *goblin.bonds).found;
+        desire.current =
+            chooseGoblinDesire(goblin, adult && content && canBearYoung, hasHome, building, companionNear);
     }
 
     // Возможная пара в том виде, в каком её видно со стороны
@@ -416,6 +531,12 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     // Хищником не назван никто: закон встречи различает диеты, потому что у
     // животных ими различаются виды, а гоблины все одной таблицы —
     // различает их племя, и оно едет в поле species.
+    // Кто из стоявших рядом дожил до решений. Правится здесь, а не при
+    // сборке списка: до п.3 этого не знал никто.
+    for (std::size_t g = 0; g < goblins.size(); ++g) {
+        companions[g].alive = alive[g];
+    }
+
     std::vector<MateCandidate> mates;
     for (std::size_t g = 0; g < goblins.size(); ++g) {
         mates.push_back(MateCandidate{goblins[g].id, goblins[g].x, goblins[g].y, goblins[g].genome->species,
@@ -985,6 +1106,35 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 }
                 break;
             }
+            case GoblinDesire::Talk: {
+                // К кому идти, решает нрав: постоянного тянет к знакомому,
+                // непостоянного — к новому лицу (core/Talk.hpp).
+                const Talker talker{goblin.id, goblin.x, goblin.y, reach, genome.species,
+                                     goblin.nature->loyal};
+                const TalkChoice companion = chooseCompanion(talker, companions, *goblin.bonds);
+                if (!companion.found) {
+                    break;
+                }
+                // Уже рядом — разговор состоялся. С кем именно, названо прямо
+                // в намерении: заговоривший выбрал сам, и переигрывать за него
+                // ниже было бы подменой.
+                if (withinTalk(goblin.x, goblin.y, companion.x, companion.y)) {
+                    talks.push_back(TalkIntent{static_cast<int>(g), goblin.id, companion.id});
+                    busy = true;
+                    break;
+                }
+                // Идут прямо, без волны дороги, — в отличие от пары. Дорога
+                // заведена там потому, что двое по разные стороны реки иначе
+                // простояли бы так до смерти, не оставив потомства. Здесь цена
+                // ошибки — скучающий гоблин, потоптавшийся у берега: разговор
+                // и так проигрывает всякому другому желанию, и первый же голод
+                // уведёт его прочь. Волна же пускалась бы куда чаще, чем за
+                // парой, — болтать хотят все и почти всегда.
+                targetX = companion.x;
+                targetY = companion.y;
+                hasTarget = true;
+                break;
+            }
             case GoblinDesire::Idle: break;
         }
 
@@ -1041,12 +1191,28 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // Лагерь этому не помеха, а опора: место притяжения (дом, куча,
         // навес) собирает племя туда, где ему хорошо, а тяга к своим не даёт
         // разбредаться тем, у кого дома ещё нет.
+        //
+        // Своим при этом считается сперва ЗНАКОМЫЙ, и только потом
+        // соплеменник. Это и есть та единственная строчка, ради которой связи
+        // вообще видны на карте: пока тянуло к племени, поселение было
+        // родовым по устройству мира, а не потому, что эти двадцать гоблинов
+        // сжились. Теперь оно складывается из тех, кто друг друга знает, — и
+        // может оказаться смешанным, если племена наговорились (kStrangerTribe
+        // делает это дорогим, но не запрещает).
+        //
+        // Порог "свой" берётся общий с вестями (kNewsWarmth, core/Bonds.hpp):
+        // шкала тепла одна, и заводить на ней второе имя для того же места
+        // значило бы подкручивать два числа там, где хватает одного.
         WalkHerd herd;
         {
             const int sightCells = std::max(1, genome.perception);
+            std::size_t closest = goblins.size();
+            int closestWarmth = 0;
+            int closestDistance = 0;
+            std::size_t kin = goblins.size();
             int kinDistance = 0;
             for (std::size_t b = 0; b < goblins.size(); ++b) {
-                if (b == g || !alive[b] || goblins[b].genome->species != genome.species) {
+                if (b == g || !alive[b]) {
                     continue;
                 }
                 const int dx = goblins[b].x - goblin.x;
@@ -1055,11 +1221,27 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 if (distance <= kHerdKeep * kHerdKeep || distance > sightCells * sightCells) {
                     continue;
                 }
-                if (herd.direction >= 0 && distance >= kinDistance) {
+                const int warmth = warmthTo(*goblin.bonds, goblins[b].id);
+                if (warmth >= kNewsWarmth &&
+                    (closest == goblins.size() || warmth > closestWarmth ||
+                     (warmth == closestWarmth && distance < closestDistance))) {
+                    closest = b;
+                    closestWarmth = warmth;
+                    closestDistance = distance;
+                }
+                if (goblins[b].genome->species != genome.species) {
                     continue;
                 }
-                herd = WalkHerd{walkDirectionTo(goblin.x, goblin.y, goblins[b].x, goblins[b].y), kHerdPull};
+                if (kin != goblins.size() && distance >= kinDistance) {
+                    continue;
+                }
+                kin = b;
                 kinDistance = distance;
+            }
+            const std::size_t pull = closest != goblins.size() ? closest : kin;
+            if (pull != goblins.size()) {
+                herd =
+                    WalkHerd{walkDirectionTo(goblin.x, goblin.y, goblins[pull].x, goblins[pull].y), kHerdPull};
             }
         }
 
@@ -1497,11 +1679,25 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             (motherGenome.species >= 0 && static_cast<std::size_t>(motherGenome.species) < archetypes.size())
                 ? archetypes[static_cast<std::size_t>(motherGenome.species)]
                 : motherGenome;
+        // Нрав племени — тем же номером и с той же оговоркой на случай, если
+        // список племён почему-то короче: длину проверяем, а не полагаемся на
+        // неё (см. GoblinTribesComponent).
+        const auto& natures = tribes.characters;
+        const CharacterComponent& natureArchetype =
+            (motherGenome.species >= 0 && static_cast<std::size_t>(motherGenome.species) < natures.size())
+                ? natures[static_cast<std::size_t>(motherGenome.species)]
+                : *mother.nature;
         // Скрещивание — общий закон (core/generation/AnimalGenetics.hpp), а
         // таблица черт своя: она и есть вся разница между гоблином и зверем
         // в наследовании.
         const AnimalGenomeComponent childGenome =
             crossGenomes(goblinTraits(), motherGenome, fatherGenome, archetype, mutationRate, random);
+        // Нрав наследуется своим законом, не бюджетом преимуществ: среднее
+        // родителей, дрейф — и назад в полосу племени
+        // (core/generation/GoblinCharacters.hpp).
+        const CharacterComponent childNature =
+            crossCharacters(*mother.nature, *father.nature, natureArchetype,
+                            worldProperties.goblinCharacterSpread, random);
 
         AnimalComponent child;
         child.growth = kNewbornGrowth;
@@ -1533,7 +1729,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         father.desire->current = GoblinDesire::Idle;
 
         const std::uint64_t childId = mixSeed(random, mixSeed(mother.id, tick));
-        commands.enqueue([child, childGenome, childId, x = mother.x, y = mother.y](World& w) {
+        commands.enqueue([child, childGenome, childNature, childId, x = mother.x,
+                          y = mother.y](World& w) {
             const auto entity = w.registry().create();
             w.registry().emplace<IdentityComponent>(entity, IdentityComponent{childId});
             w.registry().emplace<AnimalComponent>(entity, child);
@@ -1552,11 +1749,126 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             w.registry().emplace<KnowledgeComponent>(entity);
             // Руки пусты: новорождённый ничего не несёт.
             w.registry().emplace<CarriedComponent>(entity);
+            // Нрав — единственное, что ребёнок получает от родителей помимо
+            // тела: он не опыт, а то, с чем рождаются.
+            w.registry().emplace<CharacterComponent>(entity, childNature);
+            // Знакомых нет ни одного, включая собственную мать. Наследовать
+            // связи было бы наследованием чужих отношений, а они берутся
+            // встречами, не рождением. Мать он узнает так же, как всех: она
+            // рядом, и первый его разговор будет с нею.
+            w.registry().emplace<BondsComponent>(entity);
             // Проверять клетку не нужно: существо не занимает тайл
             // (04_WorldModel.md, п.4), поэтому ребёнок всегда помещается
             // рядом с матерью.
             w.place(entity, x, y);
         });
+    }
+
+    // --- 10. Разговоры: кто кому что сказал ---
+    // После шагов и встреч, но по положениям НАЧАЛА тика — тем же, по которым
+    // принималось решение подойти. Иначе разговор срывался бы оттого, что
+    // собеседник в этот же тик сделал шаг в сторону, а решение подойти было
+    // принято, когда он стоял рядом.
+    //
+    // Порядок — по имени заговорившего, а не по порядку намерений: тот
+    // зависит от обхода хранилища (02_CorePrinciples.md, п.12a).
+    std::sort(talks.begin(), talks.end(),
+              [](const TalkIntent& a, const TalkIntent& b) { return a.speakerId < b.speakerId; });
+    // Разговор занимает ОБОИХ, и потому отмечаются оба: болтун, обошедший за
+    // тик троих соседей, раздал бы втрое больше тепла, чем получил, а
+    // окликнутый успевал бы ответить каждому, ничего на это не потратив.
+    std::vector<bool> spoken(goblins.size(), false);
+    for (const auto& talk : talks) {
+        const auto speakerAt = static_cast<std::size_t>(talk.speaker);
+        if (!alive[speakerAt] || spoken[speakerAt]) {
+            continue;
+        }
+        std::size_t listenerAt = goblins.size();
+        for (std::size_t b = 0; b < goblins.size(); ++b) {
+            if (goblins[b].id == talk.listenerId) {
+                listenerAt = b;
+                break;
+            }
+        }
+        if (listenerAt == goblins.size() || listenerAt == speakerAt || !alive[listenerAt] ||
+            spoken[listenerAt]) {
+            continue;
+        }
+        spoken[speakerAt] = true;
+        spoken[listenerAt] = true;
+
+        const Goblin& speaker = goblins[speakerAt];
+        const Goblin& listener = goblins[listenerAt];
+        std::uint64_t random = mixSeed(goblinSeed, mixSeed(tick, mixSeed(speaker.id, listener.id)));
+
+        // Всё, что говорящий решает, он решает по тому, кем окликнутый был ДО
+        // этого разговора: рассказывают и делятся по прежнему знакомству, а не
+        // по тому, каким оно станет мгновением позже. Оттого и снимается здесь,
+        // до всякого потепления, — и значениями, а не указателями: warmTo ниже
+        // перекладывает знакомства в голове, и всякий указатель в неё после
+        // этого врёт.
+        const int closeness = warmthTo(*speaker.bonds, listener.id);
+        const Topic topic = chooseTopic(*speaker.nature, *speaker.mind, *speaker.bonds, speaker.x, speaker.y,
+                                         closeness, random);
+        const PlaceKind toldKind = placeOf(topic);
+        KnownPlace toldPlace{};
+        bool told = false;
+        if (toldKind != PlaceKind::None) {
+            if (const KnownPlace* known = recall(*speaker.mind, toldKind, speaker.x, speaker.y)) {
+                toldPlace = *known;
+                told = true;
+            }
+        }
+        std::uint64_t praisedId = 0;
+        if (topic == Topic::Kin) {
+            if (const Acquaintance* praised = closestFace(*speaker.bonds)) {
+                praisedId = praised->id;
+            }
+        }
+
+        // Тепло — обоим, и каждому по обаянию ДРУГОГО: обаяние есть то, что
+        // существо оставляет, а не то, что чувствует (core/Bonds.hpp).
+        warmTo(*listener.bonds, speaker.id, warmthFrom(speaker.nature->charming));
+        warmTo(*speaker.bonds, listener.id, warmthFrom(listener.nature->charming));
+
+        if (told) {
+            // Слух ложится тем же вызовом, что и своё воспоминание, — и в этом
+            // весь расчёт: правило вытеснения (core/Knowledge.hpp) само не даст
+            // чужому слову выбить из головы место, на котором гоблин бывал.
+            remember(*listener.mind, toldPlace.kind, toldPlace.x, toldPlace.y,
+                     hearsayGain(interestIn(*listener.nature, topic)));
+        } else if (praisedId != 0 && praisedId != listener.id) {
+            // Доброе слово о третьем: слушатель теплеет к тому, кого ещё не
+            // встречал. Так тепло уходит дальше пары говорящих.
+            warmTo(*listener.bonds, praisedId, kGoodWord);
+        }
+
+        // И ноша — но только между своими, и только у того, у кого она есть.
+        // Порог выше, чем у вестей, намеренно: сказать, где ягодник, дешевле,
+        // чем отдать горсть ягод, и порядок знакомства этим и держится.
+        //
+        // Половина того, что в руках, а не всё: делятся, а не отдают. Больше
+        // руки окликнутого всё равно не примут (carryRoom, core/Carry.hpp),
+        // поэтому берут сразу столько, сколько влезет: остаток иначе пропал бы
+        // между двумя вызовами.
+        if (closeness >= kShareWarmth) {
+            const int listenerSize = bodySize(*listener.state, *listener.genome);
+            const int inHands = speaker.hands->carried.of(ResourceKind::Food);
+            const int given = std::min(inHands / 2, carryRoom(*listener.hands, listenerSize));
+            if (given > 0) {
+                const Portion shared = takeFromHands(*speaker.hands, ResourceKind::Food, given);
+                putInHands(*listener.hands, ResourceKind::Food, shared, listenerSize);
+            }
+        }
+
+        // Тоска утолена у обоих: окликнутому тоже больше не с чего скучать.
+        speaker.desire->talking = 0;
+        listener.desire->talking = 0;
+        // А вот занятие меняется только у заговорившего. Окликнутому его не
+        // сбрасывают намеренно: он разговора не выбирал, и терять из-за него
+        // начатое дело значило бы позволить болтуну сбивать с работы всё
+        // поселение.
+        speaker.desire->current = GoblinDesire::Idle;
     }
 }
 
@@ -1613,6 +1925,35 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({m, "kDisappointLoss", kDisappointLoss});
     out.push_back({m, "kRecallDistance", kRecallDistance});
     out.push_back({m, "kRestReturn", kRestReturn});
+
+    // Нрав (core/Character.hpp) — два размаха, и смотреть на них надо рядом:
+    // ими и разделены уровень (трудолюбие) и направление (склонность).
+    constexpr const char* h = "Goblins (character)";
+    out.push_back({h, "kDiligenceSwing", kDiligenceSwing});
+    out.push_back({h, "kInterestSwing", kInterestSwing});
+    out.push_back({h, "kTribeSpread", kTribeSpread});
+    out.push_back({h, "kTribeMark", kTribeMark});
+    out.push_back({h, "kCharacterDrift", kCharacterDrift});
+
+    // Связи (core/Bonds.hpp) — прибавка, остывание и два порога знакомства на
+    // одной шкале: подбираются друг против друга и порознь не значат ничего.
+    constexpr const char* f = "Goblins (bonds)";
+    out.push_back({f, "kKnownFaces", static_cast<float>(kKnownFaces)});
+    out.push_back({f, "kWarmGain", kWarmGain});
+    out.push_back({f, "kCharmSwing", kCharmSwing});
+    out.push_back({f, "kCoolPeriod", static_cast<float>(kCoolPeriod)});
+    out.push_back({f, "kNewsWarmth", kNewsWarmth});
+    out.push_back({f, "kShareWarmth", kShareWarmth});
+
+    // Разговор (core/Talk.hpp): к кому подойти и что от этого останется.
+    constexpr const char* t = "Goblins (talk)";
+    out.push_back({t, "kTalkRange", static_cast<float>(kTalkRange)});
+    out.push_back({t, "kTalkNear", kTalkNear});
+    out.push_back({t, "kTalkDistance", kTalkDistance});
+    out.push_back({t, "kTalkNovelty", kTalkNovelty});
+    out.push_back({t, "kStrangerTribe", kStrangerTribe});
+    out.push_back({t, "kHearsayFull", kHearsayFull});
+    out.push_back({t, "kGoodWord", kGoodWord});
 }
 
 } // namespace goblins

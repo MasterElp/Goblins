@@ -624,6 +624,22 @@ void NetworkClient::applyWatched(const nlohmann::json& message) {
         }
     }
 
+    parsed.faces.clear();
+    if (watched.contains("faces") && watched["faces"].is_array()) {
+        for (const auto& face : watched["faces"]) {
+            if (!face.is_object()) {
+                continue;
+            }
+            WorldState::Watched::Face known;
+            known.id = face.value("id", static_cast<std::uint64_t>(0));
+            known.warmth = face.value("warmth", 0);
+            known.placed = face.contains("x") && face.contains("y");
+            known.x = face.value("x", 0);
+            known.y = face.value("y", 0);
+            parsed.faces.push_back(known);
+        }
+    }
+
     parsed.rest.clear();
     if (watched.contains("rest") && watched["rest"].is_array()) {
         const auto& triples = watched["rest"];

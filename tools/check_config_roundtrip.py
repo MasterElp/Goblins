@@ -56,7 +56,8 @@ PROBE = {
     "animals": {"herbivore_species": 5, "predator_species": 4,
                 "herbivore_count": 211, "predator_count": 31, "mutation_rate": 175,
                 "herbivore_pace": 6400, "predator_pace": 7500},
-    "goblins": {"tribes": 5, "count": 147, "mutation_rate": 188, "pace": 8600},
+    "goblins": {"tribes": 5, "count": 147, "mutation_rate": 188, "pace": 8600,
+                "character_spread": 720, "talk_urge": 47},
 }
 
 

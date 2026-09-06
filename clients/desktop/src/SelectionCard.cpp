@@ -38,7 +38,7 @@ int rowsFor(InfoPanel::Target::Kind kind) {
         case InfoPanel::Target::Kind::Animal:
             return 3; // пол с желанием, целость, взрослость
         case InfoPanel::Target::Kind::Goblin:
-            return 6; // то же плюс усталость и ноша
+            return 7; // то же плюс усталость, ноша и ближайший знакомый
         case InfoPanel::Target::Kind::Plant:
             return 2; // развитость и влажность клетки
         case InfoPanel::Target::Kind::Soil:
@@ -179,6 +179,30 @@ void draw(const WorldState& state, const InfoPanel::Target& target, Rectangle bo
                                : TextFormat("carries %.1f food   %.1f material", goblin->carried,
                                             goblin->material),
                          static_cast<int>(x), static_cast<int>(y), kFont, empty ? kMutedColor : kValueColor);
+                y += kRow;
+                // Самый близкий знакомый — строкой, а не полосой: важно не
+                // само число, а есть ли вообще кто-то, к кому этот гоблин
+                // тянется. Пустая строка здесь такой же ответ, как и полная:
+                // одиночка в поселении виден только так.
+                //
+                // Берётся из ответа сервера про наблюдаемого, поэтому у
+                // только что выбранного строка пуста до первого ответа — как
+                // и строка занятия выше.
+                const WorldState::Watched::Face* closest = nullptr;
+                if (InfoPanel::watchedMatches(state, target)) {
+                    for (const auto& face : state.watched.faces) {
+                        if (closest == nullptr || face.warmth > closest->warmth) {
+                            closest = &face;
+                        }
+                    }
+                }
+                DrawText(closest == nullptr
+                             ? "knows no one closely"
+                             : TextFormat("closest #%04llx   %d%%",
+                                          static_cast<unsigned long long>(closest->id & 0xFFFFull),
+                                          closest->warmth),
+                         static_cast<int>(x), static_cast<int>(y), kFont,
+                         closest == nullptr ? kMutedColor : kValueColor);
                 y += kRow;
             }
             break;

@@ -7,7 +7,9 @@
 #include "core/Scale.hpp"
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
+#include "core/components/BondsComponent.hpp"
 #include "core/components/CarriedComponent.hpp"
+#include "core/components/CharacterComponent.hpp"
 #include "core/components/FatigueComponent.hpp"
 #include "core/components/GoblinComponent.hpp"
 #include "core/components/GoblinDesireComponent.hpp"
@@ -22,6 +24,7 @@
 #include "core/components/WaterComponent.hpp"
 #include "core/components/WorldPropertiesComponent.hpp"
 #include "core/generation/AnimalGenetics.hpp"
+#include "core/generation/GoblinCharacters.hpp"
 #include "core/generation/GoblinGenetics.hpp"
 #include "core/generation/Nest.hpp"
 #include "core/Diagnostics.hpp"
@@ -104,6 +107,8 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
     worldProperties.goblinMutationRate = params.mutationRate;
     worldProperties.goblinPace = params.pace;
     worldProperties.goblinRandomSeed = seed;
+    worldProperties.goblinCharacterSpread = params.characterSpread;
+    worldProperties.goblinTalkUrge = params.talkUrge;
     // Целая настройка мира — дробная доля для раскладов бюджета
     // (core/Scale.hpp): расклад дробен, потому что он генерация, а не
     // состояние мира.
@@ -112,6 +117,12 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
     // --- Племена: архетипы на World Entity (см. GoblinTribesComponent) ---
     auto& tribesComponent = world.registry().get<GoblinTribesComponent>(world.worldEntity());
     tribesComponent.tribes = makeGoblinTribes(params.tribes, static_cast<std::uint64_t>(seed));
+    // Нрав племени — тем же числом племён, что и геном, и потому от УЖЕ
+    // полученного списка, а не от params.tribes: makeGoblinTribes обрезает
+    // число к своим границам, и спроси мы дважды у настройки, списки разошлись
+    // бы длиной ровно на выходящих за границу племенах.
+    tribesComponent.characters =
+        makeGoblinCharacters(static_cast<int>(tribesComponent.tribes.size()), static_cast<std::uint64_t>(seed));
     if (tribesComponent.tribes.empty() || params.count <= 0) {
         return;
     }
@@ -128,6 +139,7 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
     int placed = 0;
     for (std::size_t tribeIndex = 0; tribeIndex < tribesComponent.tribes.size(); ++tribeIndex) {
         const auto& archetype = tribesComponent.tribes[tribeIndex];
+        const auto& nature = tribesComponent.characters[tribeIndex];
 
         // Центр племени выбирается придирчиво: рядом обязан быть ягодник.
         // От этой клетки зависит, где племя проживёт первые сотни тиков и
@@ -218,6 +230,15 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
             // при этом обязателен — GoblinSystem выбирает существ по нему в
             // том числе, и гоблин без рук просто перестал бы жить.
             world.registry().emplace<CarriedComponent>(entity);
+            // Нрав — от племени, с личным отклонением: одинаковыми
+            // соплеменники быть не должны, но и чужими друг другу тоже
+            // (core/generation/GoblinCharacters.hpp).
+            world.registry().emplace<CharacterComponent>(
+                entity, spreadCharacter(nature, params.characterSpread, state));
+            // Знакомых нет: расставленный гоблин ещё ни с кем не говорил.
+            // Компонент при этом обязателен по той же причине, что и руки, —
+            // GoblinSystem выбирает существ по нему в том числе.
+            world.registry().emplace<BondsComponent>(entity);
             world.place(entity, x, y);
 
             ++placed;

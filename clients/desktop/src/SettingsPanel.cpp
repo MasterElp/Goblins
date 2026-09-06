@@ -222,6 +222,11 @@ void layoutParams(Ops& ops, goblins::RegenerationRequest& edited, bool& customAr
     // наследственных изменений у разумных не обязана совпадать со звериной.
     ops.intRow("Mutation rate (per mille)", edited.goblins.mutation_rate, 0, 300);
     ops.intRow("Pace (x1000)", edited.goblins.pace, 100, 50000);
+    // Нрав — двумя ручками, и обе независимы. Разброс: ноль — племя из
+    // одинаковых, тысяча — от молчуна до болтуна в одном племени. Тоска:
+    // ноль — в мире не разговаривают вовсе.
+    ops.intRow("Character spread (per mille)", edited.goblins.character_spread, 0, 1000);
+    ops.intRow("Talk urge (per beat)", edited.goblins.talk_urge, 0, 100);
 }
 
 // Только считает высоту, ничего не рисует — используется до

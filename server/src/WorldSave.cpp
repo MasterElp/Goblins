@@ -19,7 +19,9 @@
 #include "core/components/AnimalComponent.hpp"
 #include "core/components/AnimalGenomeComponent.hpp"
 #include "core/components/AnimalSpeciesComponent.hpp"
+#include "core/components/BondsComponent.hpp"
 #include "core/components/CarcassComponent.hpp"
+#include "core/components/CharacterComponent.hpp"
 #include "core/components/DesireComponent.hpp"
 #include "core/components/HeightComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
@@ -106,6 +108,44 @@ nlohmann::json genomeToJson(const Genome& genome, const genetics::Trait<Genome> 
         record[trait.name] = genome.*trait.gene;
     }
     return record;
+}
+
+// Нрав — одним помощником на оба места, где он записывается: у племени и у
+// самого гоблина. Склонности пишутся ПО ИМЕНАМ тем, а не порядком в массиве
+// (тот же приём, что у ресурсов): новая тема доедет сама, а вставленная в
+// середину не перепутает старые.
+nlohmann::json characterToJson(const CharacterComponent& nature) {
+    auto interest = nlohmann::json::object();
+    for (int slot = 0; slot < kTopicCount; ++slot) {
+        interest[topicName(static_cast<Topic>(slot))] = nature.interest[static_cast<std::size_t>(slot)];
+    }
+    return {{"sociable", nature.sociable},
+            {"loyal", nature.loyal},
+            {"diligent", nature.diligent},
+            {"charming", nature.charming},
+            {"interest", std::move(interest)}};
+}
+
+// Чего в записи нет — то середина шкалы, а не ноль. Ноль здесь означает край
+// нрава (молчун, лентяй), и подставлять его миру, записанному до появления
+// нрава, значило бы объявить всех его гоблинов молчаливыми лентяями.
+CharacterComponent characterFromJson(const nlohmann::json& record) {
+    CharacterComponent nature;
+    if (!record.is_object()) {
+        return nature;
+    }
+    nature.sociable = record.value("sociable", nature.sociable);
+    nature.loyal = record.value("loyal", nature.loyal);
+    nature.diligent = record.value("diligent", nature.diligent);
+    nature.charming = record.value("charming", nature.charming);
+    if (record.contains("interest") && record["interest"].is_object()) {
+        const auto& interest = record["interest"];
+        for (int slot = 0; slot < kTopicCount; ++slot) {
+            const auto at = static_cast<std::size_t>(slot);
+            nature.interest[at] = interest.value(topicName(static_cast<Topic>(slot)), nature.interest[at]);
+        }
+    }
+    return nature;
 }
 
 template <typename Genome, std::size_t N>
@@ -222,6 +262,11 @@ struct ParsedEntity {
     bool goblin = false;
     FatigueComponent fatigue{};
     KnowledgeComponent goblinMind{};
+    // Нрав и знакомые. Умолчания здесь не пустые, а средние (см.
+    // CharacterComponent): гоблин из файла, записанного до нрава, обязан
+    // открыться обычным, а не молчаливым лентяем.
+    CharacterComponent goblinNature{};
+    BondsComponent goblinBonds{};
     AnimalComponent animal{};
     AnimalGenomeComponent animalGenome{};
     DesireComponent desire{};
@@ -269,6 +314,10 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           // было нечем — гоблин выглядит гоблином.
                                           {"goblin_mutation_rate", worldProperties->goblinMutationRate},
                                           {"goblin_random_seed", worldProperties->goblinRandomSeed},
+                                          // Нрав: разброс особей внутри племени и скорость, с какой
+                                          // копится тоска по разговору (core/Character.hpp).
+                                          {"goblin_character_spread", worldProperties->goblinCharacterSpread},
+                                          {"goblin_talk_urge", worldProperties->goblinTalkUrge},
                                           // Долголетие каждой породы: свойство мира, а не генома, и
                                           // потому живёт здесь, а не в чертах.
                                           {"grass_pace", worldProperties->grassPace},
@@ -320,6 +369,15 @@ nlohmann::json buildEntitiesJson(const World& world) {
                 archetypes.push_back(genomeToJson(archetype, kGoblinTraits));
             }
             record["goblin_tribes"] = std::move(archetypes);
+            // Нрав племени — вторым списком той же длины. Без него загруженный
+            // мир получил бы племена, неотличимые нравом, и дети принялись бы
+            // дрейфовать вокруг середины шкалы вместо своего племени
+            // (crossCharacters, core/generation/GoblinCharacters.hpp).
+            auto natures = nlohmann::json::array();
+            for (const auto& nature : tribes->characters) {
+                natures.push_back(characterToJson(nature));
+            }
+            record["goblin_tribe_characters"] = std::move(natures);
         }
         if (const auto* position = registry.try_get<PositionComponent>(entity)) {
             record["position"] = {{"x", position->x}, {"y", position->y}};
@@ -466,6 +524,28 @@ nlohmann::json buildEntitiesJson(const World& world) {
                 record["knows"] = std::move(places);
             }
         }
+        if (const auto* nature = registry.try_get<CharacterComponent>(entity)) {
+            // Нрав — состояние мира, и притом единственное несменяемое: тело
+            // стареет, память тает, знакомства остывают, а нрав остаётся тем
+            // же от рождения до смерти. Не записать его — значит открыть мир,
+            // в котором те же гоблины ведут себя иначе.
+            record["character"] = characterToJson(*nature);
+        }
+        if (const auto* bonds = registry.try_get<BondsComponent>(entity)) {
+            // Знакомства — по тем же правилам, что и память мест: пустые не
+            // пишутся, их незачем возить. Записываются именно ИДЕНТИФИКАТОРЫ:
+            // Entity после загрузки будет другим, а имя в мире остаётся тем же.
+            auto faces = nlohmann::json::array();
+            for (const auto& face : bonds->faces) {
+                if (face.id == 0 || face.warmth <= 0) {
+                    continue;
+                }
+                faces.push_back({{"id", face.id}, {"warmth", face.warmth}});
+            }
+            if (!faces.empty()) {
+                record["faces"] = std::move(faces);
+            }
+        }
         if (const auto* animal = registry.try_get<AnimalComponent>(entity)) {
             record["animal"] = {{"age", animal->age},
                                  {"growth", animal->growth},
@@ -501,6 +581,7 @@ nlohmann::json buildEntitiesJson(const World& world) {
         // "food" в двух этих ключах означает разные законы.
         if (const auto* desire = registry.try_get<GoblinDesireComponent>(entity)) {
             record["goblin_desire"] = {{"mating", desire->mating},
+                                        {"talking", desire->talking},
                                         {"current", goblinDesireName(desire->current)}};
         }
         if (const auto* identity = registry.try_get<IdentityComponent>(entity)) {
@@ -608,6 +689,14 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("goblin_mutation_rate", 60);
             parsed.worldProperties.goblinRandomSeed =
                 record["world_properties"].value("goblin_random_seed", 0u);
+            // Мир, записанный до появления нрава, откроется с нынешними
+            // умолчаниями — иначе в нём никто не заговорил бы вовсе, и
+            // старый мир пришлось бы чинить руками, чтобы он ожил.
+            parsed.worldProperties.goblinCharacterSpread =
+                record["world_properties"].value("goblin_character_spread",
+                                                  parsed.worldProperties.goblinCharacterSpread);
+            parsed.worldProperties.goblinTalkUrge = record["world_properties"].value(
+                "goblin_talk_urge", parsed.worldProperties.goblinTalkUrge);
             // Мир из старого файла жил по геному без множителя — значит его
             // долголетие равно kFull, а не нынешнему умолчанию. Подставить
             // сюда десятку значило бы втихую растянуть чужому миру жизнь
@@ -693,6 +782,17 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                         genomeFromJson<AnimalGenomeComponent>(archetype, kGoblinTraits));
                 }
             }
+            if (record.contains("goblin_tribe_characters") && record["goblin_tribe_characters"].is_array()) {
+                for (const auto& nature : record["goblin_tribe_characters"]) {
+                    parsed.goblinTribes.characters.push_back(characterFromJson(nature));
+                }
+            }
+            // Длины двух списков обязаны совпадать: берутся они одним номером
+            // племени (GoblinTribesComponent). У файла, записанного до нрава,
+            // второго списка нет вовсе — дополняем серединой шкалы, а не
+            // оставляем короче: короткий список означал бы, что часть племён
+            // молча остаётся без нрава.
+            parsed.goblinTribes.characters.resize(parsed.goblinTribes.tribes.size());
         }
         if (record.contains("position")) {
             parsed.hasPosition = true;
@@ -830,6 +930,20 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             }
         }
 
+        if (record.contains("character")) {
+            parsed.goblinNature = characterFromJson(record["character"]);
+        }
+        if (record.contains("faces") && record["faces"].is_array()) {
+            std::size_t slot = 0;
+            for (const auto& face : record["faces"]) {
+                if (slot >= parsed.goblinBonds.faces.size() || !face.is_object()) {
+                    break;
+                }
+                parsed.goblinBonds.faces[slot++] =
+                    Acquaintance{face.value("id", static_cast<std::uint64_t>(0)), face.value("warmth", 0)};
+            }
+        }
+
         const char* bodyKey = record.contains("animal") ? "animal" : (legacyBody ? "herbivore" : nullptr);
         if (bodyKey != nullptr) {
             parsed.hasAnimal = true;
@@ -876,6 +990,7 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             if (record.contains("goblin_desire")) {
                 const auto& desire = record["goblin_desire"];
                 parsed.goblinDesire.mating = desire.value("mating", 0);
+                parsed.goblinDesire.talking = desire.value("talking", 0);
                 parsed.goblinDesire.current =
                     goblinDesireFromName(desire.value("current", std::string("idle")));
             }
@@ -1589,6 +1704,14 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             // молча, и в мире, открытом из старого файла, где ноши ещё не
             // было вовсе.
             world.registry().emplace<CarriedComponent>(entity, parsed.carried);
+            // Нрав и знакомые — по той же причине обязательны, что руки и
+            // усталость: GoblinSystem выбирает существ перечнем компонентов, и
+            // гоблин без нрава не сломался бы с шумом, а молча выпал бы из
+            // мира. Мир, записанный до нрава, открывается с обычными
+            // гоблинами и пустыми знакомствами — то есть ровно тем, чем он и
+            // был: миром, где нрава не было.
+            world.registry().emplace<CharacterComponent>(entity, parsed.goblinNature);
+            world.registry().emplace<BondsComponent>(entity, parsed.goblinBonds);
         } else if (parsed.hasAnimal) {
             world.registry().emplace<AnimalComponent>(entity, parsed.animal);
             world.registry().emplace<AnimalGenomeComponent>(entity, parsed.animalGenome);

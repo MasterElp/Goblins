@@ -1163,6 +1163,33 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         //
         // Цвет говорит, чем место было хорошо, толщина — насколько твёрдо
         // помнится: выцветающее кольцо и есть забывание (core/Knowledge.hpp).
+        // Связи наблюдаемого — ниткой к каждому знакомому, который ещё в
+        // мире. Это единственное, чем связь вообще видна: число в панели
+        // говорит, что знакомство есть, а нитка — что оно ведёт вон туда, к
+        // тому, за кем гоблин сейчас идёт мимо еды.
+        //
+        // Толщина и плотность — по теплу: холодное знакомство едва заметно,
+        // близкое читается сразу. Рисуется ПОД кольцами памяти: места гоблин
+        // выбирает сам, а знакомые — фон, на котором он их выбирает.
+        if (snapshot.watched.kind == "goblin" && !snapshot.watched.faces.empty()) {
+            const WorldState::Goblin* watchedGoblin = InfoPanel::findGoblin(snapshot, snapshot.watched.id);
+            if (watchedGoblin != nullptr) {
+                const Vector2 from{(static_cast<float>(watchedGoblin->x) + 0.5f) * tileSizeF - viewX,
+                                    (static_cast<float>(watchedGoblin->y) + 0.5f) * tileSizeF - viewY +
+                                        kHudHeight};
+                for (const auto& face : snapshot.watched.faces) {
+                    if (!face.placed) {
+                        continue;
+                    }
+                    const Vector2 to{(static_cast<float>(face.x) + 0.5f) * tileSizeF - viewX,
+                                      (static_cast<float>(face.y) + 0.5f) * tileSizeF - viewY + kHudHeight};
+                    const int warmth = std::clamp(face.warmth, 0, 100);
+                    DrawLineEx(from, to, 1.0f + static_cast<float>(warmth) / 60.0f,
+                               Color{240, 190, 120, static_cast<unsigned char>(40 + warmth * 2)});
+                }
+            }
+        }
+
         if (snapshot.watched.kind == "goblin" && !snapshot.watched.knows.empty()) {
             for (const auto& known : snapshot.watched.knows) {
                 const float screenX = static_cast<float>(known.x) * tileSizeF - viewX;

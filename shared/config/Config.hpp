@@ -278,8 +278,21 @@ struct GoblinConfig {
     // той же самой жизни, значит растягиваются во столько же раз. Число
     // потомков за жизнь остаётся тем же, растягивается только время.
     int pace = 10000;
+
+    // Насколько особи внутри племени расходятся нравом
+    // (core/generation/GoblinCharacters.hpp) — полная ширина полосы вокруг
+    // нрава племени, в тысячных. Ноль — все в племени одинаковы; это законный
+    // мир, с которого удобно смотреть, что даёт сам нрав племени.
+    int character_spread = 400;
+
+    // С какой скоростью у гоблина средней общительности растёт желание
+    // поговорить — за удар пульса. Ноль выключает разговоры во всём мире
+    // целиком, и это рабочее положение, а не запасное: им снимается вторая
+    // половина машинной сверки (мир с разговорами против мира без них).
+    int talk_urge = 20;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GoblinConfig, tribes, count, mutation_rate, pace)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GoblinConfig, tribes, count, mutation_rate, pace,
+                                    character_spread, talk_urge)
 
 struct ServerConfig {
     std::string host = "127.0.0.1";
