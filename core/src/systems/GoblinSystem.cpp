@@ -1304,8 +1304,15 @@ void GoblinSystem(World& world, CommandQueue& commands) {
 
         int eatenTotal = 0;
         int releasedTotal = 0;
+        // Остатки бегут по кругу: выданное вычитается из обоих чисел, иначе
+        // доли, посчитанные от полного наличия, в него не сложатся
+        // (core/Share.hpp).
+        int shareLeft = edible;
+        int demandLeft = demand;
         for (std::size_t k = n; k < m; ++k) {
-            const int eaten = shareOf(bites[k].want, edible, demand);
+            const int eaten = shareOf(bites[k].want, shareLeft, demandLeft);
+            shareLeft -= eaten;
+            demandLeft -= bites[k].want;
             if (eaten <= 0) {
                 continue;
             }
@@ -1354,8 +1361,14 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         }
 
         const int berriesBefore = berries->berries;
+        // Остатки бегут по кругу (core/Share.hpp). Ягоды — счёт штучный, и
+        // без этого две ягоды на троих доставались бы НИКОМУ.
+        int shareLeft = berriesBefore;
+        int demandLeft = demand;
         for (std::size_t k = n; k < m; ++k) {
-            const int share = shareOf(picks[k].want, berriesBefore, demand);
+            const int share = shareOf(picks[k].want, shareLeft, demandLeft);
+            shareLeft -= share;
+            demandLeft -= picks[k].want;
             if (share <= 0) {
                 continue;
             }
@@ -1414,8 +1427,13 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         }
 
         const int foodBefore = store->stored.of(ResourceKind::Food);
+        // Остатки бегут по кругу (core/Share.hpp).
+        int shareLeft = foodBefore;
+        int demandLeft = demand;
         for (std::size_t k = n; k < m; ++k) {
-            const int share = shareOf(scoops[k].want, foodBefore, demand);
+            const int share = shareOf(scoops[k].want, shareLeft, demandLeft);
+            shareLeft -= share;
+            demandLeft -= scoops[k].want;
             if (share <= 0) {
                 continue;
             }
@@ -1456,8 +1474,13 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // Ниже kHarvestMinGrowth не обдирают: с ободранного до нуля куста
         // нечего будет взять и в следующий раз, а лагерю жить здесь долго.
         const int available = std::max(0, plant->growth - kHarvestMinGrowth);
+        // Остатки бегут по кругу (core/Share.hpp).
+        int shareLeft = available;
+        int demandLeft = demand;
         for (std::size_t k = n; k < m; ++k) {
-            const int share = shareOf(harvests[k].want, available, demand);
+            const int share = shareOf(harvests[k].want, shareLeft, demandLeft);
+            shareLeft -= share;
+            demandLeft -= harvests[k].want;
             if (share <= 0) {
                 continue;
             }
@@ -1565,8 +1588,13 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         }
 
         const int meatBefore = carcass->meat;
+        // Остатки бегут по кругу (core/Share.hpp).
+        int shareLeft = meatBefore;
+        int demandLeft = demand;
         for (std::size_t k = n; k < m; ++k) {
-            const int eaten = shareOf(meals[k].want, meatBefore, demand);
+            const int eaten = shareOf(meals[k].want, shareLeft, demandLeft);
+            shareLeft -= eaten;
+            demandLeft -= meals[k].want;
             if (eaten <= 0) {
                 continue;
             }

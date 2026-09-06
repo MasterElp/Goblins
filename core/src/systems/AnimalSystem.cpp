@@ -1414,8 +1414,15 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // отдаёт свои крупицы здесь и сейчас, ровно по разу каждую.
         int eatenTotal = 0;
         int releasedTotal = 0;
+        // Остатки бегут по кругу: выданное вычитается из обоих чисел, иначе
+        // доли, посчитанные от полного наличия, в него не сложатся
+        // (core/Share.hpp).
+        int shareLeft = edible;
+        int demandLeft = demand;
         for (std::size_t k = n; k < m; ++k) {
-            const int eaten = shareOf(bites[k].want, edible, demand);
+            const int eaten = shareOf(bites[k].want, shareLeft, demandLeft);
+            shareLeft -= eaten;
+            demandLeft -= bites[k].want;
             if (eaten <= 0) {
                 continue;
             }
@@ -1470,8 +1477,13 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
         const int meatBefore = carcass->meat;
 
+        // Остатки бегут по кругу (core/Share.hpp).
+        int shareLeft = meatBefore;
+        int demandLeft = demand;
         for (std::size_t k = n; k < m; ++k) {
-            const int eaten = shareOf(meals[k].want, meatBefore, demand);
+            const int eaten = shareOf(meals[k].want, shareLeft, demandLeft);
+            shareLeft -= eaten;
+            demandLeft -= meals[k].want;
             if (eaten <= 0) {
                 continue;
             }
