@@ -1684,8 +1684,7 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
         if (parsed.hasAnimal && parsed.goblin) {
             // Гоблин: то же тело и тот же тип генома, но своё желание и свой
             // тег. Диеты у него нет — он всеяден, и тега для этого не нужно
-            // (см. GoblinComponent). Увечий тоже нет: рогов на него никто не
-            // наставляет.
+            // (см. GoblinComponent).
             world.registry().emplace<AnimalComponent>(entity, parsed.animal);
             world.registry().emplace<AnimalGenomeComponent>(entity, parsed.animalGenome);
             world.registry().emplace<GoblinDesireComponent>(entity, parsed.goblinDesire);
@@ -1694,6 +1693,12 @@ bool loadWorld(World& world, const std::string& name, const std::filesystem::pat
             // шесть последних шагов — это походка, а не мир.
             world.registry().emplace<MovementComponent>(entity);
             world.registry().emplace<GoblinComponent>(entity);
+            // Увечье. В файле не лежит по той же причине, по какой не лежит у
+            // зверя: срок хромоты — не мир, а несколько ближайших тиков.
+            // Компонент при этом обязателен — с тех пор как хищник видит
+            // гоблина, дерутся все, и гоблин без увечья выпал бы из обеих
+            // систем молча.
+            world.registry().emplace<InjuryComponent>(entity);
             // Усталость — своим компонентом, и она обязательна: GoblinSystem
             // выбирает существ по нему в том числе, и гоблин без сил просто
             // перестал бы жить — молча, и в мире, открытом из старого файла.

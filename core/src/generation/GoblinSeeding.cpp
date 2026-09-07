@@ -15,6 +15,7 @@
 #include "core/components/GoblinDesireComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
+#include "core/components/InjuryComponent.hpp"
 #include "core/components/KnowledgeComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/BushComponent.hpp"
@@ -221,6 +222,11 @@ void seedGoblins(World& world, const GoblinParams& params, unsigned seed) {
             // Память ног пуста: расставленный гоблин ещё никуда не ходил.
             world.registry().emplace<MovementComponent>(entity);
             world.registry().emplace<GoblinComponent>(entity);
+            // Цел: расставленный гоблин ещё ни с кем не дрался. Компонент при
+            // этом обязателен — с тех пор как хищник его видит, увечье стало
+            // общим для всего живого, и гоблин без него просто выпал бы из
+            // обеих систем, которые выбирают существ перечнем компонентов.
+            world.registry().emplace<InjuryComponent>(entity);
             // Силы полны: расставленный гоблин ещё никуда не ходил.
             world.registry().emplace<FatigueComponent>(entity);
             // Память пуста: расставленный гоблин ещё нигде не был. Мир он узнает

@@ -1211,6 +1211,15 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                     // недоделанное место должно узнаваться одним цветом
                     // всюду, где о нём заходит речь.
                     color = Color{130, 165, 190, 255};
+                } else if (known.kind == "mate") {
+                    // Место встреч — не про то, что там лежит, а про то, кто
+                    // там был; цвет ему поэтому не из палитры добычи, а свой.
+                    color = Color{215, 130, 205, 255};
+                } else if (known.kind == "danger") {
+                    // Единственное место, которое помнят, чтобы обходить, а
+                    // не чтобы прийти, — и цвет у него поэтому не из
+                    // остальной палитры, а тревожный.
+                    color = Color{215, 80, 70, 255};
                 }
                 color.a = static_cast<unsigned char>(70 + std::clamp(known.strength, 0, 100) * 170 / 100);
                 const float centerX = screenX + tileSizeF * 0.5f;

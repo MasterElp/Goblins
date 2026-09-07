@@ -12,6 +12,7 @@
 #include "core/Body.hpp"
 #include "core/Build.hpp"
 #include "core/Carry.hpp"
+#include "core/Climb.hpp"
 #include "core/Hunting.hpp"
 #include "core/Knowledge.hpp"
 #include "core/Mating.hpp"
@@ -698,6 +699,9 @@ struct TileFacts {
     bool soil = false;
     int water = 0;
     int carcass = 0;
+    // Высота рельефа: наблюдатель считает ту же годность, что и система, а
+    // ей теперь нужен перепад между двумя клетками (core/Climb.hpp).
+    int height = 0;
 };
 
 TileFacts tileFactsAt(const World& world, int x, int y) {
@@ -716,6 +720,9 @@ TileFacts tileFactsAt(const World& world, int x, int y) {
         }
         if (const auto* carcass = registry.try_get<const CarcassComponent>(entity)) {
             facts.carcass = carcass->meat;
+        }
+        if (const auto* relief = registry.try_get<const HeightComponent>(entity)) {
+            facts.height = relief->height;
         }
         break;
     }
@@ -748,9 +755,13 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
     const int sight = std::max(1, genome.perception);
 
     Reach reach;
+    // Годность считается тем же законом и тем же потолком, каким её считает
+    // сама система (kOnLegs, core/Climb.hpp). Карта, показывающая не ту
+    // округу, по которой зверь принял решение, хуже карты, не показывающей
+    // ничего.
     reach.build(world.area(), position.x, position.y, sight, [&world](int x, int y) {
         const TileFacts facts = tileFactsAt(world, x, y);
-        return standableAt(world.area().isBlocked(x, y), facts.soil, facts.water);
+        return standableAt(world.area().isBlocked(x, y), facts.soil, facts.water, facts.height, kOnLegs);
     });
 
     std::vector<PathCell> cells;
@@ -854,7 +865,12 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
                                            registry.get<const AnimalGenomeComponent>(other).species,
                                            registry.all_of<PredatorComponent>(other),
                                            registry.get<const AnimalComponent>(other).sex,
-                                           registry.get<const DesireComponent>(other).current == Desire::Mate});
+                                           registry.get<const DesireComponent>(other).current == Desire::Mate,
+                                           // Вырос: у наблюдателя это видно из
+                                           // согласия — желания пары у
+                                           // невыросшего не бывает, а мёртвых в
+                                           // этом переборе нет вовсе.
+                                           true});
         }
 
         const Suitor suitor{id, position.x, position.y, sight, genome.species, predator, animal.sex};
@@ -1122,6 +1138,12 @@ const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const 
             // и в решении (kTalkRange, core/Talk.hpp), — иначе панель называла
             // бы беседой стояние в десяти шагах от собеседника.
             return companionClose ? "chatting with a neighbour" : "walking over for a word";
+        case GoblinDesire::Flee:
+            // Спасается гоблин не бегством, а сближением: убежать он не может
+            // ни от кого, и всё, что ему остаётся, — перестать быть
+            // отбившимся (см. GoblinDesire::Flee). Оттого и слово здесь не
+            // "убегает".
+            return companionClose ? "huddling against the teeth" : "running to his own";
         case GoblinDesire::Idle:
             break;
     }
@@ -1254,11 +1276,16 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             watched["desire"] = goblinDesireName(desire.current);
 
             auto groups = nlohmann::json::array();
-            // Хромоты у гоблина нет: увечья приходят от рогов, которых на
-            // него никто не наставляет (см. docs/10_Goblins.md, п.4).
+            // Хромота у гоблина такая же, как у зверя, и по той же причине:
+            // тело одно, и кусают его тем же законом (core/Strike.hpp).
+            // Страха среди чисел нет — ровно как у зверя: он считается из
+            // чужого присутствия, а не из своего тела, и живёт один тик.
+            // Видно его в "desire", где стоит "flee", пока гоблин спасается.
+            const auto* injury = registry.try_get<const InjuryComponent>(entity);
             groups.push_back(makeGroup("Body", {{"age", body.age},
                                                  {"growth", body.growth},
                                                  {"health", body.health},
+                                                 {"lame_ticks", injury != nullptr ? injury->lameTicks : 0},
                                                  {"energy", body.energy},
                                                  {"water", body.water},
                                                  {"protein", body.protein},

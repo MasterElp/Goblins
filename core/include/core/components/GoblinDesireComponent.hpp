@@ -68,6 +68,22 @@ enum class GoblinDesire : std::uint8_t {
     // дома. Иначе одинокий гоблин копил бы тоску до предела и переставал
     // работать навсегда.
     Talk = 7,
+    // Спасаться (core/Fear.hpp). В списке кандидатов стоит ПОСЛЕДНИМ, то есть
+    // при равенстве побеждает всё остальное: сытость подождёт, зубы — нет.
+    //
+    // Спасаться — не то же, что убегать, и у гоблина это видно яснее, чем у
+    // зверя. Зверь уходит от зубов ногами, потому что может: он быстрее
+    // хищника или хотя бы вровень. Гоблин медленнее всех в этом мире
+    // (kGoblinTraits: 300..900 против 900..1800 у хищника) — убежать он не
+    // может ни от кого, и бегство "прочь" увело бы его туда, где он один.
+    // Поэтому спасение у него одно: СВОИ. Хищник ищет отбившегося
+    // (kHuntCompany, core/Hunting.hpp), и сойтись вместе — единственное, что
+    // гоблины могут сделать с зубами сейчас.
+    //
+    // Второе, что они могут, — дать сдачи: меткость удара у гоблина куплена
+    // геномом (hit_chance, GoblinGenetics.hpp) ровно под этот день. Третье
+    // появится, когда у поселения будут стены.
+    Flee = 8,
 };
 
 // Имя желания — не логика, а имя значения (см. desireName в
@@ -82,6 +98,7 @@ inline const char* goblinDesireName(GoblinDesire desire) {
         case GoblinDesire::Haul: return "haul";
         case GoblinDesire::Build: return "build";
         case GoblinDesire::Talk: return "talk";
+        case GoblinDesire::Flee: return "flee";
         case GoblinDesire::Idle: break;
     }
     return "idle";
@@ -98,6 +115,7 @@ inline GoblinDesire goblinDesireFromName(const std::string& name) {
     if (name == "haul") return GoblinDesire::Haul;
     if (name == "build") return GoblinDesire::Build;
     if (name == "talk") return GoblinDesire::Talk;
+    if (name == "flee") return GoblinDesire::Flee;
     return GoblinDesire::Idle;
 }
 

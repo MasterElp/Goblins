@@ -15,6 +15,7 @@
 #include "core/components/SiteComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/HeightComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/TreeComponent.hpp"
 #include "core/components/WaterComponent.hpp"
@@ -84,6 +85,11 @@ struct TileSnapshot {
     // лежанию мешают обе (core/Rest.hpp): мокро и жёстко.
     std::vector<int> moisture;
     std::vector<int> rockiness;
+    // Высота рельефа (HeightComponent). Нужна не для показа, а для ноги:
+    // перепад между соседними клетками решает, кто куда переберётся
+    // (core/Climb.hpp), и спрашивается он у снимка тика — как и всё
+    // остальное, чтобы решения всех существ принимались по одному миру.
+    std::vector<int> terrainHeight;
     // Утоптанность: насколько землю умяли ногами (core/Trample.hpp). Ходьбе
     // она, в отличие от тех двух, как раз помогает — по натоптанному идти
     // легче (седьмое слагаемое шага, core/Walk.hpp).
@@ -132,6 +138,7 @@ struct TileSnapshot {
         storeTotal.assign(cells, 0);
         moisture.assign(cells, 0);
         rockiness.assign(cells, 0);
+        terrainHeight.assign(cells, 0);
         trampled.assign(cells, 0);
         treeAt.assign(cells, 0);
         treeEntity.assign(cells, entt::null);
@@ -156,6 +163,9 @@ struct TileSnapshot {
             const auto& soil = terrainView.get<const SoilComponent>(entity);
             moisture[i] = soil.moisture;
             rockiness[i] = soil.rockiness;
+            if (const auto* relief = registry.try_get<const HeightComponent>(entity)) {
+                terrainHeight[i] = relief->height;
+            }
             trampled[i] = soil.trampled;
             if (const auto* water = registry.try_get<const WaterComponent>(entity)) {
                 waterAt[i] = water->depth;

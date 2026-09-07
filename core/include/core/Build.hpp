@@ -190,15 +190,35 @@ inline bool applyWork(BuildKind kind, BuildingComponent& building, Resources* he
 // Отсюда само собой и получается правило "строят то, чего не хватает": на
 // открытой поляне навес добавит четыреста, а под деревом — ничего (крыша
 // одна, берётся лучшая), и там гоблин положит подстилку.
-inline BuildKind betterBuild(const RestPlace& place) {
+// Прибавка возвращается вместе с видом, и это не удобство вызывающему, а
+// единственный честный ответ на вопрос "насколько гоблина гонит строить".
+//
+// Прежде нехватку мерили так: kRestGood минус годность места. Мерка выглядела
+// разумной ровно до тех пор, пока в лагере не начали умирать: в годность
+// входит штраф за лежащую рядом тушу (kRestCarcassPenalty, core/Rest.hpp),
+// вычитается он сильно, а НИ ОДНА постройка его не убирает. Гоблин у свежей
+// падали чувствовал нехватку под шесть сотен и брался строить то, чего
+// падаль не отменяет, — и так до тех пор, пока туша не сгниёт. Пока зубов у
+// мира не было, случалось это редко; теперь будет часто.
+//
+// Гонит же гоблина не то, что здесь плохо, а то, что он может здесь
+// поправить. Разница выходит наружу только в местах, где плохое непоправимо,
+// — и ровно там прежняя мерка и врала.
+struct BuildChoice {
+    BuildKind kind = BuildKind::None;
+    int gain = 0;  // насколько поднимет годность, 0..kFull
+};
+
+inline BuildChoice betterBuild(const RestPlace& place) {
     const int roof = std::max(place.tree ? kRestShelter : 0,
                               kRestCanopy * std::clamp(place.canopy, 0, kFull) / kFull);
     const int canopyGain = std::max(0, kRestCanopy - roof);
     const int beddingGain = kRestBedding - kRestBedding * std::clamp(place.bedding, 0, kFull) / kFull;
     if (canopyGain <= 0 && beddingGain <= 0) {
-        return BuildKind::None;
+        return BuildChoice{};
     }
-    return canopyGain >= beddingGain ? BuildKind::Canopy : BuildKind::Bedding;
+    return canopyGain >= beddingGain ? BuildChoice{BuildKind::Canopy, canopyGain}
+                                     : BuildChoice{BuildKind::Bedding, beddingGain};
 }
 
 // Положить площадку на клетку. Через очередь команд (05_Entity.md, п.5):

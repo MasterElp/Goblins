@@ -12,6 +12,7 @@
 #include "core/components/CarcassComponent.hpp"
 #include "core/components/DesireComponent.hpp"
 #include "core/components/FatigueComponent.hpp"
+#include "core/components/GoblinComponent.hpp"
 #include "core/components/HerbivoreComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
 #include "core/components/InjuryComponent.hpp"
@@ -25,8 +26,10 @@
 #include "core/generation/AnimalGenetics.hpp"
 #include "core/Body.hpp"
 #include "core/Carcass.hpp"
+#include "core/Climb.hpp"
 #include "core/Desires.hpp"
 #include "core/Fatigue.hpp"
+#include "core/Fear.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Hunting.hpp"
 #include "core/Mating.hpp"
@@ -182,46 +185,11 @@ constexpr std::uint64_t kRoamTicks = 40;
 // Досягаемость удара (kStrikeReach) переехала в core/Strike.hpp: дотягиваются
 // теперь все, а не одни зубы.
 
-// --- Падаль пугает ---
-// Во что превращается лежащая на клетке туша для травоядного, которое на
-// неё набрело. Отсчёт от kMeatPerSize — мяса взрослой туши: целая туша
-// пугает в полную силу этого веса, обглоданная и подгнившая — слабее, и
-// вместе с мясом страх сходит на нет сам, без отдельного закона забывания.
-//
-// Меньше единицы намеренно: место, где вчера убили, тревожит, но не гонит
-// так, как гонят зубы, которые видно прямо сейчас.
-//
-// Отдельного невидимого слоя "встревоженности" (DangerComponent) для этого
-// больше нет и не нужно: удар зубами и так оставляет на той же клетке
-// падаль, и она — тот самый след охоты, только видимый. Два следа одного
-// события, ложащиеся на одну клетку и тающие каждый по-своему, — это один
-// закон, записанный дважды.
-constexpr int kCarcassFearWeight = 700;
-
-// --- Страх от ран ---
-// Насколько пугает чужая сила того, у кого не осталось целости. Полная
-// величина — это раненный НАСМЕРТЬ рядом с равным по величине врагом; на
-// деле страх выходит меньше во столько раз, во сколько тело ещё цело.
-//
-// Второй источник страха и первый, общий для всех. Прежде страх был
-// свойством одной диеты: "хищник ни от кого не бегает — на него в этом мире
-// не охотятся". Это было верно ровно до тех пор, пока рога отвечали одной
-// хромотой. Теперь добыча его убивает, а отступать он не умел вовсе — и
-// охотился при здоровье 270 из 1000, пока не погибал. Замер: у всех
-// охотящихся хищников здоровье 270..787, при этом энергии в баках
-// половина и больше. Умирали они ранеными, а не голодными.
-//
-// Величина подобрана против порога желаний (kDesireFloor = 350): при
-// половине утраченной целости и равном по величине враге страх выходит 500
-// — потрёпанный уходит; при четверти утраченной — 250, ниже порога:
-// поцарапанный продолжает охоту.
-//
-// Расстояние в эту величину НЕ входит, в отличие от страха добычи, и это не
-// упущение. Добыча боится приближения зубов, а раненый боится места, где
-// его бьют: пока опасный в поле зрения, он уходит, а не приплясывает у края
-// досягаемости. Оттого он и покидает стадо целиком, а потом берёт одиночку
-// — ровно то, ради чего заведён и выбор отбившегося (kHuntCompany).
-constexpr int kWoundFear = kFull;
+// Страх переехал в core/Fear.hpp — целиком, вместе с числами
+// (kCarcassFearWeight, kWoundFear) и со всеми тремя источниками. Спрашивает
+// его теперь не одна эта система: гоблин перестал быть невидимым для зубов
+// и боится ровно тем же законом. Разойдись эти два страха — и вышло бы, что
+// зубы кусают по-разному в зависимости от того, кого кусают.
 
 // --- Намерения ---
 // Собираются при обходе животных и исполняются после него. Отдельный шаг
@@ -275,6 +243,23 @@ struct Animal {
     int x = 0;
     int y = 0;
     bool predator = false;
+    // Ведёт ли это тело ЭТА система. false — тело в снимке есть, а решений за
+    // него здесь не принимают: так в список попал гоблин, которого ведёт
+    // GoblinSystem.
+    //
+    // Разделение проходит ровно по одной черте: своё против чужого. Своё —
+    // тело, желание, шаг, пара, стадо: это существо решает за себя само, и
+    // решать за него дважды нельзя. Чужое — быть увиденным, быть выбранным в
+    // добычу, получить удар и умереть от него: это с телом делают другие, и
+    // делают тем же законом, каким делали бы со зверем.
+    //
+    // Оттого и гоблин попадает сюда телом, а не желанием: он не перестаёт
+    // быть куском мяса оттого, что думает.
+    bool decides = true;
+    // Чем это тело берёт высоту (core/Climb.hpp). Здесь и в GoblinSystem —
+    // единственные два места в мире, где сказано, у кого руки, а у кого
+    // ноги; сам закон лазания про существ не знает ничего.
+    Climber climb = kOnLegs;
     AnimalComponent* state = nullptr;
     const AnimalGenomeComponent* genome = nullptr;
     DesireComponent* desire = nullptr;
@@ -370,7 +355,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             continue;
         }
         animals.push_back(Animal{entity, animalView.get<IdentityComponent>(entity).id, position.x, position.y,
-                                  registry.all_of<PredatorComponent>(entity),
+                                  registry.all_of<PredatorComponent>(entity), true, kOnLegs,
                                   &animalView.get<AnimalComponent>(entity),
                                   &animalView.get<AnimalGenomeComponent>(entity),
                                   &animalView.get<DesireComponent>(entity),
@@ -378,12 +363,45 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                                   &animalView.get<InjuryComponent>(entity),
                                   &animalView.get<FatigueComponent>(entity)});
     }
+    // Гоблины — вторым видом и после зверей, а не вперемешку: их отличает
+    // ровно то, что у них нет DesireComponent, по которому набран первый вид.
+    // Желания у них свои и считаются в своей системе; здесь они лежат телами.
+    //
+    // Порядок между двумя видами постоянен и потому не причина: спор за одну
+    // тушу и за одну клетку решается долями и именами (core/Share.hpp,
+    // 02_CorePrinciples.md, п.12a), а не тем, кто раньше в массиве.
+    //
+    // Хищником гоблин не бывает: он не охотится и в список зубов не идёт.
+    // Добычей — бывает, и с этого дня. Возвращено ровно то, что было отложено
+    // на день, когда у поселения появится повод строить стены
+    // (docs/plan/10_Goblins_roadmap.md).
+    auto goblinBodyView =
+        registry.view<AnimalComponent, AnimalGenomeComponent, IdentityComponent, InjuryComponent,
+                       MovementComponent, PositionComponent, GoblinComponent, FatigueComponent>();
+    for (const auto entity : goblinBodyView) {
+        const auto& position = goblinBodyView.get<PositionComponent>(entity);
+        if (!world.area().inBounds(position.x, position.y)) {
+            continue;
+        }
+        animals.push_back(Animal{entity, goblinBodyView.get<IdentityComponent>(entity).id, position.x,
+                                  position.y, false, false, kOnHands,
+                                  &goblinBodyView.get<AnimalComponent>(entity),
+                                  &goblinBodyView.get<AnimalGenomeComponent>(entity), nullptr,
+                                  &goblinBodyView.get<MovementComponent>(entity),
+                                  &goblinBodyView.get<InjuryComponent>(entity),
+                                  &goblinBodyView.get<FatigueComponent>(entity)});
+    }
 
     // Падаль живёт своей жизнью и без животных (гниёт), поэтому выйти
     // раньше времени нельзя — но если нет ни того, ни другого, делать
     // системе действительно нечего.
+    // Спрашивается не "пуст ли список", а "есть ли кому решать": одни
+    // гоблины в снимке — это тела, за которые здесь никто ничего не делает.
+    // Без них некому ни увидеть, ни ударить, и весь проход был бы вхолостую.
+    const bool anyDecider = std::any_of(animals.begin(), animals.end(),
+                                        [](const Animal& body) { return body.decides; });
     const bool anyCarcass = !registry.view<CarcassComponent>().empty();
-    if (animals.empty() && !anyCarcass) {
+    if (!anyDecider && !anyCarcass) {
         return;
     }
 
@@ -443,6 +461,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     std::vector<int> kinX(animals.size(), 0);
     std::vector<int> kinY(animals.size(), 0);
     std::vector<bool> hasKin(animals.size(), false);
+    // Кто вырос: спрашивают это не о себе, а о том, на кого смотрят
+    // (mateKind, core/Mating.hpp), — а считается оно в п.3.
+    std::vector<bool> grown(animals.size(), false);
 
     // Где стоят хищники — отдельным коротким списком, собранным один раз
     // за тик. Страх ищется перебором, и перебирать весь мир ради горстки
@@ -480,6 +501,12 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // мир узнаёт, чего он хочет, и только потом кто-то что-то делает.
     std::vector<bool> alive(animals.size(), true);
     for (std::size_t a = 0; a < animals.size(); ++a) {
+        // Чужое тело эта система не ведёт: ни возраста ему не прибавит, ни
+        // желания не выберет, ни похоронит. Живым оно при этом считается —
+        // на начало тика оно и было живым, а умрёт ли, решит своя система.
+        if (!animals[a].decides) {
+            continue;
+        }
         // Не const: голод, жажда и страх этого тика пишутся сюда же, в
         // снимок, а не в компонент (см. struct Animal).
         Animal& animal = animals[a];
@@ -561,12 +588,16 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         animal.hunger = hungerOf(state, genome);
         animal.thirst = thirstOf(state, genome);
 
-        // Страх складывается из двух источников, и берётся БОЛЬШИЙ, а не
-        // сумма: они об разном. Первый — "вижу зубы", он есть только у
-        // добычи и от ран не зависит: здоровое травоядное обязано убегать
-        // ровно так же, как раненое, иначе пищевая цепь поедет в другую
-        // сторону. Второй — "я ранен, а рядом тот, кто добьёт", и он общий
-        // для всех (kWoundFear ниже).
+        // Страх складывается из трёх источников (core/Fear.hpp), и берётся
+        // БОЛЬШИЙ, а не сумма: они об разном. "Вижу зубы" — только у добычи и
+        // от ран не зависит: здоровое травоядное обязано убегать ровно так
+        // же, как раненое, иначе пищевая цепь поедет в другую сторону. "Тут
+        // кого-то съели" — тоже только у добычи, и тоже про место, а не про
+        // тело. "Я ранен, а рядом тот, кто добьёт" — общий для всех, включая
+        // хищника.
+        //
+        // Который из трёх применим, решает эта система, а не закон: гоблин
+        // спрашивает тот же закон и берёт из него не то же самое.
         animal.fear = 0;
         if (!animal.predator) {
             const int sightCells = std::max(1, genome.perception);
@@ -579,41 +610,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 if (distance > sight) {
                     continue;
                 }
-                // Страшен не всякий, у кого зубы, а тот, кто способен ими
-                // что-то сделать. Мерка та же, что решает исход удара
-                // (core/Strike.hpp), — отношение размеров: хищник вровень
-                // пугает в полную силу, вдвое меньший — вполовину, и до
-                // порога желаний такой страх уже не дотягивает.
-                //
-                // Без этого весь молодняк хищников выбивался в первые
-                // тики. Взрослое травоядное вчетверо-впятеро крупнее
-                // недоросля, а бьёт всякий, кого напугали: отношение пять
-                // даёт урон 1750 при здоровье 1000 — то есть насмерть с
-                // одного попадания, ещё до того, как у жертвы появится
-                // хоть какой-то страх. Замер: шестьдесят хищников
-                // превращались в тридцать за десять тиков при ЛЮБЫХ
-                // правках боя, потому что дело было не в бое.
-                //
-                // Заодно это и просто верно: стадо не разбегается от
-                // котёнка и не топчет его.
-                const int danger = std::min(kFull, predatorSize[b] * kFull / mySize);
-                // Увидел — беги. Страх растёт по мере приближения зубов, но
-                // и на самом краю видимости он уже выше порога желаний
-                // (kDesireFloor): замеченный хищник — всегда повод уходить,
-                // а не только тот, что стоит рядом.
-                //
-                // Разница огромна: пока травоядное срывалось с места лишь
-                // тогда, когда хищник подходил вплотную, оно отдавало ему
-                // половину форы, погоня выходила короткой и кончалась
-                // одинаково — стадо выбивалось под ноль за несколько тысяч
-                // тиков, а следом вымирали и сами хищники. Фора, которую
-                // даёт зоркость, и есть главная защита добычи.
-                // Дробное расстояние тут же становится целым страхом:
-                // считать корень из суммы квадратов целыми числами незачем,
-                // а хранится всё равно целое (core/Scale.hpp).
-                const int scare =
-                    (kDesireFloor + static_cast<int>((kFull - kDesireFloor) * (1.0f - distance / sight))) *
-                    danger / kFull;
+                // Увидел — беги: чем ближе зубы и чем крупнее их владелец,
+                // тем сильнее (core/Fear.hpp). Порог тревоги свой у каждого,
+                // кто боится, и потому приходит отсюда, а не из закона.
+                const int scare = seenScare(distance, sight, kDesireFloor, predatorSize[b], mySize);
                 if (scare > animal.fear) {
                     animal.fear = scare;
                     threatX[a] = predatorX[b];
@@ -639,7 +639,15 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             // выигрывать тут нечего.
             int rivalDistance = 0;
             for (std::size_t b = 0; b < animals.size(); ++b) {
-                if (b == a || animals[b].predator || animals[b].genome->species == genome.species) {
+                // Чужое тело в счёт не идёт, и не по лени: "вид" в геноме
+                // гоблина — это номер ПЛЕМЕНИ, и с номерами звериных видов он
+                // просто совпадает числом. Пусти их в один перебор — и заяц
+                // первого вида счёл бы своим соплеменником гоблина первого
+                // племени, а гоблинов остальных племён сторонился бы как
+                // соперников за траву. Совпадение чисел не причина
+                // (02_CorePrinciples.md, п.12).
+                if (b == a || !animals[b].decides || animals[b].predator ||
+                    animals[b].genome->species == genome.species) {
                     continue;
                 }
                 const int dx = animals[b].x - animal.x;
@@ -658,19 +666,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             }
 
             // Падаль под ногами: здесь кого-то убили и съели, и это тоже
-            // страшно — пусть слабее, чем видимые зубы. Туша и есть след
-            // охоты, только видимый: отдельного невидимого слоя
-            // "встревоженности" для того же самого больше нет (см.
-            // kCarcassFearWeight).
+            // страшно — пусть слабее, чем видимые зубы (core/Fear.hpp).
             //
-            // У такого страха нет источника, от которого убегать: животное
-            // не знает, где хищник, оно знает только, что тут плохое место.
-            // Поэтому threatX/threatY не трогаем — бегущий без цели просто
-            // уходит куда глаза глядят (см. "Шаг"), и уже этим освобождает
-            // участок, а хищнику приходится искать добычу заново в другом
-            // месте.
-            const int dread =
-                std::min(kFull, carcassMeat[index(animal.x, animal.y)] * kCarcassFearWeight / kMeatPerSize);
+            // threatX/threatY при этом не трогаем, и это часть закона: у
+            // такого страха нет источника, от которого убегать. Животное не
+            // знает, где хищник, — оно знает только, что тут плохое место, и
+            // уходит куда глаза глядят (см. "Шаг"), уже этим освобождая
+            // участок.
+            const int dread = carcassDread(carcassMeat[index(animal.x, animal.y)]);
             if (dread > animal.fear) {
                 animal.fear = dread;
             }
@@ -689,6 +692,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // Перебор по всем животным, а не по короткому списку: у хищника
         // опасны травоядные, а их сотни, и отдельного списка для них нет.
         // Тот же приём и та же цена, что у поиска чужого вида ниже.
+        //
+        // Гоблина этот перебор, в отличие от двух соседних, НЕ пропускает, и
+        // это выбор, а не недосмотр. Соперник и сородич — про то, кто чей;
+        // здесь же вопрос один: может ли стоящий рядом добить. Гоблин может —
+        // меткость удара у него куплена геномом, — и раненому волку он
+        // страшен ровно настолько, насколько крупен. Диета отсекает своих:
+        // гоблин, как и травоядное, не хищник, поэтому раненое травоядное его
+        // не боится, а раненый хищник боится обоих.
         const int hurt = kFull - std::clamp(state.health, 0, kFull);
         if (hurt > 0) {
             const int mySize = std::max(1, bodySize(state, genome));
@@ -702,8 +713,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 if (dx * dx + dy * dy > sightCells * sightCells) {
                     continue;
                 }
-                const int danger = bodySize(*animals[b].state, *animals[b].genome) * kFull / mySize;
-                const int scare = std::clamp(kWoundFear * hurt / kFull * danger / kFull, 0, kFull);
+                const int scare = woundScare(hurt, bodySize(*animals[b].state, *animals[b].genome), mySize);
                 if (scare > animal.fear) {
                     animal.fear = scare;
                     threatX[a] = animals[b].x;
@@ -725,7 +735,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             const int sightCells = std::max(1, genome.perception);
             int kinDistance = 0;
             for (std::size_t b = 0; b < animals.size(); ++b) {
-                if (b == a || !alive[b] || animals[b].predator != animal.predator ||
+                // Чужое тело своим быть не может — по той же причине, что и
+                // соперником: номера видов и племён совпадают числом, а не по
+                // существу. Иначе стадо тянуло бы к гоблинам.
+                if (b == a || !alive[b] || !animals[b].decides ||
+                    animals[b].predator != animal.predator ||
                     animals[b].genome->species != genome.species) {
                     continue;
                 }
@@ -746,6 +760,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         }
 
         const bool adult = state.age >= maturityAgeOf(genome, pace) && state.growth >= kBreedingGrowth;
+        grown[a] = adult;
         // Готова ли мать заплатить за роды. Два условия, и оба — про цену, а
         // не про настроение: не отдыхает после прошлых родов и накопила
         // крупиц на целого детёныша (см. п.10, где они отдаются).
@@ -791,9 +806,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // хищник, подойдя вплотную (kHuntCompany, core/Hunting.hpp).
         // Перебор по всем животным, как и у страха: их десятки, и обходится
         // он дешевле просмотра клеток вокруг.
+        //
+        // Защитники считаются СВОИМИ СРЕДИ СВОИХ: стадо защищает стадо,
+        // поселение — поселение. Сложи их вместе — и лагерь из полутора
+        // десятков гоблинов сделал бы окрестный луг заповедником для всякого
+        // оленя, забредшего в две клетки от плетня: хищник обходил бы его
+        // стороной за компанию, которой оленю никто не обещал. Гоблины при
+        // этом защищают друг друга по-настоящему, и это единственное, что
+        // они пока могут противопоставить зубам.
         int company = 0;
         for (std::size_t c = 0; c < animals.size(); ++c) {
-            if (c == b || !alive[c] || animals[c].predator) {
+            if (c == b || !alive[c] || animals[c].predator || animals[c].decides != animals[b].decides) {
                 continue;
             }
             if (std::abs(animals[c].x - animals[b].x) <= kCompanyRadius &&
@@ -801,9 +824,20 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 ++company;
             }
         }
+        // Влез на дерево — и зубы его больше не достают (core/Climb.hpp).
+        // Не "спрятался", как травоядное под кроной, а именно влез: зверь
+        // стоит на той же клетке, внизу, и сделать ничего не может.
+        //
+        // Прячущегося это не отменяет: травоядное по-прежнему стоит ПОД
+        // кроной и по-прежнему находится тем, кто наткнулся (kCoverSight,
+        // core/Hunting.hpp). Два разных укрытия на одном дереве, и различает
+        // их не место, а то, чем существо за это дерево берётся.
+        const bool onTree = treeAt[index(animals[b].x, animals[b].y)] != 0;
+        if (outOfReachUpATree(onTree, animals[b].climb)) {
+            continue;
+        }
         preys.push_back(HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed,
-                                  bodySize(*animals[b].state, *animals[b].genome), company,
-                                  treeAt[index(animals[b].x, animals[b].y)] != 0});
+                                  bodySize(*animals[b].state, *animals[b].genome), company, onTree});
         preyOwner.push_back(static_cast<int>(b));
     }
 
@@ -814,9 +848,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // а не прошлотиковое.
     std::vector<MateCandidate> mates;
     for (std::size_t b = 0; b < animals.size(); ++b) {
+        // Чужое тело парой быть не может, и здесь это не только про племена и
+        // виды: желания у него нет вовсе (desire — пустой указатель), а
+        // "согласен" читается именно оттуда. Пропуск стоит до чтения, а не
+        // после, — иначе первый же гоблин в снимке уронил бы систему.
+        if (!animals[b].decides) {
+            continue;
+        }
         mates.push_back(MateCandidate{animals[b].id, animals[b].x, animals[b].y, animals[b].genome->species,
                                        animals[b].predator, animals[b].state->sex,
-                                       alive[b] && animals[b].desire->current == Desire::Mate});
+                                       alive[b] && animals[b].desire->current == Desire::Mate,
+                                       alive[b] && grown[b]});
     }
 
     // Округа зверя и дорога по ней (core/Path.hpp). Живут снаружи цикла и
@@ -827,7 +869,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
     // --- 4. Решения: что животное делает со своим желанием ---
     for (std::size_t a = 0; a < animals.size(); ++a) {
-        if (!alive[a]) {
+        // Чужое тело здесь ничего не решает: желания у него нет, и решать за
+        // него будет своя система (см. Animal::decides).
+        if (!alive[a] || !animals[a].decides) {
             continue;
         }
         const Animal& animal = animals[a];
@@ -888,10 +932,15 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                                     ? genome.speed * animal.injury->lameShare / kFull
                                     : genome.speed;
 
-        // Куда животное вообще может встать (core/Hunting.hpp, standableAt):
-        // не за границей Области, не на занятый непроходимым объектом тайл и
-        // не в воду. Само правило — там, здесь только факты, из которых оно
-        // складывается: снимок тайлов этого тика.
+        // Куда животное вообще может встать (core/Path.hpp, standableAt): не
+        // за границей Области, не на занятый непроходимым объектом тайл, не в
+        // воду и не выше того, куда оно забирается. Само правило — там, здесь
+        // только факты, из которых оно складывается: снимок тайлов этого тика.
+        //
+        // Зверь ходит НА НОГАХ (kOnLegs, core/Climb.hpp) — и это единственная
+        // строчка во всей системе, где сказано, чем он берёт высоту.
+        // Появится зверь с руками, здесь и появится второе значение.
+        //
         // Край Области проверяется здесь же, а не оставляется вызывающим:
         // спрашивают эту годность и по клеткам вокруг (шаг — core/Walk.hpp),
         // и по кругу видимости (дорога — core/Path.hpp), и за краем карты
@@ -901,7 +950,8 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 return false;
             }
             const std::size_t cell = index(nx, ny);
-            return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell]);
+            return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell],
+                               tiles.terrainHeight[cell], kOnLegs);
         };
 
         // Ближайшая клетка в пределах видимости, удовлетворяющая условию.
@@ -1568,7 +1618,16 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         if (!alive[a] || animals[a].state->health > 0) {
             continue;
         }
-        enqueueDeath(commands, animals[a].entity, animals[a].x, animals[a].y);
+        // Хоронит тот, чья система ведёт тело. Забитого насмерть гоблина
+        // здесь только вычёркивают из живых — чтобы второй удар этого же тика
+        // не пришёлся в труп, — а туша ляжет в GoblinSystem, которая идёт
+        // следом и в этом же тике увидит вышедшее здоровье (bodyDied).
+        //
+        // Иначе тушу положили бы дважды: обе системы спрашивают тело одним и
+        // тем же вопросом, и обе получили бы "да".
+        if (animals[a].decides) {
+            enqueueDeath(commands, animals[a].entity, animals[a].x, animals[a].y);
+        }
         alive[a] = false;
     }
 

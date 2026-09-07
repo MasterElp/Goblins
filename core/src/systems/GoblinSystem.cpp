@@ -1,6 +1,7 @@
 #include "core/systems/GoblinSystem.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -12,8 +13,10 @@
 #include "core/Build.hpp"
 #include "core/Carry.hpp"
 #include "core/Carcass.hpp"
+#include "core/Climb.hpp"
 #include "core/Desires.hpp"
 #include "core/Fatigue.hpp"
+#include "core/Fear.hpp"
 #include "core/Diagnostics.hpp"
 #include "core/Hunting.hpp"
 #include "core/Knowledge.hpp"
@@ -24,6 +27,7 @@
 #include "core/Rest.hpp"
 #include "core/Scale.hpp"
 #include "core/Share.hpp"
+#include "core/Strike.hpp"
 #include "core/Talk.hpp"
 #include "core/Resources.hpp"
 #include "core/Store.hpp"
@@ -44,10 +48,12 @@
 #include "core/components/GoblinDesireComponent.hpp"
 #include "core/components/GoblinTribesComponent.hpp"
 #include "core/components/IdentityComponent.hpp"
+#include "core/components/InjuryComponent.hpp"
 #include "core/components/KnowledgeComponent.hpp"
 #include "core/components/MovementComponent.hpp"
 #include "core/components/PlantComponent.hpp"
 #include "core/components/PositionComponent.hpp"
+#include "core/components/PredatorComponent.hpp"
 #include "core/components/SoilComponent.hpp"
 #include "core/components/StoreComponent.hpp"
 #include "core/components/SiteComponent.hpp"
@@ -75,6 +81,32 @@ constexpr int kDesireSwitch = 150;
 constexpr int kBreedingGrowth = 900;
 constexpr int kCalmNeed = 750;
 constexpr int kMateDesire = 600;
+
+// С какой твёрдостью ложится в память поляна, на которой видели ровню
+// (PlaceKind::Mate).
+//
+// Своё число, а не kRememberGain, и ровно по той же причине, по какой своё
+// число есть у испуга (kScareMark, core/Fear.hpp): remember занимает чужой
+// слот только тем, что твёрже занятого (core/Knowledge.hpp), а у
+// обжившегося гоблина все восемь слотов держат сотни. Прибавка ценой в сорок
+// падала бы на пол каждый раз — и незнакомую женщину гоблин не запоминал бы
+// НИКОГДА, сколько бы раз её ни видел. Заметить это было нечем: место просто
+// не появлялось, а ищущий пару уходил блуждать, будто рядом никого и нет.
+//
+// Триста — то же, что у испуга, и по тем же двум меркам: против забывания
+// (kForgetRate = 1) одна встреча тает за триста тиков, а против порога
+// желаний (350) одного взгляда на дело не хватает. Место, где увидел
+// кого-то однажды, — случайность; место, где ходят, — свойство места, и
+// подтверждается оно каждым тиком, пока ровня в виду.
+constexpr int kMetMark = 300;
+
+// Насколько симпатия укрепляет ту же память сверх этого.
+//
+// Двести сверху означают, что поляна, где ходят СВОИ, держится в голове
+// вдвое дольше поляны, где ходят чужие, и вытесняет из неё больше чужого.
+// Знакомство при этом не условие, а прибавка: незнакомую женщину гоблин
+// запомнит тоже — знакомство лишь решает, какое из мест переживёт другое.
+constexpr int kMateMark = 200;
 
 // Усталость и отдых числами не описываются здесь вовсе: закон общий для
 // всех, кто ходит, и живёт в core/Fatigue.hpp. Гоблинского в нём ровно
@@ -160,6 +192,20 @@ struct TalkIntent {
     std::uint64_t listenerId = 0;
 };
 
+// Кто по кому отмахнулся. Собирается намерением, как и всё прочее, и по той
+// же причине: по одному зверю могут отмахнуться сразу несколько, и урон обязан
+// сложиться, а не достаться тому, кого EnTT хранит раньше
+// (02_CorePrinciples.md, п.12a).
+//
+// Ролей у сторон нет и здесь: это то же самое действие, каким хищник бьёт
+// добычу (core/Strike.hpp), просто повод другой. Ответным ударом оно не
+// называется — ответ подразумевал бы очередь, а удары одного тика
+// одновременны.
+struct BlowIntent {
+    int goblin = 0;
+    int beast = 0;
+};
+
 // Живой гоблин в снимке этого тика. Указатели на компоненты держать
 // безопасно: за время обхода систем структура хранилища не меняется —
 // создание и удаление Entity идёт только через очередь команд
@@ -187,12 +233,17 @@ struct Goblin {
     const CharacterComponent* nature = nullptr;
     // Знакомые. Меняются каждый разговор — значит, не константа.
     BondsComponent* bonds = nullptr;
+    // Увечье. Общее для всего живого (core/Strike.hpp): хромает всякий, кого
+    // покусали, и гоблинского здесь нет ничего.
+    InjuryComponent* injury = nullptr;
 
-    // Голод и жажда живут здесь, в снимке тика, а не в компоненте: оба
-    // пересчитываются из тела заново каждый тик (core/Needs.hpp), и
+    // Голод, жажда и страх живут здесь, в снимке тика, а не в компоненте: все
+    // три пересчитываются заново каждый тик — первые два из тела
+    // (core/Needs.hpp), третий из того, кто стоит рядом (core/Fear.hpp), — и
     // пережить тик им незачем.
     int hunger = 0;
     int thirst = 0;
+    int fear = 0;
 };
 
 // Позыв к работе, каким он стал после нрава: УРОВЕНЬ даёт трудолюбие, а
@@ -214,10 +265,10 @@ int workUrgeOf(const CharacterComponent& nature, int base, Topic topic) {
 // (core/Desires.hpp); здесь только то, чего гоблин может хотеть и чем
 // меряется срочность каждого.
 //
-// Страха в этом списке нет, и это не забывчивость: бояться гоблину пока
-// некого — хищник его не видит (см. GoblinSystem.hpp). Появится опасность —
-// появится и желание, и встанет оно последним, чтобы побеждать при
-// равенстве.
+// Страх стоит в списке ПОСЛЕДНИМ и потому побеждает при равенстве — ровно
+// как у зверя, и по той же причине: сытость подождёт, зубы — нет. Место под
+// него было оставлено заранее, когда хищник гоблина ещё не видел; теперь
+// видит, и желание встало туда, где ему и назначено.
 GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool hasHome, int building,
                                 bool companionNear) {
     const GoblinDesireComponent& desire = *goblin.desire;
@@ -261,6 +312,9 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool has
         {static_cast<int>(GoblinDesire::Food), goblin.hunger},
         {static_cast<int>(GoblinDesire::Water), goblin.thirst},
         {static_cast<int>(GoblinDesire::Mate), mating},
+        // Зубы — последними: при равенстве побеждают всё, включая голод и
+        // пару. Голодный доживёт до следующего куста, съеденный — нет.
+        {static_cast<int>(GoblinDesire::Flee), goblin.fear},
     };
 
     int currentUrgency = 0;
@@ -272,6 +326,7 @@ GoblinDesire chooseGoblinDesire(const Goblin& goblin, bool readyToMate, bool has
         case GoblinDesire::Haul: currentUrgency = hauling; break;
         case GoblinDesire::Build: currentUrgency = building; break;
         case GoblinDesire::Talk: currentUrgency = talking; break;
+        case GoblinDesire::Flee: currentUrgency = goblin.fear; break;
         case GoblinDesire::Idle: break;
     }
 
@@ -313,7 +368,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     auto goblinView =
         registry.view<AnimalComponent, AnimalGenomeComponent, GoblinDesireComponent, IdentityComponent,
                        MovementComponent, PositionComponent, GoblinComponent, FatigueComponent,
-                       KnowledgeComponent, CarriedComponent, CharacterComponent, BondsComponent>();
+                       KnowledgeComponent, CarriedComponent, CharacterComponent, BondsComponent,
+                       InjuryComponent>();
     for (const auto entity : goblinView) {
         const auto& position = goblinView.get<PositionComponent>(entity);
         if (!world.area().inBounds(position.x, position.y)) {
@@ -328,7 +384,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                   &goblinView.get<KnowledgeComponent>(entity),
                                   &goblinView.get<CarriedComponent>(entity),
                                   &goblinView.get<CharacterComponent>(entity),
-                                  &goblinView.get<BondsComponent>(entity)});
+                                  &goblinView.get<BondsComponent>(entity),
+                                  &goblinView.get<InjuryComponent>(entity)});
     }
     // Гоблинов нет — делать системе нечего. В отличие от AnimalSystem, за
     // которой числится ещё и гниение падали, у этой своих обязанностей перед
@@ -368,6 +425,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     std::vector<StepIntent> steps;
     std::vector<MateIntent> matings;
     std::vector<TalkIntent> talks;
+    std::vector<BlowIntent> blows;   // кто отмахнулся от зубов
 
     // Кто рядом стоит — тем, что о нём видно со стороны (core/Talk.hpp).
     // Список собирается ДО желаний, а не после, как пары: желание поговорить
@@ -386,6 +444,43 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         companions.push_back(Companion{goblin.id, goblin.x, goblin.y, goblin.genome->species, true});
     }
 
+    // Кто в этом мире с зубами. Список свой, а не общий с AnimalSystem: снимки
+    // у систем разные по замыслу (см. п.2) — гоблин видит мир, по которому
+    // стадо уже прошло, и хищника он тоже должен видеть там, где тот стоит
+    // сейчас, а не там, где стоял до своего шага.
+    //
+    // Собирается один раз на тик, а не заново для каждого гоблина: хищников
+    // десятки, гоблинов тоже, и произведение считать незачем.
+    //
+    // Указатели на тело и увечье лежат здесь же — не ради страха, а ради
+    // сдачи: испуганный гоблин бьёт (см. п.7b), а бить надо конкретного
+    // зверя. Генома среди них нет: исход удара считается по размерам и по
+    // меткости БЬЮЩЕГО (core/Strike.hpp), а бьёт здесь гоблин.
+    struct Beast {
+        std::uint64_t id = 0;
+        int x = 0;
+        int y = 0;
+        int size = 0;
+        AnimalComponent* state = nullptr;
+        InjuryComponent* injury = nullptr;
+    };
+    std::vector<Beast> beasts;
+    {
+        auto beastView = registry.view<AnimalComponent, AnimalGenomeComponent, IdentityComponent,
+                                        InjuryComponent, PositionComponent, PredatorComponent>();
+        for (const auto entity : beastView) {
+            const auto& position = beastView.get<PositionComponent>(entity);
+            if (!world.area().inBounds(position.x, position.y)) {
+                continue;
+            }
+            auto& body = beastView.get<AnimalComponent>(entity);
+            const auto& beastGenome = beastView.get<AnimalGenomeComponent>(entity);
+            beasts.push_back(Beast{beastView.get<IdentityComponent>(entity).id, position.x, position.y,
+                                    bodySize(body, beastGenome), &body,
+                                    &beastView.get<InjuryComponent>(entity)});
+        }
+    }
+
     // --- 3. Тело и желания ---
     // Отдельным проходом от решений (п.4) намеренно: гоблин, выбирая пару,
     // смотрит, чего хочет сосед, — и если бы желания и решения считались в
@@ -393,6 +488,21 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     // прошлотиковым желанием. Порядок в памяти не может быть причиной
     // события в мире (02_CorePrinciples.md, п.12a).
     std::vector<bool> alive(goblins.size(), true);
+    // Откуда исходит опасность — считается здесь, в п.3, и используется в
+    // п.4 (куда бежать) и в п.7b (кого бить). Живёт снаружи компонентов: страх
+    // пересчитывается каждый тик заново, а гоблин не помнит зверя, которого
+    // больше не видит. Помнит он только МЕСТО (PlaceKind::Danger), и это
+    // разные вещи: зверь ушёл, место осталось.
+    std::vector<int> threatX(goblins.size(), 0);
+    std::vector<int> threatY(goblins.size(), 0);
+    std::vector<bool> hasThreat(goblins.size(), false);
+    // Номер в списке зубов, а не клетка: страх называет клетку, а бить надо
+    // конкретного зверя.
+    std::vector<int> threatBeast(goblins.size(), -1);
+    // Кто вырос. Считается в п.3, а нужно в п.4 — и не самому гоблину, а
+    // тем, кто на него смотрит: ровню (mateKind, core/Mating.hpp) от ребёнка
+    // отличают со стороны.
+    std::vector<char> grown(goblins.size(), 0);
     for (std::size_t g = 0; g < goblins.size(); ++g) {
         Goblin& goblin = goblins[g];
         auto& state = *goblin.state;
@@ -401,13 +511,26 @@ void GoblinSystem(World& world, CommandQueue& commands) {
 
         advanceBody(state, genome, worldProperties.goblinPace, tick, goblin.id);
 
-        // Своих бед сверх общего закона у гоблина пока нет: болезни от
-        // тесноты он не знает (поселение тесно по сути), зубов на него никто
-        // не точит. Поэтому между телом и смертью здесь ничего и не стоит.
+        // Болезни от тесноты у гоблина нет (поселение тесно по сути), а вот
+        // зубы теперь есть: бьёт его AnimalSystem, которая идёт раньше, и
+        // здоровье в теле к этому мгновению уже убавлено. Хоронит его эта
+        // система, и только она: тот же вопрос обеим системам отвечает
+        // одинаково, и хорони обе — туша легла бы дважды.
         if (bodyDied(state, genome, worldProperties.goblinPace)) {
             enqueueDeath(commands, goblin.entity, goblin.x, goblin.y);
             alive[g] = false;
             continue;
+        }
+
+        // Хромота проходит сама, тиками. Закон общий (core/Strike.hpp), и
+        // отсчёт у гоблина такой же, как у зверя: срок кончился — нога
+        // работает снова, и тяжесть возвращается к целой, чтобы следующий
+        // укус не складывался с прошлым.
+        if (goblin.injury->lameTicks > 0) {
+            --goblin.injury->lameTicks;
+            if (goblin.injury->lameTicks == 0) {
+                goblin.injury->lameShare = kFull;
+            }
         }
 
         // Память ног тает со временем, а не от шагов (core/Walk.hpp):
@@ -451,8 +574,64 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         goblin.hunger = hungerOf(state, genome);
         goblin.thirst = thirstOf(state, genome);
 
+        // Страх — общим законом (core/Fear.hpp), тем же, каким боится зверь.
+        // Источников у гоблина два из трёх: видимые зубы и собственные раны.
+        //
+        // Падали среди них нет, и это выбор, а не пропуск: место, где кого-то
+        // съели, уже отнимает у гоблина годность для лежания
+        // (kRestCarcassPenalty, core/Rest.hpp) — он туда не ляжет и без
+        // страха. Добавь сюда дрожь над тушей — и первая же смерть от
+        // старости в лагере согнала бы всё поселение с обжитого места,
+        // причём дважды одним и тем же поводом.
+        //
+        // Оба источника считаются в ОДНОМ переборе, в отличие от зверя, и
+        // причина простая: у зверя это разные списки — зубы у хищников,
+        // добить может всякий не своей диеты, — а у гоблина враг один и тот
+        // же зверь с зубами. Двух списков нет, значит нет и двух переборов.
+        goblin.fear = 0;
+        {
+            const int sightCells = std::max(1, genome.perception);
+            const float sight = static_cast<float>(sightCells);
+            const int mySize = std::max(1, bodySize(state, genome));
+            const int hurt = kFull - std::clamp(state.health, 0, kFull);
+            for (std::size_t b = 0; b < beasts.size(); ++b) {
+                const int dx = beasts[b].x - goblin.x;
+                const int dy = beasts[b].y - goblin.y;
+                const float distance = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+                if (distance > sight) {
+                    continue;
+                }
+                int scare = seenScare(distance, sight, kDesireFloor, beasts[b].size, mySize);
+                if (hurt > 0) {
+                    // Раненый боится не приближения, а самого присутствия:
+                    // расстояние в эту величину не входит (core/Fear.hpp).
+                    scare = std::max(scare, woundScare(hurt, beasts[b].size, mySize));
+                }
+                if (scare > goblin.fear) {
+                    goblin.fear = scare;
+                    threatX[g] = beasts[b].x;
+                    threatY[g] = beasts[b].y;
+                    threatBeast[g] = static_cast<int>(b);
+                    hasThreat[g] = true;
+                }
+            }
+        }
+
+        // Где было страшно — то и запоминается. Единственное место, которое
+        // помнят, чтобы обходить, а не чтобы прийти (PlaceKind::Danger).
+        //
+        // Порог тот же, с которого страх вообще становится желанием: ниже
+        // него гоблина ничто никуда не гонит, и запоминать нечего. Ложится
+        // испуг твёрже обычного места (kScareMark) — иначе у обжившегося
+        // гоблина он не лёг бы вовсе: remember занимает чужой слот только
+        // тем, что твёрже занятого.
+        if (goblin.fear >= kDesireFloor) {
+            remember(*goblin.mind, PlaceKind::Danger, goblin.x, goblin.y, kScareMark);
+        }
+
         const bool adult = state.age >= maturityAgeOf(genome, worldProperties.goblinPace) &&
                            state.growth >= kBreedingGrowth;
+        grown[g] = adult ? 1 : 0;
         const bool content = state.health >= kFull && goblin.hunger < kCalmNeed && goblin.thirst < kCalmNeed;
         // Готов ли платить за роды: не отдыхает после прошлых и накопил
         // крупиц на целого ребёнка. Закон общий со зверем (AnimalSystem):
@@ -482,12 +661,25 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             // стоя на нём: недостаток чувствуют, а не вычисляют издалека.
             // Гоблин, лежащий на голой земле в месте, куда он ходит спать
             // каждый день, — и есть тот, кто начинает стройку.
+            //
+            // Нехватка при этом ОГРАНИЧЕНА тем, что постройка вообще способна
+            // прибавить (betterBuild): гонит гоблина не всё плохое, что здесь
+            // есть, а только поправимое.
+            //
+            // Разница выходит наружу там, где плохое непоправимо. В годность
+            // входит штраф за лежащую рядом тушу (kRestCarcassPenalty,
+            // core/Rest.hpp), и он один способен обвалить её до нуля — а ни
+            // навес, ни подстилка туши не убирают. Гоблин у обустроенной до
+            // предела лежанки, на которую легла падаль, чувствовал бы полную
+            // нехватку, приходил бы строить, не находил бы что, и уходил бы
+            // ломать ветки — без конца, пока туша не сгниёт. Пока зубов у
+            // мира не было, случалось это редко; теперь будет часто.
             const auto* home = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y, kRestReturn);
             if (home != nullptr && home->x == goblin.x && home->y == goblin.y) {
                 const RestPlace place{tiles.moisture[here], tiles.rockiness[here], tiles.treeAt[here] != 0,
                                        tiles.carcassMeat[here], tiles.trampled[here], tiles.canopy[here],
                                        tiles.bedding[here]};
-                building = std::max(0, kRestGood - restQualityOf(place));
+                building = std::min(std::max(0, kRestGood - restQualityOf(place)), betterBuild(place).gain);
                 // Вторая причина — куча под открытым небом. Еда портится, и
                 // это видно тому, кто стоит рядом с ней. Крыша над кучей и
                 // есть склад (core/Store.hpp), отдельной постройки для него
@@ -541,7 +733,8 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     for (std::size_t g = 0; g < goblins.size(); ++g) {
         mates.push_back(MateCandidate{goblins[g].id, goblins[g].x, goblins[g].y, goblins[g].genome->species,
                                        false, goblins[g].state->sex,
-                                       alive[g] && goblins[g].desire->current == GoblinDesire::Mate});
+                                       alive[g] && goblins[g].desire->current == GoblinDesire::Mate,
+                                       alive[g] && grown[g] != 0});
     }
 
     // Округа и дорога по ней (core/Path.hpp). Живут снаружи цикла и
@@ -569,21 +762,53 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         std::uint64_t random = mixSeed(goblinSeed, mixSeed(tick, goblin.id));
 
         const int reach = std::max(1, genome.perception);
+
+        // Где ходит ровня — запоминается ВСЕГДА, а не тогда, когда ищешь
+        // пару (PlaceKind::Mate). Занятие тут ни при чём: гоблин видит, кто
+        // ходит по этой поляне, пока ест, работает и разговаривает, — и
+        // помнит это к тому дню, когда понадобится.
+        //
+        // Пока помнилось только место состоявшейся встречи, памяти этой не
+        // было почти ни у кого: встречи редки, а до первой из них мужчина не
+        // помнил ни одного места вовсе — и, не видя рядом согласной, уходил
+        // блуждать наугад через полкарты. Уходил тем дальше, чем дольше
+        // искал: блуждание держит направление сотню тиков (kRoamTicks) и
+        // назад не возвращает.
+        //
+        // Согласие для памяти не спрашивается (mateKind, core/Mating.hpp), и
+        // это главное: согласие живёт один тик и совпадает у двоих редко, а
+        // "здесь ходят женщины" — правда надолго. Разговор в это правило
+        // входит сам собой: говорят рядом, то есть в виду, — а тепло от
+        // разговора кладёт место твёрже (kMateMark).
+        if (grown[g] != 0) {
+            const Suitor seer{goblin.id, goblin.x, goblin.y, reach, genome.species, false, state.sex};
+            if (const MateChoice seen = sightOfMate(seer, mates, goblin.bonds); seen.found) {
+                remember(*goblin.mind, PlaceKind::Mate, seen.x, seen.y,
+                         kMetMark + warmthTo(*goblin.bonds, seen.id) * kMateMark / kFull);
+            }
+        }
+
         bool busy = false;
         bool hasTarget = false;
         int targetX = goblin.x;
         int targetY = goblin.y;
 
-        // Куда гоблин вообще может встать (core/Path.hpp, standableAt): не
-        // за границей Области, не на занятый непроходимым объектом тайл и не
-        // в воду. Правило общее, здесь только факты, из которых оно
-        // складывается: снимок тайлов этого тика.
+        // Куда гоблин вообще может встать (core/Path.hpp, standableAt): не за
+        // границей Области, не в воду — и вот дальше начинается разница со
+        // зверем. Высокогорье, валун и дерево гоблин берёт РУКАМИ (kOnHands,
+        // core/Climb.hpp), и это единственная строчка во всей системе, где
+        // сказано, чем он лезет.
+        //
+        // Отсюда и всё остальное: волна дороги у него шире звериной, вершины
+        // для него не преграда, а на валун он влезает. Вода при этом остаётся
+        // стеной и ему — за неё не ухватишься.
         auto standable = [&](int nx, int ny) {
             if (!world.area().inBounds(nx, ny)) {
                 return false;
             }
             const std::size_t cell = index(nx, ny);
-            return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell]);
+            return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell],
+                               tiles.terrainHeight[cell], kOnHands);
         };
 
         // Ближайшая клетка в пределах видимости, удовлетворяющая условию.
@@ -715,16 +940,34 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     break;
                 }
 
-                // Под ногами пусто — ищем глазами. Сначала падаль: она
-                // редка, лежит в одной точке, и идти к ней надо дорогой
-                // (core/Path.hpp), иначе увиденная через реку заведёт
-                // гоблина на берег и оставит там. Волна считается только
-                // тогда, когда есть на что смотреть: перебор клеток дёшев, а
-                // волна по округе — нет.
+                // Под ногами пусто — СНАЧАЛА ВСПОМНИТЬ, и только потом
+                // искать. Порядок этот — про то, чем гоблин отличается от
+                // зверя, а не про экономию перебора.
+                //
+                // Пока глаз шёл раньше памяти, гоблин каждый раз сворачивал к
+                // первому попавшемуся кусту, а к своему ягоднику возвращался
+                // только тогда, когда вокруг не было ничего вовсе, — то есть
+                // память работала последним средством, а маршрут оставался
+                // случайным. Спросив голову первой, он идёт СВОЕЙ дорогой
+                // мимо чужих кустов, а глазами пользуется там, где головой
+                // пусто: в незнакомом месте и на первых днях жизни. Из этого
+                // и набивается тропа.
+                //
+                // Обманувшее место при этом не держит: придя и не найдя,
+                // гоблин теряет к нему веру (disappoint внутри goByMemory), и
+                // после второго пустого прихода память молчит — тогда глаз и
+                // получает своё.
+                hasTarget = goByMemory(PlaceKind::Food);
+
+                // Сначала падаль: она редка, лежит в одной точке, и идти к
+                // ней надо дорогой (core/Path.hpp), иначе увиденная через
+                // реку заведёт гоблина на берег и оставит там. Волна
+                // считается только тогда, когда есть на что смотреть:
+                // перебор клеток дёшев, а волна по округе — нет.
                 int meatX = goblin.x;
                 int meatY = goblin.y;
                 const bool meatSeen =
-                    findNearest([&](std::size_t cell, int nx, int ny) {
+                    !hasTarget && findNearest([&](std::size_t cell, int nx, int ny) {
                         return carcassMeat[cell] > kMinBiteMeat && standable(nx, ny);
                     }, meatX, meatY) >= 0;
                 if (meatSeen) {
@@ -762,14 +1005,6 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                             }
                         }
                     }
-                }
-
-                // Вспомненный ягодник — раньше видимой травы, и это главное
-                // в диете собирателя. Трава под ногами голод перебьёт, но
-                // ИДТИ за ней незачем: она везде, и ушедший за ней гоблин
-                // просто перестал бы возвращаться куда бы то ни было.
-                if (!hasTarget) {
-                    hasTarget = goByMemory(PlaceKind::Food);
                 }
 
                 // Трава — последняя и только та, что видно рядом. Идут к ней
@@ -817,10 +1052,17 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     remember(*goblin.mind, PlaceKind::Water, goblin.x, goblin.y);
                     busy = true;
                 } else {
-                    hasTarget = findNearest([&](std::size_t cell, int, int) { return waterAt[cell] > 0; },
-                                             targetX, targetY) >= 0;
+                    // Вспомненный водопой — раньше увиденной воды, как и у
+                    // еды: гоблин идёт к своему берегу, а глазами ищет
+                    // только тогда, когда своего берега не помнит (см.
+                    // порядок в ветке еды). Лужа под боком от этого не
+                    // пропадает — она найдётся сама, когда память промолчит
+                    // или обманет.
+                    hasTarget = goByMemory(PlaceKind::Water);
                     if (!hasTarget) {
-                        hasTarget = goByMemory(PlaceKind::Water);
+                        hasTarget = findNearest(
+                                        [&](std::size_t cell, int, int) { return waterAt[cell] > 0; },
+                                        targetX, targetY) >= 0;
                     }
                 }
                 break;
@@ -840,11 +1082,112 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                         targetX = call.x;
                         targetY = call.y;
                         hasTarget = true;
+                        break;
+                    }
+                    // Согласной не видно — но ровня-то, может, и видна,
+                    // просто занята едой или работой (mateKind,
+                    // core/Mating.hpp). К ней и подойти: согласие живёт один
+                    // тик и совпадает у двоих редко, а стоящий рядом дождётся
+                    // его первым.
+                    //
+                    // Это же и лекарство от блуждания: пока в виду есть хоть
+                    // кто-то, за парой незачем уходить с поляны. Дорога здесь
+                    // нужна ровно по той же причине, что и при встрече: ждать
+                    // через реку значит ждать зря.
+                    if (anyMateInSight(suitor, mates, false)) {
+                        reachOf.build(world.area(), goblin.x, goblin.y, reach, standable);
+                        const MateChoice near = chooseMate(reachOf, suitor, mates, goblin.bonds, false);
+                        if (near.found) {
+                            reachOf.roadTo(near.x, near.y, road);
+                            if (!road.empty()) {
+                                targetX = road.front().x;
+                                targetY = road.front().y;
+                                hasTarget = true;
+                            } else {
+                                // Дороги нет только в одном случае: она уже
+                                // тут, на этой самой клетке. Тогда ждать —
+                                // это и есть занятие, и уходить с места
+                                // блуждать было бы прямой потерей: согласие
+                                // придёт к ней тиком позже, а его тут уже не
+                                // будет.
+                                busy = true;
+                            }
+                            break;
+                        }
+                    }
+                    // Не видно никого — идти туда, где ровня ходила прежде
+                    // (PlaceKind::Mate). До этого места здесь кончалось всё:
+                    // гоблин с сильнейшим желанием оставался стоять или
+                    // уходил блуждать, а зов подаёт только женщина — мужчине
+                    // с пустой округой ждать было нечего.
+                    //
+                    // Опустевшую поляну отпустит disappoint, как и всякое
+                    // другое место: пришёл, никого нет — веры меньше.
+                    hasTarget = goByMemory(PlaceKind::Mate);
+                    if (hasTarget) {
+                        break;
+                    }
+
+                    // И последнее, вместо поля: идти к ЛЮДЯМ — к любому
+                    // живому, кто в виду, будь он хоть чужого племени, хоть
+                    // того же пола.
+                    //
+                    // Это не поиск пары, а знакомство, и разница видна на
+                    // карте. Ищущий пару, которому некого выбрать, уходил
+                    // блуждать: направление берётся жребием на сотню тиков
+                    // (kRoamTicks) и назад не возвращает — гоблин уходил в
+                    // поле мимо своих же соседей, потому что ровни среди них
+                    // в этот тик не нашлось. А пары заводятся там, где люди:
+                    // придя к ним, он и заговорит (тоска станет желанием,
+                    // chooseGoblinDesire), и потеплеет, и увидит наконец
+                    // ровню, когда она мимо пройдёт.
+                    //
+                    // Дороги здесь нет намеренно: цель мягкая, идти к ней
+                    // можно и вслепую памятью ног — как ходят к вспомненному
+                    // месту. Волна на "просто к людям" была бы платой не по
+                    // товару.
+                    {
+                        std::size_t nearest = goblins.size();
+                        int nearestSteps = 0;
+                        for (std::size_t b = 0; b < goblins.size(); ++b) {
+                            if (b == g || !alive[b]) {
+                                continue;
+                            }
+                            const int dx = goblins[b].x - goblin.x;
+                            const int dy = goblins[b].y - goblin.y;
+                            if (dx * dx + dy * dy > reach * reach) {
+                                continue;
+                            }
+                            const int steps = std::max(std::abs(dx), std::abs(dy));
+                            if (steps == 0) {
+                                continue; // уже вместе: стоять и так можно
+                            }
+                            // Из равно далёких — меньший идентификатор, а не
+                            // первый в памяти (02_CorePrinciples.md, п.12a).
+                            if (nearest != goblins.size() &&
+                                (steps > nearestSteps ||
+                                 (steps == nearestSteps && goblins[b].id > goblins[nearest].id))) {
+                                continue;
+                            }
+                            nearest = b;
+                            nearestSteps = steps;
+                        }
+                        if (nearest != goblins.size()) {
+                            targetX = goblins[nearest].x;
+                            targetY = goblins[nearest].y;
+                            hasTarget = true;
+                        }
                     }
                     break;
                 }
                 reachOf.build(world.area(), goblin.x, goblin.y, reach, standable);
-                const MateChoice mate = chooseMate(reachOf, suitor, mates);
+                // К кому идти — не только про расстояние: пара, к которой
+                // тепло, стоит ближе, чем стоит на самом деле (chooseMate,
+                // core/Mating.hpp). Симпатия здесь та же самая, что решает, с
+                // кем гоблин заговорит, и заводить для пары второе чувство не
+                // пришлось: тепло копится от встреч, а к паре ходят к тому, с
+                // кем виделись.
+                const MateChoice mate = chooseMate(reachOf, suitor, mates, goblin.bonds);
                 if (!mate.found) {
                     break;
                 }
@@ -855,6 +1198,11 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 if (mate.x == goblin.x && mate.y == goblin.y) {
                     matings.push_back(
                         MateIntent{here, static_cast<int>(g), goblin.id, genome.species, state.sex});
+                    // Отдельно запоминать место встречи не нужно: оно уже
+                    // легло в голову вверху этого же тика — от того, что он
+                    // её ВИДЕЛ. Один закон на "видел" и "сошёлся" лучше двух:
+                    // сошедшийся видел заведомо, а два закона об одном
+                    // разъезжаются молча (CLAUDE.md).
                     busy = true;
                     break;
                 }
@@ -899,7 +1247,14 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // — он идёт мимо годного к тому, где уже спал. Оттуда и
                 // берётся лагерь: место, к которому возвращаются несколько
                 // соседей, а не место, которое кто-то назначил.
-                hasTarget = goByMemory(PlaceKind::Rest, kRestReturn);
+                // Порога твёрдости здесь больше нет, и это то же решение,
+                // что в еде и воде: у памяти спрашивают "помню ли я место",
+                // а не "достаточно ли оно обжитое, чтобы идти мимо
+                // видимого". Место, к которому ходили мало, всё равно
+                // вероятнее случайной годной клетки, а переставшее быть
+                // годным гоблин отпустит сам: придёт, не ляжет и потеряет к
+                // нему веру (disappoint).
+                hasTarget = goByMemory(PlaceKind::Rest);
 
                 // Ближайшая годная, а не лучшая в округе: гоблин идёт к
                 // тому, что видит рядом и что ему подходит. Выбирать лучшее
@@ -911,12 +1266,6 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                                                restQualityOf(placeAt(cell, nx, ny)) >= kRestGood;
                                     },
                                     targetX, targetY) >= 0;
-                }
-                // Ничего не вспомнилось и ничего не видно — идти по слабой
-                // памяти лучше, чем брести наугад: место, к которому ходили
-                // мало, всё же вероятнее годного случайного.
-                if (!hasTarget) {
-                    hasTarget = goByMemory(PlaceKind::Rest);
                 }
                 break;
             }
@@ -975,12 +1324,17 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     break;
                 }
 
-                // Ягодника не видно — идти к нему дорогой, как за едой:
-                // ягодник редок и стоит в одной точке.
+                // Куда идти за ягодой — сперва по памяти, как и за едой для
+                // себя: запасающий ходит на свой ягодник, а не на первый
+                // попавшийся.
+                hasTarget = goByMemory(PlaceKind::Food);
+
+                // Не помнит — искать глазами, и дорогой: ягодник редок и
+                // стоит в одной точке.
                 int berryX = goblin.x;
                 int berryY = goblin.y;
                 const bool berriesSeen =
-                    findNearest([&](std::size_t cell, int nx, int ny) {
+                    !hasTarget && findNearest([&](std::size_t cell, int nx, int ny) {
                         return bushAt[cell] != entt::null && berriesAt[cell] > 0 && standable(nx, ny);
                     }, berryX, berryY) >= 0;
                 if (berriesSeen) {
@@ -993,11 +1347,6 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                             hasTarget = true;
                         }
                     }
-                }
-                // Не видно — вспомнить, где еда была. С пустыми руками идти
-                // домой незачем, а вот к ягоднику — затем и затевалось.
-                if (!hasTarget) {
-                    hasTarget = goByMemory(PlaceKind::Food);
                 }
                 break;
             }
@@ -1018,7 +1367,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                         const RestPlace place{tiles.moisture[here], tiles.rockiness[here],
                                                tiles.treeAt[here] != 0, carcassMeat[here],
                                                tiles.trampled[here], canopyAt[here], beddingAt[here]};
-                        const BuildKind kind = betterBuild(place);
+                        const BuildKind kind = betterBuild(place).kind;
                         // Под деревом не строят — оно занимает клетку.
                         // placeSite откажет и сам, но незачем помнить как
                         // стройку то, чего не будет.
@@ -1056,6 +1405,15 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // --- 2. Руки полны — нести к стройке ---
                 if (carryRoom(*goblin.hands, size) <= 0 ||
                     (materialIn(goblin.hands->carried) > 0 && unfinished == BuildKind::None)) {
+                    // Своя стройка — раньше чужой, попавшейся на глаза: тот
+                    // же порядок, что у еды и воды. Материал несут туда, где
+                    // уже работали, а не туда, что ближе; достроенную
+                    // площадку память отпустит сама, придя пустой
+                    // (disappoint внутри goByMemory).
+                    hasTarget = goByMemory(PlaceKind::Work);
+                    if (hasTarget) {
+                        break;
+                    }
                     int siteX = goblin.x;
                     int siteY = goblin.y;
                     const bool siteSeen = findNearest([&](std::size_t cell, int nx, int ny) {
@@ -1067,11 +1425,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                         targetX = siteX;
                         targetY = siteY;
                         hasTarget = true;
-                        break;
                     }
-                    // Не видно — идти к вспомненной стройке. Придём и не
-                    // найдём — там же и разочаруемся (goByMemory).
-                    hasTarget = goByMemory(PlaceKind::Work);
                     break;
                 }
 
@@ -1135,6 +1489,121 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 hasTarget = true;
                 break;
             }
+            case GoblinDesire::Flee: {
+                // Куда спасаться, здесь не решается: у бегущего нет цели в
+                // том смысле, в каком она есть у идущего за травой.
+                // Направление шага считается ниже, отдельно, — и там же
+                // видно, что бежит гоблин НЕ ПРОЧЬ, а к своим.
+                //
+                // А вот дать сдачи можно прямо здесь: зубы в соседней клетке
+                // — и это всё условие (core/Strike.hpp). Не ответ на укус и
+                // не особое решение, а то же самое действие, каким хищник
+                // бьёт добычу, просто повод другой. Меткость у гоблина куплена
+                // геномом (hit_chance) и до сих пор не читалась ничем: бить
+                // ему было некого и нечем.
+                //
+                // Занятым (busy) удар не делает, в отличие от еды и разговора:
+                // отмахнувшийся продолжает уходить. Иначе гоблин застревал бы
+                // вплотную к зубам, отмахиваясь до смерти, — а это уже не
+                // спасение, а поединок, которого он не выигрывает.
+                if (hasThreat[g] && threatBeast[g] >= 0 &&
+                    strikeReaches(goblin.x, goblin.y, threatX[g], threatY[g])) {
+                    blows.push_back(BlowIntent{static_cast<int>(g), threatBeast[g]});
+                }
+
+                // Уже наверху — значит, спасаться больше некуда и незачем:
+                // гоблин сидит и пережидает. Без этого он слезал бы обратно,
+                // едва выше идти станет некуда, и лазал бы вверх-вниз у самой
+                // кромки, пока зверь ходит внизу.
+                //
+                // "Наверху" — это два разных места (core/Climb.hpp), и оба
+                // спрашиваются об одном: достанут ли отсюда зубы. На дереве и
+                // на валуне зверь стоит рядом и не дотягивается; в
+                // высокогорье он не стоит вовсе.
+                const bool upSomething =
+                    world.area().isBlocked(goblin.x, goblin.y) || tiles.treeAt[here] != 0;
+                if (upSomething || tiles.terrainHeight[here] > kLegCeiling) {
+                    busy = true;
+                    break;
+                }
+
+                // Не наверху — значит, надо туда добраться, и добраться
+                // НОГАМИ, а не одним шагом. Правило "шагни выше, если выше
+                // можно" здесь не работает, и это замер, а не догадка: пока
+                // бегство было пошаговым, доля испуганных в убежище равнялась
+                // доле спокойных до десятой — то есть вверх не бежал никто.
+                // Причина простая: рельеф плавный, и одна соседняя клетка
+                // почти никогда не выше здешней настолько, чтобы это что-то
+                // решало.
+                //
+                // Ищется САМОЕ ВЫСОКОЕ место в пределах видимости, а из
+                // одинаково высоких — ближайшее. Валун и дерево считаются
+                // выше голой земли под ними (climbedHeightOf): наверху
+                // оказывается не клетка, а тот, кто на неё влез.
+                //
+                // Знания "волк не лазает" у гоблина при этом нет и не
+                // заводится: он лезет как можно выше, потому что может. Что
+                // зверь за ним не пойдёт — свойство мира, а не догадка
+                // гоблина (02_CorePrinciples.md, п.6).
+                {
+                    int highX = goblin.x;
+                    int highY = goblin.y;
+                    int highest = climbedHeightOf(tiles.terrainHeight[here],
+                                                   world.area().isBlocked(goblin.x, goblin.y),
+                                                   tiles.treeAt[here] != 0);
+                    int bestDistance = 0;
+                    int ties = 0;
+                    for (int dy = -reach; dy <= reach; ++dy) {
+                        for (int dx = -reach; dx <= reach; ++dx) {
+                            const int distance = dx * dx + dy * dy;
+                            const int nx = goblin.x + dx;
+                            const int ny = goblin.y + dy;
+                            if (distance > reach * reach || !standable(nx, ny)) {
+                                continue;
+                            }
+                            const std::size_t cell = index(nx, ny);
+                            const int up = climbedHeightOf(tiles.terrainHeight[cell],
+                                                            world.area().isBlocked(nx, ny),
+                                                            tiles.treeAt[cell] != 0);
+                            if (up < highest) {
+                                continue;
+                            }
+                            // Из одинаково высоких — ближайшее, а из
+                            // одинаково высоких и одинаково близких — жребий.
+                            // Без жребия обход, идущий с левого верхнего
+                            // угла, уводил бы всех дружно вверх и влево:
+                            // порядок клеток в переборе не может быть
+                            // причиной события в мире (02_CorePrinciples.md,
+                            // п.12a).
+                            if (up == highest) {
+                                if (ties == 0 || distance > bestDistance) {
+                                    continue;
+                                }
+                                if (distance == bestDistance) {
+                                    ++ties;
+                                    if (randomBelow(random, static_cast<std::uint64_t>(ties)) != 0) {
+                                        continue;
+                                    }
+                                } else {
+                                    ties = 1;
+                                }
+                            } else {
+                                ties = 1;
+                            }
+                            highest = up;
+                            bestDistance = distance;
+                            highX = nx;
+                            highY = ny;
+                        }
+                    }
+                    if (highX != goblin.x || highY != goblin.y) {
+                        targetX = highX;
+                        targetY = highY;
+                        hasTarget = true;
+                    }
+                }
+                break;
+            }
             case GoblinDesire::Idle: break;
         }
 
@@ -1163,26 +1632,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             return static_cast<int>(nextState(roam) % 8u);
         };
 
-        // Куда гоблин хочет — ОДНО направление на все случаи движения, и
-        // дальше шаг считается одинаково (core/Walk.hpp). Идущий к цели,
-        // ищущий за пределами видимости и просто бродящий отличаются только
-        // тем, откуда взялось это направление; обход преграды получается
-        // сам.
-        int aim = -1;
-        if (hasTarget) {
-            aim = walkDirectionTo(goblin.x, goblin.y, targetX, targetY);
-        } else if (desire.current != GoblinDesire::Idle) {
-            aim = roamDirection();
-        } else if (static_cast<int>(randomBelow(random, kFull)) >= kWanderChance) {
-            continue; // ничего не гонит — стоит
-        }
-
-        // Сторониться гоблину пока некого: чужое племя ему не соперник за
-        // траву настолько, чтобы обходить его стороной, а хищника он не
-        // видит. Поэтому WalkShy пустой — но он есть, и в него встанет
-        // первая же причина держаться подальше.
-        //
-        // А вот тянет его к своим — к ближайшему из своего племени, если тот
+        // Тянет гоблина к своим — к ближайшему из своего племени, если тот
         // дальше kHerdKeep (core/Walk.hpp, WalkHerd). Закон тот же, что у
         // стада, и признак "свой" тот же по смыслу: у зверя вид, у гоблина
         // племя. Держаться вместе — свойство живого, а не звериное, и писать
@@ -1245,6 +1695,72 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             }
         }
 
+        // Кого сторониться: того, чьи зубы видно сейчас, а если не видно
+        // ничьих — того места, где пугали прежде (PlaceKind::Danger).
+        //
+        // Вот она, "первая причина держаться подальше", под которую тут
+        // столько времени стояло пустое место. Чужое племя ею так и не стало:
+        // соперник за траву — не повод обходить, а зубы — повод.
+        //
+        // Видимое бьёт помнимое, а не складывается с ним: направление в
+        // WalkShy одно (core/Walk.hpp), и зверь, стоящий перед носом, важнее
+        // места, где когда-то было страшно.
+        //
+        // Сторонение при этом НЕ бегство: гоблин не бросает своего дела, он
+        // лишь предпочитает ту сторону, где зверя нет. Бросить дело его
+        // заставит страх, и это отдельное желание.
+        WalkShy shy;
+        if (hasThreat[g]) {
+            shy = WalkShy{walkDirectionTo(goblin.x, goblin.y, threatX[g], threatY[g]), kDangerShy};
+        } else if (const auto* scary = recall(*goblin.mind, PlaceKind::Danger, goblin.x, goblin.y);
+                   scary != nullptr) {
+            shy = WalkShy{walkDirectionTo(goblin.x, goblin.y, scary->x, scary->y), kDangerShy};
+        }
+
+        // Куда гоблин хочет — ОДНО направление на все случаи движения, и
+        // дальше шаг считается одинаково (core/Walk.hpp). Идущий к цели,
+        // спасающийся, ищущий за пределами видимости и просто бродящий
+        // отличаются только тем, откуда взялось это направление; обход
+        // преграды получается сам.
+        int aim = -1;
+        if (desire.current == GoblinDesire::Flee) {
+            // Спасается гоблин К СВОИМ, а не прочь, и это единственное, что
+            // он может сделать с зубами: убежать он не в силах — он медленнее
+            // и добычи, и хищника, — а хищник ищет отбившегося (kHuntCompany,
+            // core/Hunting.hpp). Сойтись вместе значит перестать быть
+            // отбившимся.
+            //
+            // Сперва — туда, куда зубам хода нет, если такое место видно
+            // (цель выбрана выше, в ветке желания). Идти к нему ногами, а не
+            // прыгать одним шагом: уступ есть только по краю полки, и до края
+            // ещё надо дойти.
+            if (hasTarget) {
+                aim = walkDirectionTo(goblin.x, goblin.y, targetX, targetY);
+            }
+            // Лезть некуда — к своим. Направление берётся то же, что и тяга к
+            // ним, второго поиска для этого не нужно: страх лишь превращает
+            // слабую тягу в цель. Оттого испуганные и сбиваются в кучу там,
+            // где до испуга просто держались рядом.
+            //
+            // Своих не видно — уходить прочь от зубов. Не спасение, но и не
+            // стояние на месте.
+            if (aim < 0) {
+                aim = herd.direction;
+            }
+            if (aim < 0 && hasThreat[g]) {
+                aim = walkDirectionTo(threatX[g], threatY[g], goblin.x, goblin.y);
+            }
+            if (aim < 0) {
+                aim = roamDirection();
+            }
+        } else if (hasTarget) {
+            aim = walkDirectionTo(goblin.x, goblin.y, targetX, targetY);
+        } else if (desire.current != GoblinDesire::Idle) {
+            aim = roamDirection();
+        } else if (static_cast<int>(randomBelow(random, kFull)) >= kWanderChance) {
+            continue; // ничего не гонит — стоит
+        }
+
         // Восьмое слагаемое шага: по натоптанному идти легче
         // (core/Walk.hpp). Читается из снимка тика, как и всё остальное,
         // чтобы решения всех гоблинов принимались по одному состоянию мира.
@@ -1252,7 +1768,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             return world.area().inBounds(nx, ny) ? tiles.trampled[index(nx, ny)] : 0;
         };
         const WalkStep step =
-            chooseStep(*goblin.memory, goblin.x, goblin.y, aim, WalkShy{}, herd, standable, trodden, random);
+            chooseStep(*goblin.memory, goblin.x, goblin.y, aim, shy, herd, standable, trodden, random);
         if (!step.moved) {
             continue; // шагнуть некуда вовсе: вода, камень или край мира
         }
@@ -1633,6 +2149,46 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         n = m;
     }
 
+    // --- 7b. Отмахнуться ---
+    // Удары этого тика разрешаются разом, одним законом и без ролей
+    // (core/Strike.hpp) — тем же, каким бьёт хищник в своей системе. Ролей
+    // нет и здесь: гоблин не "отвечает" зверю, он бьёт того, кто рядом, и
+    // повод у него свой.
+    //
+    // Урон складывается: двое отмахнувшихся от одного зверя валят его вдвое
+    // быстрее, и порядок обхода на итог не влияет.
+    //
+    // Смерть зверя здесь не разрешается, в отличие от AnimalSystem, и это то
+    // же правило, что и с гоблином, только в другую сторону: хоронит тот, чья
+    // система ведёт тело. Забитый насмерть зверь доживёт до следующего тика с
+    // вышедшим здоровьем, и своя система его похоронит (bodyDied). Тик — цена
+    // того, чтобы туша не легла дважды.
+    //
+    // Бьют все, кто был жив НА НАЧАЛО прохода, и бьют по тем, кто был жив на
+    // начало прохода: проверяй здоровье внутри цикла — и второй удар по уже
+    // добитому зверю то приходился бы, то нет, смотря чьё намерение легло в
+    // список раньше. Порядок в памяти не может быть причиной события в мире
+    // (02_CorePrinciples.md, п.12a).
+    std::vector<bool> beastAlive(beasts.size(), false);
+    for (std::size_t b = 0; b < beasts.size(); ++b) {
+        beastAlive[b] = beasts[b].state->health > 0;
+    }
+    for (const auto& blow : blows) {
+        const auto g = static_cast<std::size_t>(blow.goblin);
+        const auto b = static_cast<std::size_t>(blow.beast);
+        if (!alive[g] || !beastAlive[b]) {
+            continue;
+        }
+        const StrikeOutcome outcome = resolveStrike(
+            bodySize(*goblins[g].state, *goblins[g].genome), beasts[b].size, goblins[g].genome->hitChance,
+            worldProperties.goblinPace, goblinSeed, tick, goblins[g].id, beasts[b].id);
+        if (outcome.damage <= 0) {
+            continue; // промах
+        }
+        beasts[b].state->health -= outcome.damage;
+        applyLameness(*beasts[b].injury, outcome);
+    }
+
     // --- 8. Шаги ---
     // Собранные намерения исполняются разом, после всех решений: иначе
     // сдвинувшийся гоблин менял бы обстановку тем, кто решает после него.
@@ -1769,6 +2325,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             w.registry().emplace<GoblinDesireComponent>(entity, GoblinDesireComponent{});
             w.registry().emplace<MovementComponent>(entity);
             w.registry().emplace<GoblinComponent>(entity);
+            // Цел: новорождённый ещё ни с кем не дрался. Обязателен по той же
+            // причине, что и силы: обе системы выбирают существ перечнем
+            // компонентов, и ребёнок без увечья выпал бы из мира молча.
+            w.registry().emplace<InjuryComponent>(entity);
             // Силы полны: новорождённый ещё никуда не ходил.
             w.registry().emplace<FatigueComponent>(entity);
             // Голова пустая: родившийся не помнит ничего и узнаёт мир сам.
@@ -1953,6 +2513,21 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({m, "kDisappointLoss", kDisappointLoss});
     out.push_back({m, "kRecallDistance", kRecallDistance});
     out.push_back({m, "kRestReturn", kRestReturn});
+    out.push_back({m, "kMetMark", kMetMark});
+    out.push_back({m, "kMateMark", kMateMark});
+
+    // Страх (core/Fear.hpp) — своей группой, и в ней два числа не про сам
+    // страх, а про то, что от него остаётся: твёрдость испуга в памяти и
+    // цена шага в сторону опасного. Подбираются они друг против друга —
+    // испуг, который не запомнился, сторониться нечему.
+    //
+    // kCarcassFearWeight здесь нет намеренно: гоблин падали не боится (её
+    // место уже отнимает годность, kRestCarcassPenalty), и показывать число,
+    // которого эта система не читает, значило бы врать наблюдателю.
+    constexpr const char* s = "Goblins (fear)";
+    out.push_back({s, "kWoundFear", kWoundFear});
+    out.push_back({s, "kScareMark", kScareMark});
+    out.push_back({s, "kDangerShy", kDangerShy});
 
     // Нрав (core/Character.hpp) — два размаха, и смотреть на них надо рядом:
     // ими и разделены уровень (трудолюбие) и направление (склонность).
@@ -1982,6 +2557,7 @@ void appendGoblinSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({t, "kStrangerTribe", kStrangerTribe});
     out.push_back({t, "kHearsayFull", kHearsayFull});
     out.push_back({t, "kGoodWord", kGoodWord});
+    out.push_back({f, "kMateWarmthStep", kMateWarmthStep});
 }
 
 } // namespace goblins
