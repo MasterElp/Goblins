@@ -12,15 +12,19 @@ namespace {
 // спрашивают отсюда же (см. kCanopy ниже), а не порядок строк в ресурсе:
 // кадры ищутся по имени, поэтому переставить их в файле можно, а
 // переименовать — нельзя, и вот этот список тому единственная причина.
-constexpr std::array<const char*, 9> kFrameNames = {
-    "canopy.poles",   "canopy.half", "canopy.full", "bedding.straws", "bedding.half",
-    "bedding.full",   "site.canopy", "site.bedding", "material",
+constexpr std::array<const char*, 13> kFrameNames = {
+    "canopy.poles", "canopy.half",   "canopy.full",  "bedding.straws", "bedding.half",
+    "bedding.full", "fence.stakes",  "fence.half",   "fence.full",     "site.canopy",
+    "site.bedding", "site.fence",    "material",
 };
 
 constexpr int kCanopy = 0;
 constexpr int kBedding = kCanopy + kStages;
-constexpr int kSite = kBedding + kStages;
-constexpr int kMaterial = kSite + 2;
+constexpr int kFence = kBedding + kStages;
+// Колышки замысла: по одному на вид, в порядке самого BuildKind минус None
+// (canopy, bedding, fence) — см. site() ниже.
+constexpr int kSite = kFence + kStages;
+constexpr int kMaterial = kSite + 3;
 
 // Раскраска одна на все постройки, и это не упущение, а закон мира: навес
 // принадлежит МЕСТУ, а не племени (BuildingComponent). Красить его по тому,
@@ -81,12 +85,25 @@ Rectangle bedding(int stage) {
     return baked().source(0, kBedding + clampStage(stage));
 }
 
+Rectangle fence(int stage) {
+    return baked().source(0, kFence + clampStage(stage));
+}
+
 Rectangle site(int kind) {
-    // Числа те же, что в слое "site" протокола (1 навес, 2 подстилка).
-    // Незнакомый вид рисуется колышками навеса, а не остаётся невидимым:
+    // Числа те же, что в слое "site" протокола (1 навес, 2 подстилка,
+    // 3 забор). Перечислением, а не двоичным условием: четвёртый вид иначе
+    // молча притворился бы навесом.
+    //
+    // Незнакомый вид и рисуется колышками навеса, а не остаётся невидимым:
     // площадка, которую не видно, — худшее из возможного, ведь именно её и
     // ищут глазами, когда спрашивают "почему они там толкутся".
-    return baked().source(0, kSite + (kind == 2 ? 1 : 0));
+    int slot = 0;
+    if (kind == 2) {
+        slot = 1;
+    } else if (kind == 3) {
+        slot = 2;
+    }
+    return baked().source(0, kSite + slot);
 }
 
 Rectangle material() {

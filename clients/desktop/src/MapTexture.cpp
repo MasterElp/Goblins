@@ -81,6 +81,11 @@ Color Cache::colorAt(const WorldState& state, const Layers& layers, std::size_t 
         if (layers.goblins && !state.canopy.empty() && state.canopy[i] > 0.0f) {
             color = TileColors::canopy(color, state.canopy[i]);
         }
+        // Забор — поверх навеса: он стоит по краю лагеря, где навеса и не
+        // бывает, а увидеть кольцо важнее, чем крышу под ним.
+        if (layers.goblins && !state.fence.empty() && state.fence[i] > 0.0f) {
+            color = TileColors::fence(color, state.fence[i]);
+        }
         if (layers.goblins && !state.site.empty() && state.site[i] > 0) {
             color = TileColors::site(color);
         }

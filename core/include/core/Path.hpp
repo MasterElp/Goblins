@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/Area.hpp"
+#include "core/Bound.hpp"
 #include "core/Climb.hpp"
 
 namespace goblins {
@@ -44,11 +45,21 @@ namespace goblins {
 // Правило одно, а факты, из которых оно складывается, каждый берёт своим
 // способом: система тика — по снимку клеток, снятому один раз на весь тик,
 // наблюдатель — по самому миру, клетка за клеткой.
-inline bool standableAt(bool blocked, bool hasSoil, int waterDepth, int height, const Climber& who) {
+// fence — прочность забора на клетке (0 — забора нет). Забор держит ровно
+// так же, как валун: ноге нельзя, руке можно. Второго закона о том, как через
+// что-то перелезают, для него заводить не пришлось — забор и есть
+// рукотворный валун.
+//
+// Из этого прямо следует и то, чего у забора НЕТ: ворот. Гоблин перелезает
+// свой плетень в любом месте, а не только там, где тропа. Ворота были бы
+// нужны, будь забор ценой шага, а не запретом; ценой он не сделан
+// сознательно — запрет уже есть в мире и работает.
+inline bool standableAt(bool blocked, bool hasSoil, int waterDepth, int height, int fence,
+                        const Climber& who) {
     if (!hasSoil || waterDepth > 0) {
         return false;
     }
-    if (blocked && !who.hands) {
+    if ((blocked || fenceShuts(fence)) && !who.hands) {
         return false;
     }
     return height <= who.ceiling;

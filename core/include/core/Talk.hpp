@@ -5,8 +5,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <span>
+#include <vector>
 
 #include "core/Bonds.hpp"
+#include "core/Mind.hpp"
 #include "core/Character.hpp"
 #include "core/Knowledge.hpp"
 #include "core/Random.hpp"
@@ -159,12 +161,24 @@ inline int talkAppeal(const Talker& talker, const Companion& companion, int warm
 // подойти, — и отвечает на него один закон. Из равных по влечению побеждает меньший идентификатор, а не
 // первый в списке: порядок в памяти не может быть причиной события в мире
 // (02_CorePrinciples.md, п.12a).
+// Влечение считает мир, а выбирает РАЗУМ (core/Mind.hpp): здесь только
+// складываются те, к кому вообще стоит подойти, и вес каждого.
+//
+// Связку прежде разрывало меньшее имя. Требование то же (порядок в памяти не
+// может быть причиной события в мире, 02_CorePrinciples.md, п.12a), но
+// меньшее имя означало перекос в сторону старших: из двух одинаково милых
+// соседей всегда выбирался тот, кто родился раньше. Жребий разума
+// удовлетворяет то же требование и этого перекоса не имеет.
+//
+// Список приходит в том же порядке, в каком его сложил мир, и на исход не
+// влияет: разум разводит равных жребием, а не местом.
 inline TalkChoice chooseCompanion(const Talker& talker, std::span<const Companion> companions,
-                                  const BondsComponent& bonds) {
+                                  const BondsComponent& bonds, Mind mind, std::uint64_t& random,
+                                  std::vector<Option>& scratch) {
     const int sight = std::max(1, talker.perception);
-    TalkChoice choice;
-    int bestAppeal = 0;
-    for (const auto& companion : companions) {
+    scratch.clear();
+    for (std::size_t i = 0; i < companions.size(); ++i) {
+        const Companion& companion = companions[i];
         if (!companion.alive || companion.id == talker.id) {
             continue;
         }
@@ -177,57 +191,65 @@ inline TalkChoice chooseCompanion(const Talker& talker, std::span<const Companio
         if (appeal <= 0) {
             continue;
         }
-        if (!choice.found || appeal > bestAppeal || (appeal == bestAppeal && companion.id < choice.id)) {
-            choice = TalkChoice{true, companion.id, companion.x, companion.y};
-            bestAppeal = appeal;
-        }
+        scratch.push_back(Option{static_cast<int>(i), companion.x, companion.y, appeal, 0, false, 0});
     }
-    return choice;
+    const Choice choice = decide(mind, scratch, Temper{}, random);
+    if (!choice.made) {
+        return TalkChoice{};
+    }
+    const Companion& picked = companions[static_cast<std::size_t>(choice.tag)];
+    return TalkChoice{true, picked.id, picked.x, picked.y};
 }
 
 // О чём он заговорит.
 //
-// Тема выбирается жребием по склонностям, а не берётся сильнейшая: гоблин, у
-// которого еда чуть интереснее воды, говорил бы о еде ВСЕГДА, и половина
-// склонностей не значила бы ничего. Жребий же делает сильную склонность
-// частой, а не единственной.
+// Выбирает РАЗУМ (core/Mind.hpp), а мир только складывает темы, о которых
+// вообще есть что сказать, и вес каждой — склонность к ней.
+//
+// Прежде здесь стоял собственный жребий по склонностям, зашитый намертво, с
+// доводом: "гоблин, у которого еда чуть интереснее воды, говорил бы о еде
+// ВСЕГДА, и половина склонностей не значила бы ничего". Довод верен, но он
+// не про мир, а про РАЗУМ — про то, что жадный выбор здесь плох. Оставлять
+// ради него в законе мира вшитое правило выбора значило бы держать второй,
+// потайной разум рядом с настоящим, ровно там, где его труднее всего
+// заметить.
+//
+// Теперь это видно и измеримо: при Mind::Lottery гоблин говорит по
+// склонностям, при Mind::Greedy — всегда о самом интересном ему. Второе
+// беднее, и это не поломка, а честное свойство жадного разума, вынесенное на
+// свет вместе со всеми остальными.
 //
 // Доступны при этом не все темы сразу, и обе отсечки — про мир, а не про
-// удобство. Место можно назвать, только если оно есть в голове: пересказать
-// то, чего не помнишь, нельзя. И только если собеседник достаточно свой
-// (kNewsWarmth) — иначе первое же "здравствуй" раздавало бы карту мира.
-inline Topic chooseTopic(const CharacterComponent& character, const KnowledgeComponent& mind,
-                         const BondsComponent& bonds, int x, int y, int warmth, std::uint64_t& state) {
-    std::array<int, kTopicCount> weight{};
-    int total = 0;
+// удобство: они не предпочтения, а условия. Место можно назвать, только если
+// оно есть в голове: пересказать то, чего не помнишь, нельзя. И только если
+// собеседник достаточно свой (kNewsWarmth) — иначе первое же "здравствуй"
+// раздавало бы карту мира.
+inline Topic chooseTopic(const CharacterComponent& character, const KnowledgeComponent& memory,
+                         const BondsComponent& bonds, int x, int y, int warmth, Mind mind,
+                         std::uint64_t& random, std::vector<Option>& scratch) {
+    scratch.clear();
     for (int slot = 0; slot < kTopicCount; ++slot) {
         const auto topic = static_cast<Topic>(slot);
         const PlaceKind place = placeOf(topic);
-        int share = interestIn(character, topic);
+        const int share = interestIn(character, topic);
+        if (share <= 0) {
+            continue;
+        }
         if (place != PlaceKind::None) {
-            if (warmth < kNewsWarmth || recall(mind, place, x, y) == nullptr) {
-                share = 0;
+            if (warmth < kNewsWarmth || recall(memory, place, x, y) == nullptr) {
+                continue;
             }
         } else if (topic == Topic::Kin && closestFace(bonds) == nullptr) {
-            // Отозваться не о ком.
-            share = 0;
+            continue; // отозваться не о ком
         }
-        weight[static_cast<std::size_t>(slot)] = share;
-        total += share;
+        // Старшинства у тем нет: ни одна не важнее другой при равной
+        // склонности, и равных разум разведёт жребием.
+        scratch.push_back(Option{slot, x, y, share, 0, false, 0});
     }
     // Сказать нечего и не о ком — значит, разговор ни о чём. Не запасной
     // случай, а самый обычный: таковы все первые разговоры в мире.
-    if (total <= 0) {
-        return Topic::Idle;
-    }
-    int roll = static_cast<int>(randomBelow(state, static_cast<std::uint64_t>(total)));
-    for (int slot = 0; slot < kTopicCount; ++slot) {
-        roll -= weight[static_cast<std::size_t>(slot)];
-        if (roll < 0) {
-            return static_cast<Topic>(slot);
-        }
-    }
-    return Topic::Idle;
+    const Choice choice = decide(mind, scratch, Temper{}, random);
+    return choice.made ? static_cast<Topic>(choice.tag) : Topic::Idle;
 }
 
 // С какой твёрдостью услышанное место ляжет в голову слушателя.

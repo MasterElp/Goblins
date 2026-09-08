@@ -153,6 +153,12 @@ def report(name, split, units=""):
 def main():
     ticks = int(sys.argv[1]) if len(sys.argv) > 1 else TICKS
     urge = int(sys.argv[2]) if len(sys.argv) > 2 else 20
+    # Разум (core/Mind.hpp): о чём заговорить — его решение, а не закон мира.
+    # Жадный всегда берёт самую сильную склонность, жребий говорит по всем.
+    # Разница видна в том, ЧТО расходится слухом: одни ли места одного рода
+    # или разные.
+    mind = sys.argv[3] if len(sys.argv) > 3 else "greedy"
+
     server_binary = find_server(ROOT)
     if server_binary is None:
         print("Сервер не собран: ./build.sh")
@@ -169,6 +175,7 @@ def main():
     # Тоска включается и выключается здесь, а не пересборкой: замер обязан
     # сравнивать один и тот же бинарник с собой.
     config.setdefault("goblins", {})["talk_urge"] = urge
+    config.setdefault("terrain", {}).setdefault("toggles", {})["lottery_mind"] = mind == "lottery"
     config_path = os.path.join(workdir, "config.json")
     json.dump(config, open(config_path, "w", encoding="utf-8"), indent=4, sort_keys=True)
 
@@ -259,7 +266,12 @@ def main():
         avg_talk = sum(r["talk_share"] for r in rows) / alive
         popular = knowers.most_common(1)[0] if knowers else None
 
-        print(f"talk_urge = {urge}, тиков {tick}, опрошено гоблинов {alive}")
+        # Сколько РАЗНЫХ родов мест разошлось по головам: при жадном разуме
+        # гоблин всегда говорит об одном и том же, и слухом расходится один
+        # род, а не все.
+        toldKinds = collections.Counter(place[2] for place in knowers)
+        print(f"talk_urge = {urge}, разум {mind}, тиков {tick}, опрошено гоблинов {alive}")
+        print(f"  родов мест в чужих головах: {len(toldKinds)} ({dict(toldKinds)})")
         print(f"  в желании поговорить: {avg_talk:.1f}% прожитых тиков")
         print(f"  знакомых у гоблина: {avg_faces:.1f}, тепло самого близкого: {avg_closest:.0f} из 100")
         if popular is None:

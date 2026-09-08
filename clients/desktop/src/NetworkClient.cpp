@@ -732,6 +732,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         working_.berries = decodeInts(layers, "berries", cellCount, 0);
         working_.store = decodeInts(layers, "store", cellCount, 0);
         working_.canopy = decodeScaled(layers, "canopy", cellCount, kFromHundredths);
+        working_.fence = decodeScaled(layers, "fence", cellCount, kFromHundredths);
         working_.bedding = decodeScaled(layers, "bedding", cellCount, kFromHundredths);
         working_.site = decodeInts(layers, "site", cellCount, 0);
         working_.siteMaterial = decodeInts(layers, "site_material", cellCount, 0);
@@ -871,6 +872,7 @@ void NetworkClient::handleMessage(const std::string& payload) {
         cells("berries", working_.berries, asIs);
         cells("store", working_.store, asIs);
         cells("canopy", working_.canopy, toFraction);
+        cells("fence", working_.fence, toFraction);
         cells("bedding", working_.bedding, toFraction);
         cells("site", working_.site, asIs);
         cells("site_material", working_.siteMaterial, asIs);

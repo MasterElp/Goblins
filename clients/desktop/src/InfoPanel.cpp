@@ -292,8 +292,9 @@ void drawBuildingGroup(const WorldState& state, ColumnWriter& writer, int x, int
     const std::size_t index = static_cast<std::size_t>(y) * state.areaWidth + x;
     const bool canopy = index < state.canopy.size() && state.canopy[index] > 0.0f;
     const bool bedding = index < state.bedding.size() && state.bedding[index] > 0.0f;
+    const bool fence = index < state.fence.size() && state.fence[index] > 0.0f;
     const bool site = index < state.site.size() && state.site[index] > 0;
-    if (!canopy && !bedding && !site) {
+    if (!canopy && !bedding && !fence && !site) {
         return;
     }
 
@@ -304,8 +305,19 @@ void drawBuildingGroup(const WorldState& state, ColumnWriter& writer, int x, int
     if (bedding) {
         writer.line("bedding", TextFormat("%.0f%%", state.bedding[index] * 100.0f));
     }
+    if (fence) {
+        writer.line("fence", TextFormat("%.0f%%", state.fence[index] * 100.0f));
+    }
     if (site) {
-        writer.line("planned", state.site[index] == 1 ? "canopy" : "bedding");
+        // Именем вида, а не двоичным условием: третий вид иначе молча
+        // показался бы подстилкой (BuildKind, core/components/SiteComponent.hpp).
+        const char* planned = "bedding";
+        if (state.site[index] == 1) {
+            planned = "canopy";
+        } else if (state.site[index] == 3) {
+            planned = "fence";
+        }
+        writer.line("planned", planned);
         // Материал на площадке — всегда, пока есть замысел, и нулём тоже.
         // Ноль значит "работать нечем", и это самое частое, из-за чего
         // стройка стоит; прячась при нуле, строка прятала бы ровно тот

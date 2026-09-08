@@ -833,7 +833,7 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
         // подробно, насколько его видно.
         const bool drawBuildings = showGoblins && tileSize >= 6 && BuildSprites::ready() &&
                                    snapshot.canopy.size() >= cellCount && snapshot.bedding.size() >= cellCount &&
-                                   snapshot.site.size() >= cellCount;
+                                   snapshot.fence.size() >= cellCount && snapshot.site.size() >= cellCount;
         // Трава и куст — тем же обходом, что дерево и постройка, но по другой
         // причине: заслонять им нечего, из клетки они не торчат, и порядок
         // строк им безразличен. Обход общий просто потому, что он один и уже
@@ -935,6 +935,15 @@ AppScreen draw(NetworkClient& network, goblins::ClientConfig& config, const std:
                         if (snapshot.canopy[cell] > 0.0f) {
                             DrawTexturePro(BuildSprites::atlas(),
                                            BuildSprites::canopy(BuildSprites::stageOf(snapshot.canopy[cell])),
+                                           standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
+                        }
+                        // Забор — последним, поверх всего: он стоит по краю
+                        // лагеря и торчит из клетки вверх, как и навес, но в
+                        // отличие от навеса заслоняет собой то, что за ним, а
+                        // не то, что под ним.
+                        if (snapshot.fence[cell] > 0.0f) {
+                            DrawTexturePro(BuildSprites::atlas(),
+                                           BuildSprites::fence(BuildSprites::stageOf(snapshot.fence[cell])),
                                            standingAt(screenX, screenY), Vector2{0, 0}, 0.0f, WHITE);
                         }
                     }

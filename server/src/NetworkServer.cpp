@@ -16,6 +16,7 @@
 #include "core/Hunting.hpp"
 #include "core/Knowledge.hpp"
 #include "core/Mating.hpp"
+#include "core/Mind.hpp"
 #include "core/Needs.hpp"
 #include "core/Bonds.hpp"
 #include "core/Character.hpp"
@@ -124,6 +125,7 @@ void NetworkServer::LayerSnapshot::resize(int w, int h) {
     trampled.assign(count, 0);
     store.assign(count, 0);
     canopy.assign(count, 0);
+    fence.assign(count, 0);
     bedding.assign(count, 0);
     site.assign(count, 0);
     siteMaterial.assign(count, 0);
@@ -351,6 +353,7 @@ void NetworkServer::captureLayers(LayerSnapshot& out) const {
         [&](const PositionComponent& pos, const BuildingComponent& building) {
             const std::size_t i = static_cast<std::size_t>(pos.y) * width + pos.x;
             out.canopy[i] = toWire(building.canopy);
+            out.fence[i] = toWire(building.fence);
             out.bedding[i] = toWire(building.bedding);
         });
 
@@ -699,9 +702,10 @@ struct TileFacts {
     bool soil = false;
     int water = 0;
     int carcass = 0;
-    // Высота рельефа: наблюдатель считает ту же годность, что и система, а
-    // ей теперь нужен перепад между двумя клетками (core/Climb.hpp).
+    // Высота рельефа и забор: наблюдатель считает ту же годность, что и
+    // система, а ей нужно и то, и другое (core/Climb.hpp, core/Bound.hpp).
     int height = 0;
+    int fence = 0;
 };
 
 TileFacts tileFactsAt(const World& world, int x, int y) {
@@ -723,6 +727,9 @@ TileFacts tileFactsAt(const World& world, int x, int y) {
         }
         if (const auto* relief = registry.try_get<const HeightComponent>(entity)) {
             facts.height = relief->height;
+        }
+        if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
+            facts.fence = building->fence;
         }
         break;
     }
@@ -761,7 +768,8 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
     // ничего.
     reach.build(world.area(), position.x, position.y, sight, [&world](int x, int y) {
         const TileFacts facts = tileFactsAt(world, x, y);
-        return standableAt(world.area().isBlocked(x, y), facts.soil, facts.water, facts.height, kOnLegs);
+        return standableAt(world.area().isBlocked(x, y), facts.soil, facts.water, facts.height, facts.fence,
+                           kOnLegs);
     });
 
     std::vector<PathCell> cells;
@@ -842,12 +850,17 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
                                       bodySize(preyBody, preyGenome), company, underTree});
         }
 
+        std::vector<Option> sights;
         const HuntChoice choice = chooseHuntTarget(
             reach,
-            Hunter{position.x, position.y, sight, genome.speed, hungerOf(animal, genome), bodySize(animal, genome)},
+            Hunter{position.x, position.y, sight, genome.speed, hungerOf(animal, genome),
+                    bodySize(animal, genome), std::clamp(animal.health, 0, kFull)},
             preys,
             [&world](int x, int y) { return tileFactsAt(world, x, y).carcass; },
-            mixSeed(static_cast<std::uint64_t>(properties.animalRandomSeed), mixSeed(tick, id)));
+            mixSeed(static_cast<std::uint64_t>(properties.animalRandomSeed), mixSeed(tick, id)),
+            // Тем же разумом, каким выбирал сам зверь: наблюдатель обязан
+            // нарисовать ЕГО решение, а не своё (core/Mind.hpp).
+            properties.toggles.lotteryMind ? Mind::Lottery : Mind::Greedy, sights);
         if (choice.kind != HuntChoice::Kind::None) {
             hasTarget = true;
             targetX = choice.x;
@@ -874,12 +887,19 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
         }
 
         const Suitor suitor{id, position.x, position.y, sight, genome.species, predator, animal.sex};
+        // Тем же разумом и тем же жребием, каким выбирал сам зверь: иначе
+        // панель нарисует дорогу к той паре, к которой он не пошёл
+        // (core/Mind.hpp).
+        const Mind watcherMind = properties.toggles.lotteryMind ? Mind::Lottery : Mind::Greedy;
+        std::uint64_t mateRandom =
+            mixSeed(static_cast<std::uint64_t>(properties.animalRandomSeed), mixSeed(tick, id));
+        std::vector<Option> sights;
         if (!anyMateInSight(suitor, mates)) {
             // То же решение, что и в AnimalSystem: рядом никого не видно —
             // пробуем зов (hearCall). Он не строит дорогу (звук не
             // спрашивает брода), поэтому и рисуется иначе — прямой линией,
             // а не ломаной по клеткам Reach, см. ниже.
-            const MateChoice call = hearCall(suitor, mates);
+            const MateChoice call = hearCall(suitor, mates, watcherMind, mateRandom, sights);
             if (call.found) {
                 hasTarget = true;
                 targetX = call.x;
@@ -888,7 +908,7 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
                 isCall = true;
             }
         } else {
-            const MateChoice choice = chooseMate(reach, suitor, mates);
+            const MateChoice choice = chooseMate(reach, suitor, mates, watcherMind, mateRandom, sights);
             if (choice.found) {
                 hasTarget = true;
                 targetX = choice.x;
@@ -979,6 +999,7 @@ struct GoblinPlace {
     // а чтобы сказать, сколько работы осталось: "готово / не готово" в мире
     // нет, есть число (BuildingComponent).
     int canopy = 0;
+    int fence = 0;
     int bedding = 0;
     bool site = false;
     BuildKind siteKind = BuildKind::None;
@@ -1008,6 +1029,7 @@ GoblinPlace goblinPlaceAt(const World& world, int x, int y) {
             }
             if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
                 place.canopy = building->canopy;
+                place.fence = building->fence;
                 place.bedding = building->bedding;
             }
             if (const auto* site = registry.try_get<const SiteComponent>(entity)) {
@@ -1065,7 +1087,7 @@ const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const 
     // Что здесь недоделано — тем же законом, каким это решает сам гоблин
     // (core/Build.hpp): замысел или начатая, но не доведённая постройка.
     const BuildKind unfinished =
-        unfinishedAt(BuildingComponent{place.canopy, place.bedding},
+        unfinishedAt(BuildingComponent{place.canopy, place.bedding, place.fence},
                       place.site ? place.siteKind : BuildKind::None);
 
     switch (desire) {
@@ -1112,7 +1134,13 @@ const char* goblinActivity(GoblinDesire desire, const GoblinPlace& place, const 
                 // Материал берётся сперва из кучи под ногами, потом из рук
                 // (core/Build.hpp) — и то, и другое здесь одинаково годится.
                 if (materialIn(place.stored) >= kMaterialPerWork || material >= kMaterialPerWork) {
-                    return unfinished == BuildKind::Canopy ? "building the canopy" : "laying the bedding";
+                    switch (unfinished) {
+                        case BuildKind::Canopy: return "building the canopy";
+                        case BuildKind::Fence: return "weaving the fence";
+                        case BuildKind::Bedding:
+                        case BuildKind::None: break;
+                    }
+                    return "laying the bedding";
                 }
                 // Не беда и не ошибка, а обычное дело: принесут ещё. Ради
                 // этой строки слой "site_material" и заведён — стоящая
@@ -1367,6 +1395,7 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             groups.push_back(makeGroup("Place", {{"rest_here", restQuality},
                                                   {"rest_good", kRestGood},
                                                   {"canopy", place.canopy},
+                                                  {"fence", place.fence},
                                                   {"bedding", place.bedding}}));
 
             // Площадка под ногами — только когда она есть: у стоящего в чистом
@@ -1384,13 +1413,16 @@ nlohmann::json NetworkServer::buildWatchedJson() const {
             // площадка снимается первой же работой, и дальше "стройка" — это
             // постройка малой прочности (SiteComponent).
             const BuildKind unfinished =
-                unfinishedAt(BuildingComponent{place.canopy, place.bedding},
+                unfinishedAt(BuildingComponent{place.canopy, place.bedding, place.fence},
                               place.site ? place.siteKind : BuildKind::None);
             if (unfinished != BuildKind::None) {
-                const int condition = unfinished == BuildKind::Canopy ? place.canopy : place.bedding;
+                const int condition = buildingConditionOf(
+                    BuildingComponent{place.canopy, place.bedding, place.fence}, unfinished);
                 const int workLeft = (kFull - condition) * workCost(buildWorkCost(unfinished)) / kFull;
                 groups.push_back(
-                    makeGroup(unfinished == BuildKind::Canopy ? "Site (canopy)" : "Site (bedding)",
+                    makeGroup(unfinished == BuildKind::Canopy   ? "Site (canopy)"
+                               : unfinished == BuildKind::Fence ? "Site (fence)"
+                                                                : "Site (bedding)",
                               {{"condition", condition},
                                {"straw", place.stored.of(ResourceKind::Straw)},
                                {"twigs", place.stored.of(ResourceKind::Twigs)},
@@ -1740,6 +1772,7 @@ std::string NetworkServer::buildInitMessage(const LayerSnapshot& layers, const n
     message["layers"]["trampled"] = layers.trampled;
     message["layers"]["store"] = layers.store;
     message["layers"]["canopy"] = layers.canopy;
+    message["layers"]["fence"] = layers.fence;
     message["layers"]["bedding"] = layers.bedding;
     message["layers"]["site"] = layers.site;
     message["layers"]["site_material"] = layers.siteMaterial;
@@ -1779,6 +1812,7 @@ std::string NetworkServer::buildDeltaMessage(const LayerSnapshot& previous, cons
         {"trampled", {&previous.trampled, &current.trampled}},
         {"store", {&previous.store, &current.store}},
         {"canopy", {&previous.canopy, &current.canopy}},
+        {"fence", {&previous.fence, &current.fence}},
         {"bedding", {&previous.bedding, &current.bedding}},
         {"site", {&previous.site, &current.site}},
         {"site_material", {&previous.siteMaterial, &current.siteMaterial}},

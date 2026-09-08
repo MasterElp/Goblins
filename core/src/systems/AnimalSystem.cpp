@@ -27,7 +27,7 @@
 #include "core/Body.hpp"
 #include "core/Carcass.hpp"
 #include "core/Climb.hpp"
-#include "core/Desires.hpp"
+#include "core/Mind.hpp"
 #include "core/Fatigue.hpp"
 #include "core/Fear.hpp"
 #include "core/Diagnostics.hpp"
@@ -134,6 +134,27 @@ constexpr int kBystanderShyness = 450;
 // бы ни до травы, ни до воды.
 constexpr int kDesireFloor = 350;
 constexpr int kDesireSwitch = 150;
+
+// С какого страха животное бросает всё разом, не спрашивая, чем оно занято
+// (Option::panic, core/Mind.hpp).
+//
+// Правило заведено было для гоблина, но принадлежит всякому, у кого есть
+// страх, и держится это на том же, на чём держится весь core/Fear.hpp:
+// разойдись оно по видам — и вышло бы, что зубы кусают по-разному в
+// зависимости от того, кого кусают. Травоядное быстрее гоблина и уходит
+// успешнее, но ВЫБИРАЕТ так же: очередь желаний сравнивает обед с водопоем,
+// а не обед с зубами.
+//
+// Число своё, а не общее с гоблином, ровно по той же причине, по какой свои
+// у него порог и инерция: закон общий, значения у каждого свои, и разойтись
+// им однажды придётся. Сегодня они близнецы — семьсот, то есть зубы ближе
+// половины поля зрения (seenScare, core/Fear.hpp).
+//
+// Полная свежая туша под ногами (carcassDread при kCarcassFearWeight = 700)
+// попадает в этот порог краем, и это верное следствие, а не досадное: место,
+// где только что убили и съели, — повод уйти сейчас же, а не доесть своё.
+// Обглоданная и подгнившая паники уже не вызовет — вес тает вместе с мясом.
+constexpr int kPanic = 700;
 
 // Размножение. Желание пары копится только у взрослого, доросшего и не
 // бедствующего животного (kCalmNeed — предел голода и жажды, при котором
@@ -282,41 +303,44 @@ struct Animal {
 
 // Какое желание сейчас гонит животное.
 //
-// Сам выбор — общий закон мира (core/Desires.hpp): порог, ниже которого
-// желание никуда не гонит, и инерция, с которой уже выбранное держится за
-// себя. Здесь остаётся только то, что относится к животному: какие у него
-// желания и чем меряется срочность каждого.
+// САМ ВЫБОР ЖИВОТНОМУ НЕ ПРИНАДЛЕЖИТ. Его делает разум (core/Mind.hpp), и
+// разум сменный: порог, инерция, паника и сам жребий — его устройство, а не
+// закон мира (02_CorePrinciples.md, п.6). Здесь остаётся только звериное:
+// чего оно может хотеть, чем меряется срочность каждого желания и какими
+// числами настроен его разум.
 //
-// Порядок в списке — приоритет при равенстве, побеждает последний. Страх
-// поэтому и стоит последним: сытость подождёт, зубы — нет.
-Desire chooseDesire(const Animal& animal, bool readyToMate) {
+// Приоритет при равенстве назван ЧИСЛОМ (Option::rank), а не местом в
+// списке: один и тот же разум выбирает и занятие, и клетку, а у клеток
+// порядок перебора ничего не значит и решать не должен. Страх поэтому и
+// старше всех: сытость подождёт, зубы — нет.
+//
+// Отдельного "чем занят сейчас" здесь больше нет: занятие помечается прямо в
+// варианте (Option::current). Прежде рядом со списком стоял второй switch,
+// повторявший те же величины, и держать два списка в согласии приходилось
+// руками — разъехались бы они молча.
+Desire chooseDesire(const Animal& animal, bool readyToMate, Mind mind, std::uint64_t& random) {
     const DesireComponent& desire = *animal.desire;
     const int mating = readyToMate && desire.mating >= kMateDesire ? desire.mating : 0;
+    const auto busy = [&](Desire kind) { return desire.current == kind; };
 
-    const Urgency candidates[] = {
+    const Option options[] = {
         // Отдых стоит первым и потому проигрывает при равенстве всем
         // остальным: усталость никого не убивает, а голод, жажда и зубы
         // убивают. Лечь животное должно тогда, когда его больше ничто не
         // гонит, — тот же порядок и по той же причине, что у гоблина.
-        {static_cast<int>(Desire::Rest), animal.tired->fatigue},
-        {static_cast<int>(Desire::Food), animal.hunger},
-        {static_cast<int>(Desire::Water), animal.thirst},
-        {static_cast<int>(Desire::Mate), mating},
-        {static_cast<int>(Desire::Flee), animal.fear},
+        {static_cast<int>(Desire::Rest), 0, 0, animal.tired->fatigue, 0, busy(Desire::Rest), 0},
+        {static_cast<int>(Desire::Food), 0, 0, animal.hunger, 1, busy(Desire::Food), 0},
+        {static_cast<int>(Desire::Water), 0, 0, animal.thirst, 2, busy(Desire::Water), 0},
+        {static_cast<int>(Desire::Mate), 0, 0, mating, 3, busy(Desire::Mate), 0},
+        // Зубы вплотную не обсуждаются: выше kPanic страх не спорит ни с кем
+        // (Option::panic). До этого дня страх стоял в очереди наравне с
+        // обедом — и голодное животное доедало под зубами, хотя
+        // docs/09_Animals.md, п. 9 всё это время утверждал обратное.
+        {static_cast<int>(Desire::Flee), 0, 0, animal.fear, 4, busy(Desire::Flee), kPanic},
     };
 
-    int currentUrgency = 0;
-    switch (desire.current) {
-        case Desire::Food: currentUrgency = animal.hunger; break;
-        case Desire::Water: currentUrgency = animal.thirst; break;
-        case Desire::Mate: currentUrgency = mating; break;
-        case Desire::Flee: currentUrgency = animal.fear; break;
-        case Desire::Rest: currentUrgency = animal.tired->fatigue; break;
-        case Desire::Idle: break;
-    }
-
-    return static_cast<Desire>(chooseUrgent(candidates, static_cast<int>(desire.current), currentUrgency,
-                                            kDesireFloor, kDesireSwitch, static_cast<int>(Desire::Idle)));
+    const Choice choice = decide(mind, options, Temper{kDesireFloor, kDesireSwitch}, random);
+    return choice.made ? static_cast<Desire>(choice.tag) : Desire::Idle;
 }
 
 } // namespace
@@ -333,6 +357,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
 
     auto& registry = world.registry();
     const auto& worldProperties = registry.get<const WorldPropertiesComponent>(world.worldEntity());
+    // Каким разумом думают существа этого мира (core/Mind.hpp). Одно значение
+    // на весь тик и на всех: разум — свойство мира, а не особи, и меняется он
+    // только регенерацией.
+    const Mind mind = worldProperties.toggles.lotteryMind ? Mind::Lottery : Mind::Greedy;
     // Мутация в тысячных долях вложения (core/Scale.hpp) — а сам расклад
     // бюджета дробный, это генерация, а не состояние мира.
     const float mutationRate = static_cast<float>(worldProperties.animalMutationRate) / kFull;
@@ -679,10 +707,9 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             }
         }
 
-        // Страх от ран — общий для всех, у кого есть тело. Раненый боится
-        // того, кто способен его добить, и уходит залечиваться; целый не
-        // боится никого, поэтому здоровый хищник охотится ровно как
-        // охотился — новый источник ничего не меняет, пока его не поранят.
+        // Страх от ран — у того, НА КОГО ОХОТЯТСЯ. Раненый боится того, кто
+        // способен его добить, и уходит залечиваться; целый не боится
+        // никого.
         //
         // Опасность мерится тем же отношением размеров, каким считается
         // исход удара (core/Strike.hpp): заяц рядом с раненым волком не
@@ -693,15 +720,24 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         // опасны травоядные, а их сотни, и отдельного списка для них нет.
         // Тот же приём и та же цена, что у поиска чужого вида ниже.
         //
-        // Гоблина этот перебор, в отличие от двух соседних, НЕ пропускает, и
-        // это выбор, а не недосмотр. Соперник и сородич — про то, кто чей;
-        // здесь же вопрос один: может ли стоящий рядом добить. Гоблин может —
-        // меткость удара у него куплена геномом, — и раненому волку он
-        // страшен ровно настолько, насколько крупен. Диета отсекает своих:
-        // гоблин, как и травоядное, не хищник, поэтому раненое травоядное его
-        // не боится, а раненый хищник боится обоих.
+        // ХИЩНИКА этот перебор пропускает целиком, и это исправление прямой
+        // ошибки, а не поблажка сильному. Не своей диеты у хищника — его
+        // собственная добыча: боясь её, он разворачивался бы от того самого,
+        // за чем пришёл, и голод гнал бы его туда, откуда гонит страх.
+        // Незаметным это было, пока страх стоял в общей очереди желаний
+        // (голод почти всегда перебивал), и вылезло сразу, как только страх
+        // получил право очередь ломать: потрёпанный хищник бросал охоту
+        // насовсем и умирал от голода, а за три тысячи тиков вымирали все.
+        //
+        // Осторожность раненого хищника от этого не пропала, она переехала
+        // туда, где ей место, — в выбор добычи (Hunter::whole,
+        // core/Hunting.hpp): бери по себе, а не отступай от еды.
+        //
+        // Гоблин же в перебор попадает, и это выбор, а не недосмотр: он не
+        // хищник, на него охотятся, и раненому гоблину стоящий рядом волк
+        // страшен ровно настолько, насколько крупен.
         const int hurt = kFull - std::clamp(state.health, 0, kFull);
-        if (hurt > 0) {
+        if (!animal.predator && hurt > 0) {
             const int mySize = std::max(1, bodySize(state, genome));
             const int sightCells = std::max(1, genome.perception);
             for (std::size_t b = 0; b < animals.size(); ++b) {
@@ -789,7 +825,14 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 desire.mating = std::min(kFull, desire.mating + genome.breedingUrge);
             }
         }
-        desire.current = chooseDesire(animal, adult && content && canBearYoung);
+        // Жребий разума — свой, отдельный от того, которым в п.4 разыгрываются
+        // связки. Числа те же (seed мира, тик, имя зверя), но сложены иначе:
+        // два розыгрыша одного существа в один тик, начатые с одного
+        // состояния, дали бы одно и то же число — и выбор занятия совпадал бы
+        // с выбором клетки из равных.
+        std::uint64_t mindRandom = mixSeed(mixSeed(animalSeed, tick), animal.id);
+        desire.current = chooseDesire(animal, adult && content && canBearYoung,
+                                       mind, mindRandom);
     }
 
     // Добыча в том виде, в каком её видит хищник (core/Hunting.hpp): где
@@ -866,6 +909,10 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     // ищущих, а массивы у неё на всю Область.
     Reach reachOf;
     std::vector<PathCell> road;
+    // Варианты для разума. Живут снаружи цикла и переиспользуются — по той же
+    // причине, что и волна дороги: за тик их складывают столько раз, сколько
+    // в мире решающих, а видимая округа большого зверя это тысяча клеток.
+    std::vector<Option> sights;
 
     // --- 4. Решения: что животное делает со своим желанием ---
     for (std::size_t a = 0; a < animals.size(); ++a) {
@@ -951,21 +998,25 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             }
             const std::size_t cell = index(nx, ny);
             return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell],
-                               tiles.terrainHeight[cell], kOnLegs);
+                               tiles.terrainHeight[cell], tiles.fenceAt[cell], kOnLegs);
         };
 
-        // Ближайшая клетка в пределах видимости, удовлетворяющая условию.
-        // Ближайшая, а не лучшая: животное идёт к тому, что видит рядом, а
-        // не выбирает оптимум по всей округе.
+        // Куда идти из того, что видно, — решает РАЗУМ (core/Mind.hpp). Мир
+        // здесь только складывает варианты и вес каждого: чем ближе клетка,
+        // тем вес больше. Кто из них будет выбран — не его дело.
         //
-        // Из одинаково близких выбор бросается жребием, а не достаётся
-        // первой по обходу. Обход идёт с левого верхнего угла квадрата
-        // видимости, и без жребия стадо на ровном лугу, где еда со всех
-        // сторон одинаково близко, дружно уходило бы вверх и влево — не
-        // потому, что там лучше, а потому, что цикл начинается оттуда.
+        // Прежде выбор был зашит: всегда ближайшая, а из равноудалённых —
+        // жребий. Жребий никуда не делся, он переехал в разум и стал третьей
+        // ступенью общего правила (вес, старшинство, жребий), а "всегда
+        // ближайшая" перестало быть законом мира и стало повадкой ОДНОГО
+        // разума: жадный по-прежнему берёт ближайшую, жребий чаще берёт
+        // ближайшую, но не всегда.
+        //
+        // Вес считается так, чтобы самая дальняя видимая клетка получила
+        // единицу, а не ноль: нулевой вес значил бы "этого варианта нет", а
+        // он есть — он просто далеко.
         auto findNearest = [&](auto predicate, int& outX, int& outY) {
-            int bestDistance = 0;
-            int ties = 0;
+            sights.clear();
             for (int dy = -reach; dy <= reach; ++dy) {
                 for (int dx = -reach; dx <= reach; ++dx) {
                     const int nx = animal.x + dx;
@@ -977,28 +1028,21 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     if (distance > reach * reach) {
                         continue; // видимость круглая, а не квадратная
                     }
-                    if (ties > 0 && distance > bestDistance) {
-                        continue;
-                    }
                     if (!predicate(index(nx, ny), nx, ny)) {
                         continue;
                     }
-                    if (ties > 0 && distance == bestDistance) {
-                        // Равноудалённая находка: занимает место прежней с
-                        // вероятностью 1/N, поэтому все они равноправны.
-                        ++ties;
-                        if (randomBelow(random, static_cast<std::uint64_t>(ties)) != 0) {
-                            continue;
-                        }
-                    } else {
-                        ties = 1;
-                    }
-                    bestDistance = distance;
-                    outX = nx;
-                    outY = ny;
+                    sights.push_back(Option{0, nx, ny, reach * reach + 1 - distance, 0, false, 0});
                 }
             }
-            return ties > 0 ? bestDistance : -1;
+            const Choice choice = decide(mind, sights, Temper{}, random);
+            if (!choice.made) {
+                return -1;
+            }
+            outX = choice.x;
+            outY = choice.y;
+            const int dx = choice.x - animal.x;
+            const int dy = choice.y - animal.y;
+            return dx * dx + dy * dy;
         };
 
         switch (desire.current) {
@@ -1024,8 +1068,11 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // дорогу на карте, и разъехаться им негде.
                     reachOf.build(world.area(), animal.x, animal.y, reach, standable);
                     const HuntChoice choice = chooseHuntTarget(
-                        reachOf, Hunter{animal.x, animal.y, reach, chaseSpeed, animal.hunger, size}, preys,
-                        [&](int nx, int ny) { return carcassMeat[index(nx, ny)]; }, random);
+                        reachOf,
+                        Hunter{animal.x, animal.y, reach, chaseSpeed, animal.hunger, size,
+                               std::clamp(state.health, 0, kFull)},
+                        preys,
+                        [&](int nx, int ny) { return carcassMeat[index(nx, ny)]; }, random, mind, sights);
 
                     // Добыча в пределах досягаемости зубов — бьём, и никуда
                     // при этом не идём.
@@ -1160,7 +1207,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     // от одиночества: предпоследняя пара уходила каждый в
                     // свою случайную сторону и расходилась дальше, а не
                     // ближе.
-                    const MateChoice call = hearCall(suitor, mates);
+                    const MateChoice call = hearCall(suitor, mates, mind, random, sights);
                     if (call.found) {
                         targetX = call.x;
                         targetY = call.y;
@@ -1169,7 +1216,7 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                     break;
                 }
                 reachOf.build(world.area(), animal.x, animal.y, reach, standable);
-                const MateChoice mate = chooseMate(reachOf, suitor, mates);
+                const MateChoice mate = chooseMate(reachOf, suitor, mates, mind, random, sights);
                 if (!mate.found) {
                     break;
                 }
@@ -1325,11 +1372,19 @@ void AnimalSystem(World& world, CommandQueue& commands) {
             //
             // Уже стоящему под кроной бежать некуда и незачем: он на месте
             // и есть.
+            //
+            // Какую именно крону — решает разум (core/Mind.hpp): мир кладёт
+            // все кроны в виду и вес каждой, тем больший, чем она ближе.
+            // Прежде выбор был зашит ("всегда ближайшая") и связку разрывал
+            // порядок обхода — то есть стадо на ровном лугу дружно уходило
+            // бы в левый верхний угол. Теперь связку разрывает жребий, общий
+            // для всех выборов этого мира.
             const int sight = std::max(1, genome.perception);
             int coverX = 0;
             int coverY = 0;
             int coverSteps = -1;
             if (treeAt[index(animal.x, animal.y)] == 0) {
+                sights.clear();
                 for (int dy = -sight; dy <= sight; ++dy) {
                     for (int dx = -sight; dx <= sight; ++dx) {
                         const int nx = animal.x + dx;
@@ -1340,13 +1395,17 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                         if (dx * dx + dy * dy > sight * sight) {
                             continue;
                         }
+                        // Мера близости здесь ШАГАМИ, а не по прямой: бежать
+                        // до кроны придётся ногами, и диагональ стоит того же,
+                        // что и прямая.
                         const int steps = std::max(std::abs(dx), std::abs(dy));
-                        if (coverSteps < 0 || steps < coverSteps) {
-                            coverSteps = steps;
-                            coverX = nx;
-                            coverY = ny;
-                        }
+                        sights.push_back(Option{0, nx, ny, sight + 1 - steps, 0, false, 0});
                     }
+                }
+                if (const Choice cover = decide(mind, sights, Temper{}, random); cover.made) {
+                    coverX = cover.x;
+                    coverY = cover.y;
+                    coverSteps = std::max(std::abs(cover.x - animal.x), std::abs(cover.y - animal.y));
                 }
             }
 
@@ -1839,6 +1898,7 @@ void appendAnimalSystemConstants(std::vector<ConstantInfo>& out) {
     out.push_back({g, "kRecoveryRate", kRecoveryRate});
     out.push_back({g, "kDesireFloor", kDesireFloor});
     out.push_back({g, "kDesireSwitch", kDesireSwitch});
+    out.push_back({g, "kPanic", kPanic});
     out.push_back({g, "kBreedingGrowth", kBreedingGrowth});
     out.push_back({g, "kCalmNeed", kCalmNeed});
     out.push_back({g, "kMateDesire", kMateDesire});

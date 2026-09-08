@@ -107,6 +107,10 @@ struct TileSnapshot {
     // Прочность — 0..kFull, ноль значит "нет"; вид площадки — BuildKind::None,
     // если стройки нет.
     std::vector<int> canopy;
+    // Прочность забора. В снимке рядом с навесом и подстилкой, потому что
+    // лежит в том же компоненте, но спрашивают её иначе: не для показа и не
+    // для отдыха, а для ноги (standableAt, core/Path.hpp).
+    std::vector<int> fenceAt;
     std::vector<int> bedding;
     std::vector<BuildKind> siteKind;
 
@@ -144,6 +148,7 @@ struct TileSnapshot {
         treeEntity.assign(cells, entt::null);
         treeGrowth.assign(cells, 0);
         canopy.assign(cells, 0);
+        fenceAt.assign(cells, 0);
         bedding.assign(cells, 0);
         siteKind.assign(cells, BuildKind::None);
         if (cells == 0) {
@@ -180,6 +185,7 @@ struct TileSnapshot {
             }
             if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
                 canopy[i] = building->canopy;
+                fenceAt[i] = building->fence;
                 bedding[i] = building->bedding;
             }
             if (const auto* site = registry.try_get<const SiteComponent>(entity)) {

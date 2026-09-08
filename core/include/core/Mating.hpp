@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include "core/Bonds.hpp"
+#include "core/Mind.hpp"
 #include "core/Path.hpp"
 #include "core/components/AnimalComponent.hpp"
 
@@ -159,11 +161,18 @@ inline bool calls(const MateCandidate& candidate) {
 // Из нескольких зовущих на одинаковом расстоянии побеждает меньший
 // идентификатор — по той же причине, что и в chooseMate: порядок в памяти
 // не может быть причиной события в мире (02_CorePrinciples.md, п.12a).
-inline MateChoice hearCall(const Suitor& suitor, std::span<const MateCandidate> candidates) {
-    MateChoice choice;
-    int bestDistance = 0;
-    std::uint64_t bestId = 0;
-    for (const auto& candidate : candidates) {
+// Кого из зовущих выбрать, решает РАЗУМ (core/Mind.hpp): мир складывает тех,
+// чей зов слышно, и вес каждого — тем больший, чем зовущий ближе.
+//
+// Связку прежде разрывало меньшее имя. Требование то же (порядок в памяти не
+// может быть причиной события в мире, 02_CorePrinciples.md, п.12a), но
+// меньшее имя означало перекос в сторону старших. Жребий разума требование
+// выполняет и перекоса не имеет.
+inline MateChoice hearCall(const Suitor& suitor, std::span<const MateCandidate> candidates, Mind mind,
+                           std::uint64_t& random, std::vector<Option>& scratch) {
+    scratch.clear();
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const MateCandidate& candidate = candidates[i];
         if (!mateSuits(suitor, candidate) || !calls(candidate)) {
             continue;
         }
@@ -173,14 +182,15 @@ inline MateChoice hearCall(const Suitor& suitor, std::span<const MateCandidate> 
         if (distance > kCallRange * kCallRange) {
             continue;
         }
-        if (choice.found && (distance > bestDistance || (distance == bestDistance && candidate.id > bestId))) {
-            continue;
-        }
-        choice = MateChoice{true, candidate.id, candidate.x, candidate.y};
-        bestDistance = distance;
-        bestId = candidate.id;
+        scratch.push_back(Option{static_cast<int>(i), candidate.x, candidate.y,
+                                  kCallRange * kCallRange + 1 - distance, 0, false, 0});
     }
-    return choice;
+    const Choice picked = decide(mind, scratch, Temper{}, random);
+    if (!picked.made) {
+        return MateChoice{};
+    }
+    const MateCandidate& heard = candidates[static_cast<std::size_t>(picked.tag)];
+    return MateChoice{true, heard.id, heard.x, heard.y};
 }
 
 // Кого из ровни видно ближе всех — без дороги и без согласия.
@@ -249,13 +259,13 @@ inline MateChoice sightOfMate(const Suitor& suitor, std::span<const MateCandidat
 // не сходиться, а ПОДОЙТИ И ЖДАТЬ рядом с тем, кто сейчас занят. Дорога
 // нужна и здесь: ждать через реку значит ждать зря.
 inline MateChoice chooseMate(const Reach& reach, const Suitor& suitor,
-                             std::span<const MateCandidate> candidates,
-                             const BondsComponent* bonds = nullptr, bool willingOnly = true) {
+                             std::span<const MateCandidate> candidates, Mind mind, std::uint64_t& random,
+                             std::vector<Option>& scratch, const BondsComponent* bonds = nullptr,
+                             bool willingOnly = true) {
     const int sight = std::max(1, suitor.perception);
-    MateChoice choice;
-    int bestDistance = 0;
-    std::uint64_t bestId = 0;
-    for (const auto& candidate : candidates) {
+    scratch.clear();
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const MateCandidate& candidate = candidates[i];
         if (willingOnly ? !mateSuits(suitor, candidate) : !mateKind(suitor, candidate)) {
             continue;
         }
@@ -270,16 +280,19 @@ inline MateChoice chooseMate(const Reach& reach, const Suitor& suitor,
         if (steps < 0) {
             continue; // дороги нет: увиденное через реку — ещё не найденное
         }
+        // Дорога дороже, тепло дешевле — и вычитается из заведомо большего:
+        // вес у разума "чем больше, тем лучше", а здесь меньше значило лучше.
         const int warmth = bonds != nullptr ? warmthTo(*bonds, candidate.id) : 0;
         const int distance = steps * kMateWarmthStep - warmth;
-        if (choice.found && (distance > bestDistance || (distance == bestDistance && candidate.id > bestId))) {
-            continue;
-        }
-        choice = MateChoice{true, candidate.id, candidate.x, candidate.y};
-        bestDistance = distance;
-        bestId = candidate.id;
+        scratch.push_back(Option{static_cast<int>(i), candidate.x, candidate.y, std::max(1, kFull - distance),
+                                  0, false, 0});
     }
-    return choice;
+    const Choice picked = decide(mind, scratch, Temper{}, random);
+    if (!picked.made) {
+        return MateChoice{};
+    }
+    const MateCandidate& mate = candidates[static_cast<std::size_t>(picked.tag)];
+    return MateChoice{true, mate.id, mate.x, mate.y};
 }
 
 } // namespace goblins

@@ -303,6 +303,13 @@ nlohmann::json buildEntitiesJson(const World& world) {
                                           {"soil_erosion_rate", worldProperties->soilErosionRate},
                                           {"minerals_spread_enabled", worldProperties->toggles.mineralsSpread},
                                           {"erosion_deposition_enabled", worldProperties->toggles.erosionDeposition},
+                                          // Вытаптывание прежде терялось при
+                                          // сохранении: мир, открытый из файла,
+                                          // начинал набивать тропы даже там, где
+                                          // их выключили. Заметить это было
+                                          // нечем — тропа выглядит тропой.
+                                          {"trampling_enabled", worldProperties->toggles.trampling},
+                                          {"lottery_mind_enabled", worldProperties->toggles.lotteryMind},
                                           {"plant_mutation_rate", worldProperties->plantMutationRate},
                                           {"humus_decay_period", worldProperties->humusDecayPeriod},
                                           {"plant_random_seed", worldProperties->plantRandomSeed},
@@ -445,7 +452,9 @@ nlohmann::json buildEntitiesJson(const World& world) {
             }
         }
         if (const auto* building = registry.try_get<BuildingComponent>(entity)) {
-            record["building"] = {{"canopy", building->canopy}, {"bedding", building->bedding}};
+            record["building"] = {{"canopy", building->canopy},
+                                   {"bedding", building->bedding},
+                                   {"fence", building->fence}};
         }
         // Площадка пишется вместе с недоработанным остатком: без него
         // загруженная стройка теряла бы то, что уже сделано, и последняя
@@ -676,6 +685,11 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
                 record["world_properties"].value("minerals_spread_enabled", true);
             parsed.worldProperties.toggles.erosionDeposition =
                 record["world_properties"].value("erosion_deposition_enabled", true);
+            parsed.worldProperties.toggles.trampling =
+                record["world_properties"].value("trampling_enabled", true);
+            // Старые миры разума не выбирали — и жили жадным.
+            parsed.worldProperties.toggles.lotteryMind =
+                record["world_properties"].value("lottery_mind_enabled", false);
             parsed.worldProperties.plantMutationRate = record["world_properties"].value("plant_mutation_rate", 60);
             parsed.worldProperties.humusDecayPeriod =
                 record["world_properties"].value("humus_decay_period", 50);
@@ -849,6 +863,9 @@ bool parseEntities(const nlohmann::json& json, int width, int height, std::vecto
             parsed.hasBuilding = true;
             parsed.building.canopy = record["building"].value("canopy", 0);
             parsed.building.bedding = record["building"].value("bedding", 0);
+            // Старые миры забора не знали, и ноль здесь — не потеря, а ровно
+            // то, чем они были: миром без заборов.
+            parsed.building.fence = record["building"].value("fence", 0);
         }
         if (record.contains("site")) {
             parsed.hasSite = true;

@@ -118,6 +118,7 @@ struct WorldState {
     // цене, core/Build.hpp): ноль значит, что работать здесь нечем, и
     // стоящая стройка отличается от идущей только этим числом.
     std::vector<float> canopy;
+    std::vector<float> fence;
     std::vector<float> bedding;
     std::vector<int> site;
     std::vector<int> siteMaterial;

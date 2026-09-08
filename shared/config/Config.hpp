@@ -47,8 +47,11 @@ struct TerrainToggles {
     bool minerals_spread = true;
     bool erosion_deposition = true;
     bool trampling = true;
+    // Каким разумом думают существа (core::WorldToggles::lotteryMind).
+    bool lottery_mind = false;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainToggles, minerals_spread, erosion_deposition, trampling)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainToggles, minerals_spread, erosion_deposition, trampling,
+                                    lottery_mind)
 
 // Пределы стороны Области. Общие для клиента (ползунки размера на панели
 // генерации) и сервера (проверка присланного запроса): расходись они, и

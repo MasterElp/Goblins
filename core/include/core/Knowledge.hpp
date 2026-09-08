@@ -151,7 +151,18 @@ inline const KnownPlace* recall(const KnowledgeComponent& mind, PlaceKind kind, 
         if (score < minScore) {
             continue;
         }
-        if (best == nullptr || score > bestScore) {
+        // При равном счёте побеждает то, что ближе к началу координат, а не
+        // то, что раньше лежит в слотах. Порядок в памяти не может быть
+        // причиной события в мире (02_CorePrinciples.md, п.12a), а слоты
+        // перетасовываются вытеснением: одно и то же воспоминание сегодня
+        // третье, завтра шестое, и выбор молча менялся бы вместе с ними.
+        //
+        // Само это место разуму не отдано (core/Mind.hpp), и намеренно:
+        // recall не выбирает, куда идти, а отвечает, что помнится, — идти
+        // решает уже вызывающий. Память же целиком относится к разуму
+        // (02_CorePrinciples.md, п.6) и переедет к нему отдельной работой.
+        if (best == nullptr || score > bestScore ||
+            (score == bestScore && (place.y < best->y || (place.y == best->y && place.x < best->x)))) {
             best = &place;
             bestScore = score;
         }

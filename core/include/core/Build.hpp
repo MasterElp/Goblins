@@ -79,17 +79,38 @@ inline int materialStrength(int straw, int twigs) {
 
 // Во сколько работ обходится полная прочность этого вида.
 inline int buildWorkCost(BuildKind kind) {
-    return kind == BuildKind::Canopy ? kWorkCanopy : kWorkBedding;
+    switch (kind) {
+        case BuildKind::Canopy: return kWorkCanopy;
+        case BuildKind::Fence: return kWorkFence;
+        case BuildKind::Bedding:
+        case BuildKind::None: break;
+    }
+    return kWorkBedding;
 }
 
 // Прочность этого вида на клетке — и ссылка на неё, чтобы работа и ветшание
 // правили одно и то же поле, а не каждый своё.
+// Ответ для BuildKind::None — поле подстилки, и это не выбор, а заглушка:
+// работать с видом None нельзя (applyWork проверяет это первой строкой), а
+// ссылка обязана быть на что-то.
 inline int& buildingCondition(BuildingComponent& building, BuildKind kind) {
-    return kind == BuildKind::Canopy ? building.canopy : building.bedding;
+    switch (kind) {
+        case BuildKind::Canopy: return building.canopy;
+        case BuildKind::Fence: return building.fence;
+        case BuildKind::Bedding:
+        case BuildKind::None: break;
+    }
+    return building.bedding;
 }
 
 inline int buildingConditionOf(const BuildingComponent& building, BuildKind kind) {
-    return kind == BuildKind::Canopy ? building.canopy : building.bedding;
+    switch (kind) {
+        case BuildKind::Canopy: return building.canopy;
+        case BuildKind::Fence: return building.fence;
+        case BuildKind::Bedding:
+        case BuildKind::None: break;
+    }
+    return building.bedding;
 }
 
 // Сколько прочности даёт одна единица труда. Делится нацело — цены построек
@@ -117,6 +138,11 @@ inline BuildKind unfinishedAt(const BuildingComponent& building, BuildKind site)
     }
     if (building.bedding > 0 && building.bedding < kFull) {
         return BuildKind::Bedding;
+    }
+    // Забор последним: на клетке края обжитого обычно нет ничего другого, а
+    // если есть, то доделывать сперва стоит то, ради чего сюда ходят спать.
+    if (building.fence > 0 && building.fence < kFull) {
+        return BuildKind::Fence;
     }
     return BuildKind::None;
 }
@@ -188,10 +214,22 @@ inline bool applyWork(BuildKind kind, BuildingComponent& building, Resources* he
 // бы заведением второго закона.
 //
 // Отсюда само собой и получается правило "строят то, чего не хватает": на
-// открытой поляне навес добавит четыреста, а под деревом — ничего (крыша
-// одна, берётся лучшая), и там гоблин положит подстилку.
+// открытой поляне навес добавит четыреста, а под деревом — ничего: крыша
+// одна, берётся лучшая.
 // Прибавка возвращается вместе с видом, и это не удобство вызывающему, а
 // единственный честный ответ на вопрос "насколько гоблина гонит строить".
+//
+// ПОД ДЕРЕВОМ ответ пустой, и это не мелочь округления. Прежде здесь стояло
+// "там гоблин положит подстилку" — а placeSite под деревом отказывает и
+// подстилке тоже (клетку занимает ствол), то есть два закона об одной клетке
+// говорили разное. Пока позыв к стройке был почти всегда нулевым, расхождение
+// молчало; стоило мерить позыв самой прибавкой — и гоблин с лежанкой под
+// кроной захотел бы строить, поставить не смог бы и ушёл бы ломать ветки под
+// замысел, которого не будет, навсегда.
+//
+// Забор дерева не боится (placeSite, underTreeAllowed), но его здесь и нет:
+// этот закон отвечает на вопрос "чего не хватает ЗДЕСЬ", а кол улучшает не ту
+// клетку, где стоишь, а ту, что за ним.
 //
 // Прежде нехватку мерили так: kRestGood минус годность места. Мерка выглядела
 // разумной ровно до тех пор, пока в лагере не начали умирать: в годность
@@ -210,6 +248,9 @@ struct BuildChoice {
 };
 
 inline BuildChoice betterBuild(const RestPlace& place) {
+    if (place.tree) {
+        return BuildChoice{};
+    }
     const int roof = std::max(place.tree ? kRestShelter : 0,
                               kRestCanopy * std::clamp(place.canopy, 0, kFull) / kFull);
     const int canopyGain = std::max(0, kRestCanopy - roof);
@@ -228,6 +269,11 @@ inline void placeSite(World& world, int x, int y, BuildKind kind) {
     if (kind == BuildKind::None || !world.area().inBounds(x, y)) {
         return;
     }
+    // Забору дерево не помеха, в отличие от навеса и подстилки: плетень между
+    // стволами — самое естественное, что бывает, и роща в краю обжитого иначе
+    // давала бы вечную дыру, которую нечем закрыть. Оттого проверка ниже и
+    // сделана по виду, а не общей на всех.
+    const bool underTreeAllowed = kind == BuildKind::Fence;
     // Под деревом не строят: дерево занимает клетку целиком, и ни навесу, ни
     // подстилке там места нет. Проверка стоит в самом законе, а не только в
     // решении гоблина: закон, мимо которого можно пройти одной забытой
@@ -237,7 +283,7 @@ inline void placeSite(World& world, int x, int y, BuildKind kind) {
     // и так хорош тенью, — а роща остаётся тем, чем была, местом, куда ходят за
     // ветками.
     for (const auto tile : world.area().cellAt(x, y).entities) {
-        if (world.registry().all_of<TreeComponent>(tile)) {
+        if (!underTreeAllowed && world.registry().all_of<TreeComponent>(tile)) {
             return;
         }
     }

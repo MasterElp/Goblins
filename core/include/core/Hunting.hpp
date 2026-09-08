@@ -6,6 +6,7 @@
 #include <span>
 #include <vector>
 
+#include "core/Mind.hpp"
 #include "core/Path.hpp"
 #include "core/Random.hpp"
 #include "core/Scale.hpp"
@@ -147,6 +148,18 @@ struct Hunter {
     int speed = 0;
     int hunger = 0;
     int size = kFull;
+    // Насколько хищник цел, 0..kFull (здоровье). Целый охотится как охотился,
+    // потрёпанный берёт добычу мельче — ровно во столько раз, во сколько
+    // потерял целости (см. kHuntPreyShare ниже).
+    //
+    // Здесь, а не в страхе, и это решение, которое уже стоило одного мира.
+    // Раненого хищника пробовали разворачивать от добычи страхом
+    // (woundScare, core/Fear.hpp) — вышло, что голод гонит его к еде, а страх
+    // от еды, и с правом страха ломать очередь желаний хищники вымерли
+    // начисто. Осторожность — это не "бежать от обеда", а "выбрать обед по
+    // себе": ровня и раньше отсекалась целиком (kHuntPreyShare), теперь
+    // отсекается тем строже, чем хуже дело.
+    int whole = kFull;
 };
 
 // Что хищник выбрал: живую добычу, тушу или ничего.
@@ -165,15 +178,21 @@ struct HuntChoice {
 // тот же выбор.
 template <typename CarcassAt>
 HuntChoice chooseHuntTarget(const Reach& reach, const Hunter& hunter, std::span<const HuntPrey> prey,
-                            CarcassAt&& carcassAt, std::uint64_t random) {
+                            CarcassAt&& carcassAt, std::uint64_t random, Mind mind,
+                            std::vector<Option>& scratch) {
     const int sight = std::max(1, hunter.perception);
     HuntChoice choice;
 
     // --- Живая добыча ---
     // Ближе всех и первой: гнаться за той, что дальше, когда рядом стоит
     // эта, бессмысленно. Но только если хищник и вправду голоден.
-    int preyIndex = -1;
-    int bestScore = 0;
+    //
+    // Кого именно из годных — решает РАЗУМ (core/Mind.hpp). Годность же
+    // (быстрее меня, не по зубам, за рекой, под кроной) остаётся законом
+    // мира: это не предпочтение, а запрет, и очки его не выражают — когда
+    // вся округа не по зубам, лучшая из плохих всё равно оказалась бы
+    // выбрана, а такой выбор не "рискнул", а "пошёл умирать".
+    scratch.clear();
     for (std::size_t b = 0; hunter.hunger >= kHuntHunger && b < prey.size(); ++b) {
         // За тем, кто быстрее, гнаться незачем: догнать его нельзя, а силы
         // уйдут. Скорость чужого бега — ровно то знание, которое у хищника
@@ -199,7 +218,14 @@ HuntChoice chooseHuntTarget(const Reach& reach, const Hunter& hunter, std::span<
         //
         // Величина видна снаружи, как и бег, поэтому знать её хищнику можно
         // (02_CorePrinciples.md, п.6).
-        if (prey[b].size * kFull > hunter.size * kHuntPreyShare) {
+        //
+        // Целость хищника входит сюда множителем: раненный наполовину берёт
+        // вдвое мельче обычного, добитый до четверти — вчетверо. Число
+        // остаётся целым (core/Scale.hpp): доля берётся от произведения, а не
+        // произведение от доли, — обратный порядок дал бы ноль на мелком
+        // хищнике, и раненый не смог бы охотиться вовсе.
+        const int takeable = hunter.size * kHuntPreyShare / kFull * std::clamp(hunter.whole, 0, kFull) / kFull;
+        if (prey[b].size > takeable) {
             continue;
         }
         const int dx = prey[b].x - hunter.x;
@@ -240,15 +266,17 @@ HuntChoice chooseHuntTarget(const Reach& reach, const Hunter& hunter, std::span<
         // раз, во сколько она к нему велика. Правило одно на клетку
         // досягаемости зубов и на клетку в глубине видимости: крупная
         // соседняя не обязана автоматически выигрывать у мелкой в двух шагах.
+        // Чем меньше очков, тем лучше добыча, а вес разума — наоборот, "чем
+        // больше, тем лучше". Поэтому очки вычитаются из заведомо большего:
+        // отрицательных весов разум не понимает и понимать не должен.
         const int score = distance + kHuntCaution * prey[b].size / std::max(1, hunter.size) +
                           kHuntCompany * prey[b].company;
-        if (preyIndex >= 0 && score >= bestScore) {
-            continue;
-        }
-        preyIndex = static_cast<int>(b);
-        bestScore = score;
+        scratch.push_back(Option{static_cast<int>(b), prey[b].x, prey[b].y, std::max(1, kFull - score), 0,
+                                  false, 0});
     }
 
+    const Choice picked = decide(mind, scratch, Temper{}, random);
+    const int preyIndex = picked.made ? picked.tag : -1;
     if (preyIndex >= 0) {
         const auto& target = prey[static_cast<std::size_t>(preyIndex)];
         choice = HuntChoice{HuntChoice::Kind::Prey, preyIndex, target.x, target.y,
@@ -280,8 +308,7 @@ HuntChoice chooseHuntTarget(const Reach& reach, const Hunter& hunter, std::span<
     // первой по обходу: обход идёт с левого верхнего угла квадрата
     // видимости, и без жребия хищники дружно уходили бы вверх и влево — не
     // потому, что там лучше, а потому, что цикл начинается оттуда.
-    int carcassDistance = -1;
-    int ties = 0;
+    scratch.clear();
     for (int dy = -sight; dy <= sight; ++dy) {
         for (int dx = -sight; dx <= sight; ++dx) {
             const int nx = hunter.x + dx;
@@ -290,24 +317,20 @@ HuntChoice chooseHuntTarget(const Reach& reach, const Hunter& hunter, std::span<
             if (distance < 0 || carcassAt(nx, ny) <= kMinBiteMeat) {
                 continue;
             }
-            if (ties > 0 && distance > carcassDistance) {
-                continue;
-            }
-            if (ties > 0 && distance == carcassDistance) {
-                ++ties;
-                if (randomBelow(random, static_cast<std::uint64_t>(ties)) != 0) {
-                    continue;
-                }
-            } else {
-                ties = 1;
-            }
-            carcassDistance = distance;
-            choice.kind = HuntChoice::Kind::Carcass;
-            choice.prey = -1;
-            choice.atTeeth = false;
-            choice.x = nx;
-            choice.y = ny;
+            scratch.push_back(Option{0, nx, ny, std::max(1, kFull - distance), 0, false, 0});
         }
+    }
+    if (const Choice meal = decide(mind, scratch, Temper{}, random); meal.made) {
+        // Падаль ПЕРЕБИВАЕТ живую добычу, и это остаётся законом мира, а не
+        // делом разума: "сначала доешь" записано замером — пока хищник шёл к
+        // тому, что ближе, он бросал недоеденную тушу ради свежей добычи и
+        // убивал куда больше, чем съедал. Разум выбирает, какую тушу; что
+        // туша важнее погони, он не решает.
+        choice.kind = HuntChoice::Kind::Carcass;
+        choice.prey = -1;
+        choice.atTeeth = false;
+        choice.x = meal.x;
+        choice.y = meal.y;
     }
 
     return choice;

@@ -70,6 +70,7 @@ goblins::TerrainParams toTerrainParams(const goblins::TerrainConfig& config) {
     params.toggles.mineralsSpread = config.toggles.minerals_spread;
     params.toggles.erosionDeposition = config.toggles.erosion_deposition;
     params.toggles.trampling = config.toggles.trampling;
+    params.toggles.lotteryMind = config.toggles.lottery_mind;
     return params;
 }
 

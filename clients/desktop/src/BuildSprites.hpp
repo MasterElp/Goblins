@@ -45,6 +45,7 @@ const Texture2D& atlas();
 // Где в атласе лежит нужный кадр. stage — ступень прочности, 0..kStages-1.
 Rectangle canopy(int stage);
 Rectangle bedding(int stage);
+Rectangle fence(int stage);
 // Колышки замысла: kind — то же число, что едет в слое "site" (1 навес,
 // 2 подстилка).
 Rectangle site(int kind);

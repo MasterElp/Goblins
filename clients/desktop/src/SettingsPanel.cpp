@@ -51,6 +51,7 @@ constexpr ToggleRow kToggleRows[] = {
     {"Minerals spread by water", &goblins::TerrainToggles::minerals_spread},
     {"Erosion deposits downstream", &goblins::TerrainToggles::erosion_deposition},
     {"Feet trample paths", &goblins::TerrainToggles::trampling},
+    {"Minds draw lots", &goblins::TerrainToggles::lottery_mind},
 };
 
 template <typename Ops>
