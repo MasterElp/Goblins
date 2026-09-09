@@ -12,6 +12,7 @@
 #include "core/Body.hpp"
 #include "core/Build.hpp"
 #include "core/Carry.hpp"
+#include "core/Bound.hpp"
 #include "core/Climb.hpp"
 #include "core/Hunting.hpp"
 #include "core/Knowledge.hpp"
@@ -706,6 +707,9 @@ struct TileFacts {
     // система, а ей нужно и то, и другое (core/Climb.hpp, core/Bound.hpp).
     int height = 0;
     int fence = 0;
+    // Утоптанность — ею закон края отличает внешнюю клетку от своей
+    // (outsideOf, core/Bound.hpp).
+    int trampled = 0;
 };
 
 TileFacts tileFactsAt(const World& world, int x, int y) {
@@ -731,6 +735,7 @@ TileFacts tileFactsAt(const World& world, int x, int y) {
         if (const auto* building = registry.try_get<const BuildingComponent>(entity)) {
             facts.fence = building->fence;
         }
+        facts.trampled = registry.get<const SoilComponent>(entity).trampled;
         break;
     }
     return facts;
@@ -948,6 +953,39 @@ void appendRoad(const World& world, entt::entity entity, const AnimalComponent& 
 // из снимка тика: наблюдатель ходит по registry, а система по своим массивам
 // (см. standableAt в core/Path.hpp — там ровно то же разделение). Пусто,
 // если земли на клетке нет вовсе.
+// Открытость края вокруг клетки — тем же законом, каким её считает система
+// (core/Bound.hpp), и по тем же двум вопросам: какой сосед внешний и какой
+// подход закрыт. Закрытость решается годностью для ЗВЕРЯ (kOnLegs): подход
+// закрыт ровно тогда, когда зверю там не встать.
+//
+// Копии правила здесь нет — есть второй спрашивающий. Наблюдатель ходит по
+// registry, система по своим массивам (то же разделение, что у standableAt),
+// но отвечает им один закон. Разойдись ответы — наложение годности на карте
+// показывало бы не ту лежанку, которую гоблин выбрал.
+int opennessAt(const World& world, int x, int y) {
+    const TileFacts here = tileFactsAt(world, x, y);
+    int outside = 0;
+    int shut = 0;
+    for (int dir = 0; dir < 8; ++dir) {
+        const int nx = x + kWalkX[dir];
+        const int ny = y + kWalkY[dir];
+        if (!world.area().inBounds(nx, ny)) {
+            continue;
+        }
+        const TileFacts there = tileFactsAt(world, nx, ny);
+        if (!outsideOf(here.trampled, there.trampled)) {
+            continue;
+        }
+        ++outside;
+        const bool stands = standableAt(world.area().isBlocked(nx, ny), there.soil, there.water,
+                                        there.height, there.fence, kOnLegs);
+        if (approachShut(stands, there.fence)) {
+            ++shut;
+        }
+    }
+    return opennessOf(outside, shut);
+}
+
 std::optional<RestPlace> restPlaceAt(const World& world, int x, int y) {
     const auto& registry = world.registry();
     for (const auto entity : world.area().cellAt(x, y).entities) {
@@ -963,6 +1001,10 @@ std::optional<RestPlace> restPlaceAt(const World& world, int x, int y) {
         // принимает решение, иначе по нему нельзя понять, почему он лёг
         // именно здесь.
         place.trodden = soil->trampled;
+        // Открытый край — такое же слагаемое того же закона (kRestExposed,
+        // core/Rest.hpp): лежанка на краю обжитого хуже лежанки в глубине, и
+        // на карте это обязано быть видно ровно тем же числом.
+        place.openness = opennessAt(world, x, y);
         // Постройки — те же слагаемые того же закона: наложение на карте
         // обязано показывать ту годность, по которой гоблин выбирает, где
         // лечь, включая ту, что он сам себе и сделал.

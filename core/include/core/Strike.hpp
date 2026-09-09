@@ -103,6 +103,31 @@ inline bool strikeReaches(int fromX, int fromY, int toX, int toY) {
     return std::abs(toX - fromX) <= kStrikeReach && std::abs(toY - fromY) <= kStrikeReach;
 }
 
+// Тот же вопрос с другой стороны: есть ли ОТКУДА ударить того, кто стоит на
+// этой клетке. Хоть одна клетка в досягаемости, на которую бьющий может
+// встать, — своя в том числе: до своей дотягиваются тоже (kStrikeReach).
+//
+// Живёт здесь, рядом с досягаемостью, а не там, где спрашивают: радиус у
+// вопроса тот же самый, и второй его копии в мире быть не должно. Годность
+// клетки под ногу приходит вызываемым (standableAt, core/Path.hpp) — про
+// почву, воду и высоту закон удара не знает ничего, как не знает он и про
+// вражду.
+//
+// Спрашивают об этом двое: хищник — кого вообще можно взять
+// (core/Climb.hpp, outOfReach), и гоблин — спасён ли он там, куда влез.
+// Раньше второй отвечал себе сам и отвечал неверно (см. там же).
+template <typename Standable>
+bool footingToStrike(int x, int y, Standable&& standable) {
+    for (int dy = -kStrikeReach; dy <= kStrikeReach; ++dy) {
+        for (int dx = -kStrikeReach; dx <= kStrikeReach; ++dx) {
+            if (standable(x + dx, y + dy)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Удар: величина и меткость бьющего против величины получающего.
 //
 // Считается ОТНОШЕНИЕ размеров, а не размер бьющего, и это главное число

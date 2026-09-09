@@ -69,6 +69,7 @@ namespace goblins {
 
 namespace {
 
+
 // Пороги желаний. Числа те же, что у животных, но константы свои, и это не
 // оплошность: у гоблина скоро появятся желания, которых у зверя нет и быть
 // не может (отдых, ноша, работа), и равновесие между ними придётся крутить
@@ -176,7 +177,47 @@ constexpr int kHaulUrge = 400;
 // buildLack): пока место не станет плохим, строить незачем. А вот начатое
 // надо доводить до конца, и держит гоблина у площадки уже не нехватка, а сам
 // незаконченный замысел.
+// Во сколько раз реже удара пульса прибывает усталость у ГОБЛИНА.
+//
+// Живёт здесь, а не в core/Fatigue.hpp: тот про существ не знает ничего и
+// знать не должен, а медленно устаёт именно гоблин. Зверь устаёт по-прежнему.
+//
+// Число — из замера бюджета времени. Гоблин тратил на сон 12.4% жизни, на еду
+// 53.0%, а на всякую работу — 4.9%; берёт же он своё не телом, а тем, что
+// успевает сделать. Вдвое реже прибывающая усталость означает вдвое более
+// редкий сон ТОЙ ЖЕ длины: облегчение от лёжки (kRestRelief) не тронуто, и
+// подниматься гоблин будет так же быстро.
+//
+// Раз реже, а не меньше за раз: kFatigueTick равен единице, а половины
+// единицы в мире нет (core/Scale.hpp — там, где деление даёт ноль, берут
+// срок).
+constexpr int kFatigueSlower = 2;
+
 constexpr int kBuildUrge = 400;
+
+// Насколько гоблина гонит закрыть открытый край обжитого — потребность в
+// безопасности, выраженная работой.
+//
+// Стоит отдельным числом, а не долей от годности отдыха, и это важно.
+// Сперва повод считался прибавкой к годности лежанки — тем же, чем меряется
+// нехватка навеса, — и вышло наоборот задуманного: открытый край делает
+// клетку ХУЖЕ, а самый дешёвый ответ на "здесь хуже" не построить, а уйти.
+// Уходить бесплатно, городиться стоит полусотни работ, и гоблины исправно
+// уходили: замер дал тринадцать пятен утоптанного, крупнейшее в полтысячи
+// клеток, спящих в глубине — и ОДИН кол за весь прогон. Штраф работал
+// отпугивателем, а не побуждением.
+//
+// Гонит поэтому не нехватка у лежанки, а сам край под ногами, и обе половины
+// — местные факты, которые гоблин знает, стоя здесь: насколько эта земля
+// обжита (утоптанность) и какая доля выходов с неё не закрыта (открытость,
+// core/Bound.hpp). Утоптанность в множителе не для веса: ею край ЛАГЕРЯ
+// отличается от тропы. У тропы соседи тоже внешние, и без этого множителя
+// гоблины обносили бы плетнём каждую дорожку в мире.
+//
+// Пятьсот: при полностью открытом крае хорошо обжитого места позыв выходит
+// вровень с нехваткой навеса на голой поляне, при утоптанности тропы (около
+// семи сотен) — на самом пороге желаний.
+constexpr int kFenceUrge = 500;
 
 // С какой вероятностью ничего не желающий гоблин всё-таки делает шаг.
 // Постоянно бродящий выглядит нервным и зря жжёт энергию, полностью
@@ -337,14 +378,26 @@ struct Rim {
 };
 
 // Куда именно воткнуть кол, решает РАЗУМ (core/Mind.hpp): мир складывает
-// открытые подходы и вес каждого, а вес тем больше, чем ближе подход к
-// вспомненной опасности. Огораживаются ОТ ЧЕГО-ТО, а не вообще.
+// открытые подходы и вес каждого.
+//
+// Вес — близость к вспомненной опасности, ЕСЛИ она есть. Если её нет, веса
+// равны, и это не запасной случай, а обычный: огораживаются не только от
+// того, кого помнят. Прежде памятью об опасности всё и держалось — без неё
+// кол не вставал вовсе, — и держалось плохо: испуг тает за триста тиков, а
+// хищники в этом мире и вовсе выводятся к девятитысячному (замер). Забор
+// оказывался постройкой, которую нельзя построить, потому что повод к ней
+// исчезает раньше работы.
+//
+// Теперь повод — открытый край сам по себе (kRestExposed, core/Rest.hpp), а
+// память об опасности только выбирает сторону: с какой придут. Нет памяти —
+// нет и предпочтения, любая открытая сторона равно стоит того, чтобы её
+// закрыть.
 //
 // Открытость же считает сам мир и разуму не отдаёт: это не выбор, а факт —
 // какая доля подходов не закрыта (core/Bound.hpp).
-template <typename Outside, typename Shut>
-Rim rimAround(int x, int y, int dangerX, int dangerY, Mind mind, std::uint64_t& random, Outside&& outside,
-              Shut&& shut) {
+template <typename Outside, typename Shut, typename Walled>
+Rim rimAround(int x, int y, const KnownPlace* danger, Mind mind, std::uint64_t& random, Outside&& outside,
+              Shut&& shut, Walled&& walled) {
     Rim rim{0, x, y, false};
     int outsideCount = 0;
     int shutCount = 0;
@@ -365,8 +418,25 @@ Rim rimAround(int x, int y, int dangerX, int dangerY, Mind mind, std::uint64_t& 
         // до неё не больше... чего угодно. Поэтому вес считается вычитанием
         // из заведомо большего, а не отрицанием: отрицательных весов разум не
         // понимает, и понимать не должен — вес это "насколько хорошо".
-        const int away = (nx - dangerX) * (nx - dangerX) + (ny - dangerY) * (ny - dangerY);
-        ways[wayCount++] = Option{dir, nx, ny, std::max(1, kFull - away), 0, false, 0};
+        const int away = danger != nullptr
+                             ? (nx - danger->x) * (nx - danger->x) + (ny - danger->y) * (ny - danger->y)
+                             : 0;
+        // ПРИМЫКАНИЕ К УЖЕ СТОЯЩЕМУ ПЛЕТНЮ перевешивает всё прочее, и это то
+        // единственное, из-за чего получается стена, а не сыпь.
+        //
+        // Кольца гоблин не задумывает и задумать не может (п.14). Но
+        // "продолжай стену, которую видишь" — правило вполне местное, и из
+        // него кольцо выходит само: доведённая клетка тянет за собой
+        // соседнюю, контур идёт от своих концов и смыкается сам на себе.
+        // Без этого работа ложится ровным слоем по всему краю и НИ ОДНА
+        // клетка не доходит до запирающей прочности — забор же запирает
+        // клетками, а не в среднем.
+        //
+        // Слагаемым, а не отдельной ступенью: при двух примыканиях (стена
+        // растёт с двух концов) выбор между ними снова решает близость к
+        // опасности, а при равенстве — жребий разума.
+        const int continues = walled(nx, ny) ? kFull : 0;
+        ways[wayCount++] = Option{dir, nx, ny, std::max(1, kFull - away) + continues, 0, false, 0};
     }
     rim.openness = opennessOf(outsideCount, shutCount);
     if (wayCount == 0) {
@@ -537,6 +607,16 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     const std::vector<int>& storeMaterial = tiles.storeMaterial;
     const std::vector<int>& storeTotal = tiles.storeTotal;
     const std::vector<int>& canopyAt = tiles.canopy;
+    // Забор — ТРЕТЬЕ поле постройки, и его надо класть в BuildingComponent
+    // наравне с прочими. Пропуск стоил всего забора: BuildingComponent{навес,
+    // подстилка} оставляет плетень нулём, а unfinishedAt по такому ответу
+    // говорит "здесь всё доделано". Площадка же снимается ПЕРВОЙ ЖЕ работой —
+    // значит, начатый кол переставал быть видимым как недоделанный сразу
+    // после первого удара, и продолжать его было некому. Прочность росла
+    // только за счёт того, что кто-нибудь ставил на ту же клетку новую
+    // площадку: по одной работе за заход. Замер: 950 клеток с плетнём и
+    // лучшая прочность 19 из ста, не менявшаяся с восьмитысячного тика.
+    const std::vector<int>& fenceAt = tiles.fenceAt;
     const std::vector<int>& beddingAt = tiles.bedding;
     const std::vector<BuildKind>& siteKind = tiles.siteKind;
     const std::vector<int>& carcassMeat = tiles.carcassMeat;
@@ -558,6 +638,22 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     // выделять память на каждое решение.
     std::vector<Option> sights;
 
+    // Куда может встать ЗВЕРЬ (kOnLegs, core/Path.hpp). Не то же, что годность
+    // для гоблина ниже (kOnHands): тот берёт руками и высокогорье, и валун, и
+    // собственный плетень.
+    //
+    // Спрашивают об этом двое и о разном: край обжитого — что считать закрытым
+    // подходом, и бегство — достанут ли отсюда зубы. Ответ обязан быть один:
+    // разойдись он, и гоблин городился бы от того, от чего не прячется.
+    const auto beastStands = [&](int nx, int ny) {
+        if (!world.area().inBounds(nx, ny)) {
+            return false;
+        }
+        const std::size_t cell = index(nx, ny);
+        return standableAt(world.area().isBlocked(nx, ny), tiles.terrain[cell] != entt::null,
+                           tiles.waterAt[cell], tiles.terrainHeight[cell], tiles.fenceAt[cell], kOnLegs);
+    };
+
     // Край обжитого вокруг клетки — по снимку этого тика. Живёт здесь, а не
     // внутри прохода: спрашивают его дважды — п.3 (насколько гонит городиться)
     // и п.4 (куда воткнуть кол), — и два одинаковых ответа обязаны быть одним.
@@ -570,24 +666,69 @@ void GoblinSystem(World& world, CommandQueue& commands) {
     // Жребий края — свой поток, как и у выбора занятия: два розыгрыша одного
     // гоблина в один тик, начатые с одного состояния, дали бы одно и то же
     // число.
+    //
+    // Обе половины вопроса живут порознь от того, кто спрашивает: спрашивают
+    // их ДВОЕ — выбор стороны для кола (rimAround) и годность места для сна
+    // (openness в RestPlace, core/Rest.hpp). Разойдись эти ответы — гоблин
+    // городился бы не там, где ему неуютно спать.
+    const auto outsideThere = [&](int troddenHere, int nx, int ny) {
+        return world.area().inBounds(nx, ny) &&
+               outsideOf(troddenHere, tiles.trampled[index(nx, ny)]);
+    };
+    const auto shutThere = [&](int nx, int ny) {
+        return approachShut(beastStands(nx, ny), tiles.fenceAt[index(nx, ny)]);
+    };
     std::uint64_t rimRandom = 0;
-    const auto rimHere = [&](int x, int y, int dangerX, int dangerY) {
+    const auto rimHere = [&](int x, int y, const KnownPlace* danger) {
         rimRandom = mixSeed(mixSeed(tick, goblinSeed), static_cast<std::uint64_t>(index(x, y)));
-        const std::size_t at = index(x, y);
+        const int troddenHere = tiles.trampled[index(x, y)];
         return rimAround(
-            x, y, dangerX, dangerY, mind, rimRandom,
+            x, y, danger, mind, rimRandom,
+            [&](int nx, int ny) { return outsideThere(troddenHere, nx, ny); }, shutThere,
+            // Примыкает ли подход к уже стоящему плетню — хоть какому, хоть
+            // едва начатому: стена продолжается с того места, где её видно.
             [&](int nx, int ny) {
-                return world.area().inBounds(nx, ny) &&
-                       outsideOf(tiles.trampled[at], tiles.trampled[index(nx, ny)]);
-            },
-            [&](int nx, int ny) {
-                const std::size_t cell = index(nx, ny);
-                const bool beastStands =
-                    standableAt(world.area().isBlocked(nx, ny), tiles.terrain[cell] != entt::null,
-                                tiles.waterAt[cell], tiles.terrainHeight[cell], tiles.fenceAt[cell], kOnLegs);
-                return approachShut(beastStands, tiles.fenceAt[cell]);
+                for (int dir = 0; dir < 8; ++dir) {
+                    const int wx = nx + kWalkX[dir];
+                    const int wy = ny + kWalkY[dir];
+                    if (world.area().inBounds(wx, wy) && tiles.fenceAt[index(wx, wy)] > 0) {
+                        return true;
+                    }
+                }
+                return false;
             });
     };
+
+    // Открытость края у КАЖДОЙ клетки — раз на тик, а не по требованию.
+    //
+    // Спрашивает её закон отдыха, а его зовут по всему кругу видимости, когда
+    // гоблин выбирает, где лечь: восемь соседей на каждую из сотен клеток на
+    // каждого из десятков гоблинов — это произведение считать незачем. Клеток
+    // же в Области меньше, чем таких вопросов, и ответ у клетки один на всех
+    // спрашивающих.
+    //
+    // Снимком тика, как и все прочие слои: забор, поставленный в этом тике,
+    // виден со следующего — ровно как утоптанность и прочность построек.
+    std::vector<int> opennessAt(tiles.canopy.size(), 0);
+    for (int y = 0; y < world.area().height(); ++y) {
+        for (int x = 0; x < world.area().width(); ++x) {
+            const int troddenHere = tiles.trampled[index(x, y)];
+            int outside = 0;
+            int shut = 0;
+            for (int dir = 0; dir < 8; ++dir) {
+                const int nx = x + kWalkX[dir];
+                const int ny = y + kWalkY[dir];
+                if (!outsideThere(troddenHere, nx, ny)) {
+                    continue;
+                }
+                ++outside;
+                if (shutThere(nx, ny)) {
+                    ++shut;
+                }
+            }
+            opennessAt[index(x, y)] = opennessOf(outside, shut);
+        }
+    }
 
     // Кто рядом стоит — тем, что о нём видно со стороны (core/Talk.hpp).
     // Список собирается ДО желаний, а не после, как пары: желание поговорить
@@ -704,8 +845,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // ниже, в фазе шагов, а отдых вычтет своё в фазе решений: и то, и
         // другое — следствия того, чем он занят, и считать их здесь, до
         // выбора занятия, было бы гаданием.
-        // Усталость — срок по той же причине, что и позыв к паре.
-        if (paceBeat(tick, goblin.id, worldProperties.goblinPace)) {
+        // Усталость — срок по той же причине, что и позыв к паре, и срок
+        // ВДВОЕ длиннее пульса (kFatigueSlower): гоблин устаёт медленнее
+        // зверя.
+        if (paceBeat(tick, goblin.id, worldProperties.goblinPace * kFatigueSlower)) {
             tireBy(goblin.tired->fatigue, kFatigueTick);
         }
 
@@ -858,9 +1001,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             // на карте, а не в панели.
             const auto* home = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y, kRestReturn);
             if (home != nullptr && home->x == goblin.x && home->y == goblin.y) {
-                const RestPlace place{tiles.moisture[here], tiles.rockiness[here], tiles.treeAt[here] != 0,
-                                       tiles.carcassMeat[here], tiles.trampled[here], tiles.canopy[here],
-                                       tiles.bedding[here]};
+                const RestPlace place{tiles.moisture[here],  tiles.rockiness[here],
+                                       tiles.treeAt[here] != 0, tiles.carcassMeat[here],
+                                       tiles.trampled[here],    opennessAt[here],
+                                       tiles.canopy[here],      tiles.bedding[here]};
                 // Ноль при "нечего строить" обязателен: workUrgeOf — сдвиг, а
                 // не множитель, и на пустом месте он дал бы трудолюбивому
                 // четыре с половиной сотни позыва строить там, где строить
@@ -877,29 +1021,33 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     const int uncovered = tiles.storeFood[here] * (kFull - tiles.canopy[here]) / kFull;
                     building = std::max(building, std::min(kFull, uncovered * kFull / kStoreShelterFull));
                 }
-                // Третья причина — открытый край и зубы, которые сюда
-                // приходят. Обе половины гоблин знает честно: открытость он
-                // видит под ногами (core/Bound.hpp), а опасность помнит
-                // (PlaceKind::Danger).
-                //
-                // Гонит его ОТКРЫТОСТЬ, а память об опасности — гейт: она
-                // делает вопрос осмысленным, но силы ему не задаёт. Тот же
-                // приём, каким гасится желание запасать без дома.
-                //
-                // Перемножать их было первой попыткой, и она измерена: память
-                // об опасности живёт на сотне из тысячи (её теснят из головы
-                // места посильнее), и произведение выходило вчетверо ниже
-                // порога желаний — нехватка не могла победить НИКОГДА, и за
-                // шесть тысяч тиков не встало ни одной площадки.
-                //
-                // Так оно и правильнее по сути. Нехватка — это то, чего
-                // недостаёт: открытая сторона. Насколько страшно — не мера
-                // нехватки, а условие, при котором открытая сторона вообще
-                // становится бедой; без зубов городиться незачем, мир и так
-                // пуст.
-                const auto* scary = recall(*goblin.mind, PlaceKind::Danger, goblin.x, goblin.y);
-                if (scary != nullptr) {
-                    building = std::max(building, rimHere(goblin.x, goblin.y, scary->x, scary->y).openness);
+            }
+            // Третья причина — открытый край обжитого, и спрашивается она ВНЕ
+            // блока выше: не "чего не хватает моей лежанке", а "куда сюда
+            // могут войти". Гоблин стоит на этой земле — значит, знает про
+            // неё оба числа честно (kFenceUrge).
+            //
+            // Памяти об опасности в поводе больше НЕТ, и это главная правка.
+            // Прежде она была гейтом: без зубов городиться незачем, мир и так
+            // пуст. Довод звучал верно и был измерен неверно — испуг тает за
+            // триста тиков, а хищники в этом мире выводятся к девятитысячному,
+            // и повод исчезал раньше, чем успевала встать одна клетка плетня.
+            // Забор оказался постройкой, которую нельзя построить. Память об
+            // опасности осталась там, где ей место: она выбирает СТОРОНУ, с
+            // которой начинать (rimAround).
+            //
+            // Лежанка тут тоже ни при чём, и это второй урок замера: повод,
+            // привязанный к своему месту сна, умирает вместе с ним. В большом
+            // пятне утоптанного спят в ГЛУБИНЕ (там годность выше — см.
+            // kRestExposed), а закрывать надо КРАЙ, где не спит никто.
+            {
+                const int openness = opennessAt[here];
+                const int lived = std::clamp(tiles.trampled[here], 0, kFull);
+                if (openness > 0 && lived > 0) {
+                    building = std::max(building,
+                                         workUrgeOf(*goblin.nature,
+                                                    kFenceUrge * openness / kFull * lived / kFull,
+                                                    Topic::Work));
                 }
             }
             // Начатое надо доводить: незаконченный замысел держит сам по
@@ -909,9 +1057,70 @@ void GoblinSystem(World& world, CommandQueue& commands) {
             // Вот этот, постоянный, позыв нрав и правит — в отличие от
             // нехватки выше: доводить ли начатое, зависит от того, кто ты, а
             // прохудившийся навес прохудился у всех одинаково.
+            //
+            // Спрашивается это ДВАЖДЫ — под ногами и в памяти, — и первое не
+            // излишество. Шапка обещала "помнит свою площадку или видит
+            // чужую — разницы нет", а условие спрашивало одну только память,
+            // и обещание было ложью ровно там, где оно важнее всего.
+            //
+            // Кол на краю лагеря гоблин помечает как стройку один раз, ценой
+            // обычного посещения (kRememberGain = 40), — и через сорок тиков
+            // забывает. Дальше он мог СТОЯТЬ НА СОБСТВЕННОМ НЕЗАПЛЕТЁННОМ
+            // КОЛЕ и не иметь ни одной причины взяться за него: нехватка
+            // считается только на своей лежанке, а память уже пуста. Замер:
+            // 2743 тика на незаплетённых кольях, из них "строить" выбрано 64
+            // раза, а 1385 — безделье.
+            //
+            // Недоделанное под ногами — не воспоминание, а факт мира, и
+            // видно его всякому, кто на нём стоит. Оттого и спрашивается
+            // первым.
             const int keenOnWork = workUrgeOf(*goblin.nature, kBuildUrge, Topic::Work);
-            if (building < keenOnWork && recall(*goblin.mind, PlaceKind::Work, goblin.x, goblin.y) != nullptr) {
+            const BuildKind underfoot =
+                unfinishedAt(BuildingComponent{tiles.canopy[here], tiles.bedding[here], fenceAt[here]},
+                              tiles.siteKind[here]);
+            if (building < keenOnWork &&
+                (underfoot != BuildKind::None ||
+                 recall(*goblin.mind, PlaceKind::Work, goblin.x, goblin.y) != nullptr)) {
                 building = keenOnWork;
+            }
+            // Стоя на незаплетённом коле — тот же повод, что сюда и привёл.
+            // Сам кол стоит СНАРУЖИ, на земле нежилой, и своей открытости у
+            // неё нет вовсе: открытость спрашивают, стоя на СВОЁМ
+            // (outsideOf, core/Bound.hpp). Спрашивается поэтому край, к
+            // которому кол приставлен, — лучший из восьми соседей.
+            //
+            // Без этого повод терялся ровно на один шаг. Открытость считается
+            // на лежанке, гоблин шёл с неё на соседнюю клетку втыкать кол — и
+            // там от всей причины оставалось прилежание (kBuildUrge со сдвигом
+            // нрава). Замер: на незаплетённых кольях позыв строить в среднем
+            // 252 при пороге желаний 350, и до порога дотягивал один тик из
+            // пяти; половину времени гоблин стоял на собственном коле без дела.
+            //
+            // "Издалека не вычисляют" тут не нарушено, и в этом вся суть: край
+            // обжитого он не вспоминает, а СТОИТ на нём. Открытость считается
+            // вокруг лежанки, потому что лежанку и огораживают, — а лежанка в
+            // одном шаге, иначе кол не оказался бы её краем (rimAround).
+            if (underfoot == BuildKind::Fence) {
+                int openness = 0;
+                int lived = 0;
+                for (int dir = 0; dir < 8; ++dir) {
+                    const int nx = goblin.x + kWalkX[dir];
+                    const int ny = goblin.y + kWalkY[dir];
+                    if (!world.area().inBounds(nx, ny)) {
+                        continue;
+                    }
+                    const std::size_t cell = index(nx, ny);
+                    if (opennessAt[cell] * tiles.trampled[cell] > openness * lived) {
+                        openness = opennessAt[cell];
+                        lived = std::clamp(tiles.trampled[cell], 0, kFull);
+                    }
+                }
+                if (openness > 0 && lived > 0) {
+                    building = std::max(building,
+                                         workUrgeOf(*goblin.nature,
+                                                    kFenceUrge * openness / kFull * lived / kFull,
+                                                    Topic::Work));
+                }
             }
         }
         // Есть ли поблизости тот, к кому стоит подойти. Без этого тоска
@@ -1086,11 +1295,13 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // вспомненное место лежит дальше. Гоблин помнит, ГДЕ, но не помнит,
         // КАК, — преграду он обойдёт вслепую памятью ног, как делает это,
         // идя за травой.
-        const auto goByMemory = [&](PlaceKind kind, int minScore = 0) {
+        const auto goByMemory = [&](PlaceKind kind, int minScore = 0, int loss = kDisappointLoss) {
             if (const auto* known = recall(*goblin.mind, kind, goblin.x, goblin.y, minScore)) {
                 if (known->x == goblin.x && known->y == goblin.y) {
-                    // Пришли, а нужного нет: место обмануло.
-                    disappoint(*goblin.mind, kind, goblin.x, goblin.y);
+                    // Пришли, а нужного нет: место обмануло. Насколько
+                    // сильно — решает вызывающий: одно дело пустой ягодник,
+                    // другое достроенная площадка (core/Knowledge.hpp).
+                    disappoint(*goblin.mind, kind, goblin.x, goblin.y, loss);
                     return false;
                 }
                 targetX = known->x;
@@ -1443,9 +1654,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // Годность клетки — общий закон (core/Rest.hpp): по нему же
                 // наблюдатель рисует эту пригодность на карте.
                 const auto placeAt = [&](std::size_t cell, int nx, int ny) {
-                    return RestPlace{tiles.moisture[cell], tiles.rockiness[cell], tiles.treeAt[cell] != 0,
-                                      carcassMeat[cell], tiles.trampled[cell], canopyAt[cell],
-                                      beddingAt[cell]};
+                    return RestPlace{tiles.moisture[cell],  tiles.rockiness[cell],
+                                      tiles.treeAt[cell] != 0, carcassMeat[cell],
+                                      tiles.trampled[cell],    opennessAt[cell],
+                                      canopyAt[cell],          beddingAt[cell]};
                 };
                 if (restQualityOf(placeAt(here, goblin.x, goblin.y)) >= kRestGood) {
                     // Лёг. Отдых — единственное занятие, которое НИЧЕГО не
@@ -1580,7 +1792,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // ответ на все вопросы ветки (core/Build.hpp) — иначе гоблин
                 // ходил бы достраивать то, что для мира уже достроено.
                 const BuildKind unfinished = unfinishedAt(
-                    BuildingComponent{canopyAt[here], beddingAt[here]}, siteKind[here]);
+                    BuildingComponent{canopyAt[here], beddingAt[here], fenceAt[here]}, siteKind[here]);
 
                 // --- 0. Замысел: недовольный местом отмечает клетку ---
                 // Ставит его тот, кто на этом месте СТОИТ и кому здесь плохо
@@ -1589,9 +1801,10 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 if (unfinished == BuildKind::None) {
                     const auto* home = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y, kRestReturn);
                     if (home != nullptr && home->x == goblin.x && home->y == goblin.y) {
-                        const RestPlace place{tiles.moisture[here], tiles.rockiness[here],
+                        const RestPlace place{tiles.moisture[here],  tiles.rockiness[here],
                                                tiles.treeAt[here] != 0, carcassMeat[here],
-                                               tiles.trampled[here], canopyAt[here], beddingAt[here]};
+                                               tiles.trampled[here],    opennessAt[here],
+                                               canopyAt[here],          beddingAt[here]};
                         const BuildKind kind = betterBuild(place).kind;
                         // Под деревом не строят — оно занимает клетку.
                         // placeSite откажет и сам, но незачем помнить как
@@ -1618,47 +1831,93 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // что за ним. Оттого его и нет в betterBuild — тот отвечает
                 // на вопрос "чего не хватает здесь".
                 //
-                // Гоблин при этом не задумывает кольца и не знает о нём:
-                // он затыкает открытую сторону СВОЕЙ лежанки, ближнюю к тому
-                // месту, где его пугали. Кольцо получается оттого, что край
-                // утоптанного пятна замкнут сам по себе, а ворота — оттого,
-                // что тропа утоптана и внешней клеткой не считается
-                // (core/Bound.hpp).
+                // Гоблин при этом не задумывает кольца и не знает о нём: он
+                // затыкает открытый выход из земли, на которой СТОИТ. Кольцо
+                // получается оттого, что край утоптанного пятна замкнут сам по
+                // себе (core/Bound.hpp).
+                //
+                // Ворот в этом кольце нет: тропа утоптана слабее лагеря,
+                // значит внешняя, значит её тоже закрывают. Гоблин через свой
+                // плетень перелезает (руки, kOnHands), зверь — нет.
+                //
+                // Условие тут — открытый край под ногами, а НЕ "стою на своей
+                // лежанке", и это стоило замера. В большом обжитом пятне спят
+                // в глубине, где выходов наружу нет вовсе; привязав кол к
+                // лежанке, мы привязывали его к единственному месту лагеря, у
+                // которого края не бывает. Замер: один кол за прогон в
+                // двенадцать тысяч тиков.
+                //
+                // Шага здесь два, и порядок между ними — "сперва доведи
+                // начатое, потом начинай новое". Правило не новое: им же
+                // держится навес (keenOnWork выше). Из него само собой выходит
+                // и кольцо — новый кол встаёт только тогда, когда прежний
+                // заплетён, и край закрывается клетка за клеткой.
                 {
-                    const auto* home = recall(*goblin.mind, PlaceKind::Rest, goblin.x, goblin.y, kRestReturn);
                     const auto* scary = recall(*goblin.mind, PlaceKind::Danger, goblin.x, goblin.y);
-                    if (home != nullptr && home->x == goblin.x && home->y == goblin.y && scary != nullptr) {
-                        const Rim rim = rimHere(goblin.x, goblin.y, scary->x, scary->y);
-                        // Кол там уже стоит — второго не надо, надо доплести
-                        // первый. Тогда ветка не занимает гоблина и валится
-                        // ниже, к работе: шаг 2 сам найдёт глазами ближайшую
-                        // недоделанную площадку, а она в соседней клетке.
+                    int unusedX = goblin.x;
+                    int unusedY = goblin.y;
+                    if (opennessAt[here] > 0 && tiles.trampled[here] > 0) {
+                        // Начатое видно — НОВОГО НЕ НАЧИНАТЬ. Ветка на этом
+                        // и кончается: доводить начатое умеют шаги 1 и 2 ниже,
+                        // и умеют правильнее — там сперва спрашивается голова
+                        // ("куда я ходил работать"), и только потом глаза
+                        // ("что тут недоделано ближе всего").
                         //
-                        // Без этой проверки гоблин втыкал бы кол каждый тик,
-                        // пока стороны не кончатся, и не заплёл бы ни одного:
-                        // замер дал двадцать шесть площадок разом при
-                        // прочности один из ста.
-                        const bool alreadySited =
-                            rim.found && tiles.siteKind[index(rim.towardX, rim.towardY)] != BuildKind::None;
-                        if (rim.found && !alreadySited) {
-                            commands.enqueue([x = rim.towardX, y = rim.towardY](World& w) {
-                                placeSite(w, x, y, BuildKind::Fence);
-                            });
-                            // Место кола запоминается как стройка — КООРДИНАТАМИ
-                            // САМОГО КОЛА, а не своими. Сперва оно не
-                            // запоминалось вовсе: рассуждение было "оно под
-                            // боком, его видно глазами", и голову занимать
-                            // незачем. Замер это опроверг — колья стояли, а
-                            // прочность держалась на единице из ста: у гоблина
-                            // не было НИ ОДНОЙ причины к ним возвращаться.
-                            //
-                            // Именно памятью о стройке достраиваются навесы
-                            // (kBuildUrge выше), и второго способа доводить
-                            // начатое в мире нет. Слот в голове — цена того,
-                            // чтобы начатое доводилось.
-                            remember(*goblin.mind, PlaceKind::Work, rim.towardX, rim.towardY);
-                            busy = true;
-                            break;
+                        // Порядок этот несущий, и он взят замером. Когда
+                        // ближайший кол выбирался здесь, глазами, гоблин после
+                        // каждого похода за ветками возвращался НЕ К СВОЕМУ
+                        // колу, а к тому, что оказался ближе к месту, где он
+                        // набрал материал: девятьсот шестьдесят шесть начатых
+                        // клеток и лучшая прочность двадцать пять из ста.
+                        // Память же держит одну — ту, на которой он работал.
+                        //
+                        // А вот НЕ НАЧИНАТЬ нового надо именно по глазам, и
+                        // именно здесь: память о своей стройке тает за сорок
+                        // тиков (kRememberGain), а незаплетённый кол стоит и
+                        // виден. Без этой проверки гоблин, идущий вдоль края,
+                        // втыкал кол на каждой клетке, где стоял, — сто
+                        // шестьдесят один разом, и число заплетённых клеток
+                        // ПАДАЛО: плетень ветшал быстрее, чем его доводили.
+                        //
+                        // Спрашивается тут именно "недоделанный ЗАБОР", а не
+                        // "площадка под забор", и разница стоила прогона в
+                        // восемьдесят тысяч тиков. ПЛОЩАДКА СНИМАЕТСЯ ПЕРВОЙ
+                        // ЖЕ РАБОТОЙ (см. фазу труда): начатый, наполовину
+                        // заплетённый кол площадкой быть перестаёт — и
+                        // отсечка его не видела. Гоблин втыкал новый кол
+                        // рядом с недоплетённым, работа растекалась по новым
+                        // клеткам и не углубляла ни одной. Замер: 950 клеток
+                        // с плетнём, лучшая прочность 19 из ста, и она не
+                        // росла с восьмитысячного тика ни на единицу.
+                        const bool begunInSight =
+                            findNearest([&](std::size_t cell, int nx, int ny) {
+                                return unfinishedAt(BuildingComponent{canopyAt[cell], beddingAt[cell], fenceAt[cell]},
+                                                     siteKind[cell]) == BuildKind::Fence &&
+                                       standable(nx, ny);
+                            }, unusedX, unusedY) >= 0;
+                        if (!begunInSight) {
+                            // Опасность может быть и не вспомнена — тогда
+                            // сторона берётся по примыканию к плетню, а при
+                            // равенстве жребием: огораживаются не только от
+                            // того, кого помнят (rimAround).
+                            const Rim rim = rimHere(goblin.x, goblin.y, scary);
+                            // Замысел на клетке один: где кол уже стоит,
+                            // второй не ставится (placeSite).
+                            const bool alreadySited =
+                                rim.found && tiles.siteKind[index(rim.towardX, rim.towardY)] != BuildKind::None;
+                            if (rim.found && !alreadySited) {
+                                commands.enqueue([x = rim.towardX, y = rim.towardY](World& w) {
+                                    placeSite(w, x, y, BuildKind::Fence);
+                                });
+                                // Место кола запоминается как стройка —
+                                // КООРДИНАТАМИ САМОГО КОЛА, а не своими:
+                                // памятью о стройке достраиваются навесы
+                                // (kBuildUrge выше), и другого способа звать
+                                // гоблина к начатому в мире нет.
+                                remember(*goblin.mind, PlaceKind::Work, rim.towardX, rim.towardY);
+                                busy = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -1691,14 +1950,17 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     // уже работали, а не туда, что ближе; достроенную
                     // площадку память отпустит сама, придя пустой
                     // (disappoint внутри goByMemory).
-                    hasTarget = goByMemory(PlaceKind::Work);
+                    // Достроенная площадка забывается НАЧИСТО, с одного
+                    // прихода: "работы здесь нет" — это не невезение, а
+                    // выясненный факт (core/Knowledge.hpp).
+                    hasTarget = goByMemory(PlaceKind::Work, 0, kFull);
                     if (hasTarget) {
                         break;
                     }
                     int siteX = goblin.x;
                     int siteY = goblin.y;
                     const bool siteSeen = findNearest([&](std::size_t cell, int nx, int ny) {
-                        return unfinishedAt(BuildingComponent{canopyAt[cell], beddingAt[cell]},
+                        return unfinishedAt(BuildingComponent{canopyAt[cell], beddingAt[cell], fenceAt[cell]},
                                              siteKind[cell]) != BuildKind::None &&
                                standable(nx, ny);
                     }, siteX, siteY) >= 0;
@@ -1737,7 +1999,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                 // Ни того, ни другого не видно — идти к стройке: там хотя бы
                 // видно, чего не хватает.
                 if (!hasTarget) {
-                    hasTarget = goByMemory(PlaceKind::Work);
+                    hasTarget = goByMemory(PlaceKind::Work, 0, kFull);
                 }
                 break;
             }
@@ -1793,18 +2055,26 @@ void GoblinSystem(World& world, CommandQueue& commands) {
                     blows.push_back(BlowIntent{static_cast<int>(g), threatBeast[g]});
                 }
 
-                // Уже наверху — значит, спасаться больше некуда и незачем:
-                // гоблин сидит и пережидает. Без этого он слезал бы обратно,
-                // едва выше идти станет некуда, и лазал бы вверх-вниз у самой
-                // кромки, пока зверь ходит внизу.
+                // Зубам сюда не дотянуться — значит, спасаться больше некуда
+                // и незачем: гоблин сидит и пережидает. Без этого он слезал бы
+                // обратно, едва выше идти станет некуда, и лазал бы вверх-вниз
+                // у самой кромки, пока зверь ходит внизу.
                 //
-                // "Наверху" — это два разных места (core/Climb.hpp), и оба
-                // спрашиваются об одном: достанут ли отсюда зубы. На дереве и
-                // на валуне зверь стоит рядом и не дотягивается; в
-                // высокогорье он не стоит вовсе.
-                const bool upSomething =
-                    world.area().isBlocked(goblin.x, goblin.y) || tiles.treeAt[here] != 0;
-                if (upSomething || tiles.terrainHeight[here] > kLegCeiling) {
+                // Спрашивается ровно то, что решает исход, — ДОСТАНУТ ЛИ
+                // ОТСЮДА ЗУБЫ (outOfReach, core/Climb.hpp), и тем же законом,
+                // каким об этом же спрашивает хищник, выбирая добычу.
+                //
+                // Прежде здесь стоял свой, второй ответ на тот же вопрос:
+                // "зверю на эту клетку не встать". Он был короче и неверен —
+                // встать зверю надо не на клетку гоблина, а рядом с ней, — и
+                // стоил он ровно того, из-за чего эта правка и делалась:
+                // гоблин на кромке высокогорья, на валуне и за плетнём считал
+                // себя спасённым и замирал в одном шаге от зубов. Замер до
+                // правки: при хищнике вплотную ни одного шага за 2373 тика на
+                // высокогорье против 47.8% на голой земле. Числа и разбор — в
+                // шапке outOfReach.
+                if (outOfReach(tiles.treeAt[here] != 0, kOnHands,
+                               footingToStrike(goblin.x, goblin.y, beastStands))) {
                     busy = true;
                     break;
                 }
@@ -2078,7 +2348,7 @@ void GoblinSystem(World& world, CommandQueue& commands) {
         // Шаг стоит не только энергии, но и сил: ходьба утомляет сильнее,
         // чем стояние, и именно это отличает обошедшего полкарты от того,
         // кто простоял у куста.
-        if (paceBeat(tick, goblin.id, worldProperties.goblinPace)) {
+        if (paceBeat(tick, goblin.id, worldProperties.goblinPace * kFatigueSlower)) {
             tireBy(goblin.tired->fatigue, kFatigueStep);
         }
         steps.push_back(StepIntent{static_cast<int>(g), step.x, step.y});

@@ -452,6 +452,33 @@ void AnimalSystem(World& world, CommandQueue& commands) {
     const std::vector<int>& carcassMeat = tiles.carcassMeat;
     const std::vector<unsigned char>& treeAt = tiles.treeAt;
 
+    // Куда животное вообще может встать (core/Path.hpp, standableAt): не за
+    // границей Области, не на занятый непроходимым объектом тайл, не в воду и
+    // не выше того, куда оно забирается. Само правило — там, здесь только
+    // факты, из которых оно складывается: снимок тайлов этого тика.
+    //
+    // Зверь ходит НА НОГАХ (kOnLegs, core/Climb.hpp) — и это единственная
+    // строчка во всей системе, где сказано, чем он берёт высоту. Появится
+    // зверь с руками, здесь и появится второе значение.
+    //
+    // Край Области проверяется здесь же, а не оставляется вызывающим:
+    // спрашивают эту годность и по клеткам вокруг (шаг — core/Walk.hpp), и по
+    // кругу видимости (дорога — core/Path.hpp), и за краем карты читать
+    // нечего — там нет ни почвы, ни воды, а есть чужая память.
+    //
+    // Живёт на уровне тика, а не внутри прохода решений, потому что
+    // спрашивающих стало двое: сам идущий зверь и выбор добычи ниже — где
+    // ЭТОТ ЖЕ вопрос решает, есть ли хищнику откуда ударить (footingToStrike,
+    // core/Strike.hpp). Два ответа на него разошлись бы молча.
+    auto standable = [&](int nx, int ny) {
+        if (!world.area().inBounds(nx, ny)) {
+            return false;
+        }
+        const std::size_t cell = index(nx, ny);
+        return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell],
+                           tiles.terrainHeight[cell], tiles.fenceAt[cell], kOnLegs);
+    };
+
     std::vector<ShareIntent> bites;    // трава
     std::vector<ShareIntent> meals;    // падаль
     std::vector<ShareIntent> drinks;
@@ -867,16 +894,24 @@ void AnimalSystem(World& world, CommandQueue& commands) {
                 ++company;
             }
         }
-        // Влез на дерево — и зубы его больше не достают (core/Climb.hpp).
-        // Не "спрятался", как травоядное под кроной, а именно влез: зверь
-        // стоит на той же клетке, внизу, и сделать ничего не может.
+        // Не дотянуться — не добыча (outOfReach, core/Climb.hpp). Влез на
+        // дерево: зверь стоит на той же клетке, внизу, и сделать ничего не
+        // может. Или встать негде: ни на саму клетку, ни рядом с ней —
+        // высокая полка, валун посреди воды, угол за плетнём.
         //
         // Прячущегося это не отменяет: травоядное по-прежнему стоит ПОД
         // кроной и по-прежнему находится тем, кто наткнулся (kCoverSight,
         // core/Hunting.hpp). Два разных укрытия на одном дереве, и различает
         // их не место, а то, чем существо за это дерево берётся.
+        //
+        // Вторая половина закона зверю почти ничего не меняет: он и стоит
+        // там, куда встал, — значит опора под ним есть. Спрашивается она
+        // здесь ради ОДНОГО ответа на весь мир: тем же законом гоблин решает,
+        // спасён ли он там, куда влез, и прежде отвечал себе сам и неверно
+        // (см. шапку outOfReach).
         const bool onTree = treeAt[index(animals[b].x, animals[b].y)] != 0;
-        if (outOfReachUpATree(onTree, animals[b].climb)) {
+        if (outOfReach(onTree, animals[b].climb,
+                       footingToStrike(animals[b].x, animals[b].y, standable))) {
             continue;
         }
         preys.push_back(HuntPrey{animals[b].x, animals[b].y, animals[b].genome->speed,
@@ -978,28 +1013,6 @@ void AnimalSystem(World& world, CommandQueue& commands) {
         const int chaseSpeed = animal.injury->lameTicks > 0
                                     ? genome.speed * animal.injury->lameShare / kFull
                                     : genome.speed;
-
-        // Куда животное вообще может встать (core/Path.hpp, standableAt): не
-        // за границей Области, не на занятый непроходимым объектом тайл, не в
-        // воду и не выше того, куда оно забирается. Само правило — там, здесь
-        // только факты, из которых оно складывается: снимок тайлов этого тика.
-        //
-        // Зверь ходит НА НОГАХ (kOnLegs, core/Climb.hpp) — и это единственная
-        // строчка во всей системе, где сказано, чем он берёт высоту.
-        // Появится зверь с руками, здесь и появится второе значение.
-        //
-        // Край Области проверяется здесь же, а не оставляется вызывающим:
-        // спрашивают эту годность и по клеткам вокруг (шаг — core/Walk.hpp),
-        // и по кругу видимости (дорога — core/Path.hpp), и за краем карты
-        // читать нечего — там нет ни почвы, ни воды, а есть чужая память.
-        auto standable = [&](int nx, int ny) {
-            if (!world.area().inBounds(nx, ny)) {
-                return false;
-            }
-            const std::size_t cell = index(nx, ny);
-            return standableAt(world.area().isBlocked(nx, ny), terrain[cell] != entt::null, waterAt[cell],
-                               tiles.terrainHeight[cell], tiles.fenceAt[cell], kOnLegs);
-        };
 
         // Куда идти из того, что видно, — решает РАЗУМ (core/Mind.hpp). Мир
         // здесь только складывает варианты и вес каждого: чем ближе клетка,
