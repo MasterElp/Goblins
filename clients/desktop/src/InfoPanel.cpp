@@ -9,6 +9,7 @@
 #include <raylib.h>
 
 #include "TileColors.hpp"
+#include "world/Naming.hpp"
 
 namespace InfoPanel {
 
@@ -115,6 +116,13 @@ private:
 
 } // namespace
 
+void drawNote(const std::string& note, float x, float y, float limit, int fontSize) {
+    if (note.empty() || x + static_cast<float>(MeasureText(note.c_str(), fontSize)) > limit) {
+        return;
+    }
+    DrawText(note.c_str(), static_cast<int>(x), static_cast<int>(y), fontSize, kMutedColor);
+}
+
 const WorldState::Animal* findAnimal(const WorldState& state, std::uint64_t id) {
     for (const auto& animal : state.animals) {
         if (animal.id == id) {
@@ -169,7 +177,14 @@ Heading headingOf(const WorldState& state, const Target& target) {
         case Target::Kind::Goblin: {
             const WorldState::Goblin* goblin = findGoblin(state, target.animalId);
             if (goblin != nullptr) {
-                out.title = TextFormat("Goblin tribe %d", goblin->tribe);
+                // Имя, а не "Goblin tribe N". Племя никуда не делось: им
+                // покрашена метка слева от заголовка и сам гоблин на карте, а
+                // прочесть номер незачем — за гоблином следят как за ним
+                // самим, и "Goblin tribe 2" одинаково звало любого из
+                // полусотни. Имя выводится из его постоянного номера
+                // (shared/world/Naming.hpp) и потому в протоколе не едет.
+                out.title = goblins::naming::shortName(goblin->id);
+                out.note = goblins::naming::nameOf(goblin->id).epithet;
                 out.swatch = TileColors::goblinTribe(goblin->tribe);
                 out.x = goblin->x;
                 out.y = goblin->y;
@@ -390,8 +405,11 @@ void draw(const WorldState& state, const Target& target, Rectangle bounds) {
     DrawText(title.c_str(), static_cast<int>(titleX), static_cast<int>(bounds.y), kTitleFont, kTitleColor);
 
     const char* pinLabel = target.pinned ? "tracked (click again to cycle)" : "under cursor";
-    DrawText(pinLabel, static_cast<int>(bounds.x + bounds.width) - MeasureText(pinLabel, kFont) - 2,
-             static_cast<int>(bounds.y) + 2, kFont, target.pinned ? kTitleColor : kMutedColor);
+    const float pinLeft = bounds.x + bounds.width - static_cast<float>(MeasureText(pinLabel, kFont)) - 2.0f;
+    DrawText(pinLabel, static_cast<int>(pinLeft), static_cast<int>(bounds.y) + 2, kFont,
+             target.pinned ? kTitleColor : kMutedColor);
+    drawNote(heading.note, titleX + static_cast<float>(MeasureText(title.c_str(), kTitleFont)) + 6.0f,
+             bounds.y + 2.0f, pinLeft - 6.0f, kFont);
 
     std::string subtitle = TextFormat("at (%d,%d)", tileX, tileY);
     // Пол, желание, взрослость и целость — одинаково у зверя и у гоблина:

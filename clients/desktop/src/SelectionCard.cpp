@@ -5,6 +5,7 @@
 #include <string>
 
 #include "TileColors.hpp"
+#include "world/Naming.hpp"
 
 namespace SelectionCard {
 
@@ -136,8 +137,14 @@ void draw(const WorldState& state, const InfoPanel::Target& target, Rectangle bo
              heading.gone ? kGoneColor : kTitleColor);
     {
         const char* at = TextFormat("(%d,%d)", heading.x, heading.y);
-        DrawText(at, static_cast<int>(x + width) - MeasureText(at, kFont), static_cast<int>(y) + 3, kFont,
-                 kMutedColor);
+        const float atLeft = x + width - static_cast<float>(MeasureText(at, kFont));
+        DrawText(at, static_cast<int>(atLeft), static_cast<int>(y) + 3, kFont, kMutedColor);
+        // Определение — между именем и клеткой, в тот же просвет, что и в
+        // панели справа: одно и то же существо не должно зваться в двух
+        // окнах по-разному. Не влезло — не рисуется (InfoPanel::drawNote).
+        InfoPanel::drawNote(heading.note,
+                            titleX + static_cast<float>(MeasureText(heading.title.c_str(), kTitleFont)) + 6.0f,
+                            y + 3.0f, atLeft - 6.0f, kFont);
     }
     y += static_cast<float>(kTitleFont) + 6.0f;
 
@@ -196,10 +203,15 @@ void draw(const WorldState& state, const InfoPanel::Target& target, Rectangle bo
                         }
                     }
                 }
+                // Знакомый — по имени, а не по обрубку номера: карточку
+                // читают, не отрываясь от карты, и "#3f0a" не говорит ни о
+                // ком. Имя знакомого известно клиенту без спроса — оно
+                // выводится из его же номера (shared/world/Naming.hpp),
+                // который в связях и так приезжает.
                 DrawText(closest == nullptr
                              ? "knows no one closely"
-                             : TextFormat("closest #%04llx   %d%%",
-                                          static_cast<unsigned long long>(closest->id & 0xFFFFull),
+                             : TextFormat("closest %s   %d%%",
+                                          goblins::naming::shortName(closest->id).c_str(),
                                           closest->warmth),
                          static_cast<int>(x), static_cast<int>(y), kFont,
                          closest == nullptr ? kMutedColor : kValueColor);
